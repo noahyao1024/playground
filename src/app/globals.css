@@ -127,3 +127,27 @@
     @apply font-sans;
   }
 }
+
+/* Glassmorphism cards */
+.glass-card {
+  @apply border border-white/10 bg-card/50 shadow-xl;
+  backdrop-filter: blur(16px) saturate(180%);
+}
+
+.dark .glass-card {
+  @apply border-white/5 bg-card/30;
+}
+
+/* Glow effects for stat cards */
+.shadow-emerald-500\/5 {
+  box-shadow: 0 4px 20px oklch(0.76 0.17 163 / 8%);
+}
+.shadow-amber-500\/5 {
+  box-shadow: 0 4px 20px oklch(0.77 0.16 70 / 8%);
+}
+.shadow-blue-500\/5 {
+  box-shadow: 0 4px 20px oklch(0.62 0.21 260 / 8%);
+}
+.shadow-purple-500\/5 {
+  box-shadow: 0 4px 20px oklch(0.55 0.25 303 / 8%);
+}
