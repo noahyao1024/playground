@@ -1,17 +1,22 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import {
-  getBillGroup,
-  saveBillGroup,
-  calculateTermSummary,
-  calculateSettlements,
-  genId,
-  type BillGroup,
-  type BillEntry,
-  type BillTerm,
-  type TermSummary,
-  type Settlement,
+  fetchSubscriptionData,
+  addService as apiAddService,
+  updateService as apiUpdateService,
+  deleteService as apiDeleteService,
+  addSubscriber as apiAddSubscriber,
+  deleteSubscriber as apiDeleteSubscriber,
+  addCharge as apiAddCharge,
+  updateCharge as apiUpdateCharge,
+  deleteCharge as apiDeleteCharge,
+  calcMonths,
+  calcTotalCNY,
+  type SubscriptionData,
+  type Service,
+  type ChargeRecord,
+  type Currency,
 } from "@/lib/store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -22,267 +27,392 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Separator } from "@/components/ui/separator";
-import { Plus, Trash2, Edit2, ArrowRight, Users, DollarSign, Settings } from "lucide-react";
+import { Plus, Trash2, Edit2, Check, X, Users, DollarSign, Settings, FileText } from "lucide-react";
 
-export default function SplitBillPage() {
-  const [group, setGroup] = useState<BillGroup | null>(null);
-  const [activeTab, setActiveTab] = useState<string | number>("overview");
-  const [editTermOpen, setEditTermOpen] = useState(false);
-  const [addEntryOpen, setAddEntryOpen] = useState(false);
-  const [newMemberName, setNewMemberName] = useState("");
-  const [editingTerm, setEditingTerm] = useState<BillTerm | null>(null);
-  const [newEntry, setNewEntry] = useState<Partial<BillEntry>>({ currency: "SGD" });
+export default function SubscriptionPage() {
+  const [data, setData] = useState<SubscriptionData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState("charges");
+  const [addChargeOpen, setAddChargeOpen] = useState(false);
+  const [editServiceOpen, setEditServiceOpen] = useState(false);
+  const [editingService, setEditingService] = useState<Service | null>(null);
+  const [newSubscriberName, setNewSubscriberName] = useState("");
+
+  const [chargeForm, setChargeForm] = useState({
+    subscriberId: "",
+    serviceId: "",
+    periodStart: "",
+    periodEnd: "",
+    exchangeRate: 7.25,
+    note: "",
+  });
+
+  const reload = useCallback(async () => {
+    const d = await fetchSubscriptionData();
+    setData(d);
+    setLoading(false);
+  }, []);
 
   useEffect(() => {
-    setGroup(getBillGroup());
-  }, []);
+    reload();
+  }, [reload]);
 
-  const save = useCallback((updated: BillGroup) => {
-    setGroup(updated);
-    saveBillGroup(updated);
-  }, []);
+  const summary = useMemo(() => {
+    if (!data) return { totalOwed: 0, totalPaid: 0, totalUnpaid: 0 };
+    const totalPaid = data.charges.filter((c) => c.paid).reduce((s, c) => s + Number(c.total_cny), 0);
+    const totalUnpaid = data.charges.filter((c) => !c.paid).reduce((s, c) => s + Number(c.total_cny), 0);
+    return { totalOwed: totalPaid + totalUnpaid, totalPaid, totalUnpaid };
+  }, [data]);
 
-  if (!group) return <div className="flex justify-center py-20 text-muted-foreground">Loading...</div>;
+  if (loading) return <div className="flex justify-center py-20 text-muted-foreground">Loading...</div>;
+  if (!data) return <div className="flex justify-center py-20 text-muted-foreground">Failed to load data</div>;
 
-  const summaries: TermSummary[] = group.terms.map((t) => calculateTermSummary(group, t.id));
+  // ─── Subscriber actions ──────────────────────────────────────────
 
-  function addMember() {
-    if (!newMemberName.trim() || !group) return;
-    save({
-      ...group,
-      members: [...group.members, { id: genId(), name: newMemberName.trim() }],
+  async function handleAddSubscriber() {
+    if (!newSubscriberName.trim()) return;
+    await apiAddSubscriber(newSubscriberName.trim());
+    setNewSubscriberName("");
+    await reload();
+  }
+
+  async function handleRemoveSubscriber(id: string) {
+    await apiDeleteSubscriber(id);
+    await reload();
+  }
+
+  // ─── Service actions ─────────────────────────────────────────────
+
+  async function handleSaveService() {
+    if (!editingService) return;
+    const exists = data!.services.find((s) => s.id === editingService.id);
+    if (exists) {
+      await apiUpdateService(editingService.id, {
+        name: editingService.name,
+        monthly_cost: editingService.monthly_cost,
+        currency: editingService.currency,
+      });
+    } else {
+      await apiAddService({
+        name: editingService.name,
+        monthly_cost: editingService.monthly_cost,
+        currency: editingService.currency,
+      });
+    }
+    setEditServiceOpen(false);
+    setEditingService(null);
+    await reload();
+  }
+
+  async function handleRemoveService(id: string) {
+    await apiDeleteService(id);
+    await reload();
+  }
+
+  // ─── Charge actions ──────────────────────────────────────────────
+
+  async function handleAddCharge() {
+    const { subscriberId, serviceId, periodStart, periodEnd, exchangeRate, note } = chargeForm;
+    if (!subscriberId || !serviceId || !periodStart || !periodEnd) return;
+    const service = data!.services.find((s) => s.id === serviceId)!;
+    const months = calcMonths(periodStart, periodEnd);
+    if (months <= 0) return;
+    const totalCNY = calcTotalCNY(months, Number(service.monthly_cost), exchangeRate);
+    await apiAddCharge({
+      subscriber_id: subscriberId,
+      service_id: serviceId,
+      period_start: periodStart,
+      period_end: periodEnd,
+      months,
+      monthly_cost: Number(service.monthly_cost),
+      currency: service.currency,
+      exchange_rate: exchangeRate,
+      total_cny: totalCNY,
+      paid: false,
+      note: note || undefined,
     });
-    setNewMemberName("");
+    setChargeForm({ subscriberId: "", serviceId: "", periodStart: "", periodEnd: "", exchangeRate: 7.25, note: "" });
+    setAddChargeOpen(false);
+    await reload();
   }
 
-  function removeMember(id: string) {
-    if (!group) return;
-    save({
-      ...group,
-      members: group.members.filter((m) => m.id !== id),
-      entries: group.entries.filter((e) => e.memberId !== id),
+  async function handleTogglePaid(charge: ChargeRecord) {
+    await apiUpdateCharge(charge.id, {
+      paid: !charge.paid,
+      paid_date: !charge.paid ? new Date().toISOString().slice(0, 10) : undefined,
     });
+    await reload();
   }
 
-  function saveTermHandler() {
-    if (!editingTerm || !group) return;
-    const exists = group.terms.find((t) => t.id === editingTerm.id);
-    const updated = exists
-      ? { ...group, terms: group.terms.map((t) => (t.id === editingTerm.id ? editingTerm : t)) }
-      : { ...group, terms: [...group.terms, editingTerm] };
-    save(updated);
-    setEditTermOpen(false);
-    setEditingTerm(null);
+  async function handleRemoveCharge(id: string) {
+    await apiDeleteCharge(id);
+    await reload();
   }
 
-  function removeTerm(id: string) {
-    if (!group) return;
-    save({
-      ...group,
-      terms: group.terms.filter((t) => t.id !== id),
-      entries: group.entries.filter((e) => e.termId !== id),
-    });
+  // ─── Per-subscriber helpers ──────────────────────────────────────
+
+  function subscriberCharges(subscriberId: string) {
+    return data!.charges.filter((c) => c.subscriber_id === subscriberId);
   }
 
-  function addEntry() {
-    if (!newEntry.termId || !newEntry.memberId || !newEntry.amount || !newEntry.date || !group) return;
-    const entry: BillEntry = {
-      id: genId(),
-      termId: newEntry.termId,
-      memberId: newEntry.memberId,
-      date: newEntry.date,
-      amount: Number(newEntry.amount),
-      currency: newEntry.currency as "SGD" | "USD",
-      note: newEntry.note,
-    };
-    save({ ...group, entries: [...group.entries, entry] });
-    setNewEntry({ currency: "SGD" });
-    setAddEntryOpen(false);
-  }
-
-  function removeEntry(id: string) {
-    if (!group) return;
-    save({ ...group, entries: group.entries.filter((e) => e.id !== id) });
+  function subscriberUnpaid(subscriberId: string) {
+    return subscriberCharges(subscriberId)
+      .filter((c) => !c.paid)
+      .reduce((s, c) => s + Number(c.total_cny), 0);
   }
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Split Bill / 分账</h1>
-          <p className="text-sm text-muted-foreground">Subscription cost-sharing tracker / 订阅费用分摊</p>
+          <h1 className="text-2xl font-bold tracking-tight">订阅管理 / Subscriptions</h1>
+          <p className="text-sm text-muted-foreground">管理代付订阅，跟踪收款状态</p>
         </div>
         <div className="flex gap-2">
-          <Dialog open={addEntryOpen} onOpenChange={setAddEntryOpen}>
+          <Dialog open={addChargeOpen} onOpenChange={setAddChargeOpen}>
             <DialogTrigger render={<Button size="sm" />}>
-              <Plus className="mr-1 h-4 w-4" /> Add Entry / 添加
+              <Plus className="mr-1 h-4 w-4" /> 新增账单
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Add Payment Entry / 添加付款</DialogTitle>
+                <DialogTitle>新增账单 / New Charge</DialogTitle>
               </DialogHeader>
               <div className="grid gap-4 py-4">
                 <div className="grid gap-2">
-                  <Label>Term / 账期</Label>
-                  <Select value={newEntry.termId ?? null} onValueChange={(v) => setNewEntry({ ...newEntry, termId: v as string })}>
-                    <SelectTrigger><SelectValue placeholder="Select term" /></SelectTrigger>
+                  <Label>订阅人</Label>
+                  <Select value={chargeForm.subscriberId || ""} onValueChange={(v) => setChargeForm({ ...chargeForm, subscriberId: v as string })}>
+                    <SelectTrigger><SelectValue placeholder="选择订阅人" /></SelectTrigger>
                     <SelectContent>
-                      {group.terms.map((t) => (
-                        <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                      {data.subscribers.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="grid gap-2">
-                  <Label>Person / 人</Label>
-                  <Select value={newEntry.memberId ?? null} onValueChange={(v) => setNewEntry({ ...newEntry, memberId: v as string })}>
-                    <SelectTrigger><SelectValue placeholder="Select person" /></SelectTrigger>
+                  <Label>服务</Label>
+                  <Select value={chargeForm.serviceId || ""} onValueChange={(v) => setChargeForm({ ...chargeForm, serviceId: v as string })}>
+                    <SelectTrigger><SelectValue placeholder="选择服务" /></SelectTrigger>
                     <SelectContent>
-                      {group.members.map((m) => (
-                        <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
+                      {data.services.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/月)</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                   <div className="grid gap-2">
-                    <Label>Amount / 金额</Label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={newEntry.amount || ""}
-                      onChange={(e) => setNewEntry({ ...newEntry, amount: Number(e.target.value) })}
-                    />
+                    <Label>起始月份</Label>
+                    <Input type="month" value={chargeForm.periodStart} onChange={(e) => setChargeForm({ ...chargeForm, periodStart: e.target.value })} />
                   </div>
                   <div className="grid gap-2">
-                    <Label>Currency / 货币</Label>
-                    <Select value={newEntry.currency || "SGD"} onValueChange={(v) => setNewEntry({ ...newEntry, currency: v as "SGD" | "USD" })}>
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="SGD">SGD</SelectItem>
-                        <SelectItem value="USD">USD</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label>结束月份</Label>
+                    <Input type="month" value={chargeForm.periodEnd} onChange={(e) => setChargeForm({ ...chargeForm, periodEnd: e.target.value })} />
                   </div>
                 </div>
                 <div className="grid gap-2">
-                  <Label>Payment Day / 付款日</Label>
-                  <Input
-                    placeholder="e.g. 12 (day of month)"
-                    value={newEntry.date || ""}
-                    onChange={(e) => setNewEntry({ ...newEntry, date: e.target.value })}
-                  />
+                  <Label>汇率 (→ CNY)</Label>
+                  <Input type="number" step="0.01" value={chargeForm.exchangeRate} onChange={(e) => setChargeForm({ ...chargeForm, exchangeRate: Number(e.target.value) })} />
                 </div>
+                {chargeForm.serviceId && chargeForm.periodStart && chargeForm.periodEnd && (() => {
+                  const service = data.services.find((s) => s.id === chargeForm.serviceId);
+                  const months = calcMonths(chargeForm.periodStart, chargeForm.periodEnd);
+                  if (!service || months <= 0) return null;
+                  const total = calcTotalCNY(months, Number(service.monthly_cost), chargeForm.exchangeRate);
+                  return (
+                    <div className="rounded-lg bg-muted/50 p-3 text-sm">
+                      <div>{months} 个月 × {service.monthly_cost} {service.currency} × {chargeForm.exchangeRate}</div>
+                      <div className="mt-1 text-lg font-bold">= ¥{total.toFixed(2)}</div>
+                    </div>
+                  );
+                })()}
                 <div className="grid gap-2">
-                  <Label>Note / 备注</Label>
-                  <Input
-                    placeholder="Optional note"
-                    value={newEntry.note || ""}
-                    onChange={(e) => setNewEntry({ ...newEntry, note: e.target.value })}
-                  />
+                  <Label>备注</Label>
+                  <Input placeholder="可选备注" value={chargeForm.note} onChange={(e) => setChargeForm({ ...chargeForm, note: e.target.value })} />
                 </div>
-                <Button onClick={addEntry}>Add Entry / 添加</Button>
+                <Button onClick={handleAddCharge}>添加</Button>
               </div>
             </DialogContent>
           </Dialog>
         </div>
       </div>
 
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v)}>
+      {/* Summary cards */}
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-sm text-muted-foreground">总应收</div>
+            <div className="text-2xl font-bold font-mono">¥{summary.totalOwed.toFixed(2)}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-sm text-muted-foreground">已收</div>
+            <div className="text-2xl font-bold font-mono text-emerald-500">¥{summary.totalPaid.toFixed(2)}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-sm text-muted-foreground">未收</div>
+            <div className="text-2xl font-bold font-mono text-red-500">¥{summary.totalUnpaid.toFixed(2)}</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
-          <TabsTrigger value="overview">
-            <DollarSign className="mr-1 h-4 w-4" /> Overview / 总览
+          <TabsTrigger value="charges">
+            <FileText className="mr-1 h-4 w-4" /> 账单
           </TabsTrigger>
-          <TabsTrigger value="entries">
-            <Edit2 className="mr-1 h-4 w-4" /> Entries / 明细
+          <TabsTrigger value="people">
+            <Users className="mr-1 h-4 w-4" /> 按人查看
           </TabsTrigger>
           <TabsTrigger value="settings">
-            <Settings className="mr-1 h-4 w-4" /> Settings / 设置
+            <Settings className="mr-1 h-4 w-4" /> 设置
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="overview" className="space-y-6">
-          {summaries.map((summary) => {
-            const settlements = calculateSettlements(summary);
-            return <TermOverview key={summary.termId} summary={summary} settlements={settlements} />;
-          })}
+        {/* ─── Charges tab ──────────────────────────────────────── */}
+        <TabsContent value="charges">
+          <Card>
+            <CardContent className="pt-6">
+              {data.charges.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-8">暂无账单，点击「新增账单」开始</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>订阅人</TableHead>
+                        <TableHead>服务</TableHead>
+                        <TableHead>周期</TableHead>
+                        <TableHead>月数</TableHead>
+                        <TableHead>单价</TableHead>
+                        <TableHead>汇率</TableHead>
+                        <TableHead>合计 (CNY)</TableHead>
+                        <TableHead>状态</TableHead>
+                        <TableHead className="w-20"></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {data.charges.map((charge) => {
+                        const subscriber = data.subscribers.find((s) => s.id === charge.subscriber_id);
+                        const service = data.services.find((s) => s.id === charge.service_id);
+                        return (
+                          <TableRow key={charge.id}>
+                            <TableCell className="font-medium">{subscriber?.name ?? "Unknown"}</TableCell>
+                            <TableCell>{service?.name ?? "Unknown"}</TableCell>
+                            <TableCell className="text-xs">{charge.period_start} ~ {charge.period_end}</TableCell>
+                            <TableCell>{charge.months}</TableCell>
+                            <TableCell className="font-mono text-xs">{charge.monthly_cost} {charge.currency}</TableCell>
+                            <TableCell className="font-mono text-xs">{charge.exchange_rate}</TableCell>
+                            <TableCell className="font-mono font-bold">¥{Number(charge.total_cny).toFixed(2)}</TableCell>
+                            <TableCell>
+                              <Badge
+                                className={`cursor-pointer ${charge.paid ? "bg-emerald-500/20 text-emerald-500 border-emerald-500/30" : "bg-red-500/20 text-red-500 border-red-500/30"}`}
+                                onClick={() => handleTogglePaid(charge)}
+                              >
+                                {charge.paid ? (
+                                  <><Check className="mr-1 h-3 w-3" />已付</>
+                                ) : (
+                                  <><X className="mr-1 h-3 w-3" />未付</>
+                                )}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              <Button variant="ghost" size="icon" onClick={() => handleRemoveCharge(charge.id)}>
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
-        <TabsContent value="entries" className="space-y-4">
-          {group.terms.map((term) => {
-            const termEntries = group.entries.filter((e) => e.termId === term.id);
+        {/* ─── People tab ───────────────────────────────────────── */}
+        <TabsContent value="people" className="space-y-4">
+          {data.subscribers.map((subscriber) => {
+            const charges = subscriberCharges(subscriber.id);
+            const unpaid = subscriberUnpaid(subscriber.id);
+            const paid = charges.filter((c) => c.paid).reduce((s, c) => s + Number(c.total_cny), 0);
             return (
-              <Card key={term.id}>
+              <Card key={subscriber.id}>
                 <CardHeader>
-                  <CardTitle className="text-base">{term.name}</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {termEntries.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No entries yet / 暂无记录</p>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Person / 人</TableHead>
-                            <TableHead>Day / 日</TableHead>
-                            <TableHead>Amount / 金额</TableHead>
-                            <TableHead>CNY / 人民币</TableHead>
-                            <TableHead>Note / 备注</TableHead>
-                            <TableHead className="w-10"></TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {termEntries.map((entry) => {
-                            const member = group.members.find((m) => m.id === entry.memberId);
-                            const cny =
-                              entry.currency === "SGD"
-                                ? entry.amount * term.rates.SGD_CNY
-                                : entry.amount * term.rates.USD_CNY;
-                            return (
-                              <TableRow key={entry.id}>
-                                <TableCell className="font-medium">{member?.name ?? "Unknown"}</TableCell>
-                                <TableCell>{entry.date}</TableCell>
-                                <TableCell>
-                                  {entry.amount.toFixed(2)} {entry.currency}
-                                </TableCell>
-                                <TableCell className="font-mono">¥{cny.toFixed(2)}</TableCell>
-                                <TableCell className="text-muted-foreground text-xs">{entry.note}</TableCell>
-                                <TableCell>
-                                  <Button variant="ghost" size="icon" onClick={() => removeEntry(entry.id)}>
-                                    <Trash2 className="h-4 w-4 text-destructive" />
-                                  </Button>
-                                </TableCell>
-                              </TableRow>
-                            );
-                          })}
-                        </TableBody>
-                      </Table>
+                  <CardTitle className="flex items-center justify-between text-base">
+                    <span>{subscriber.name}</span>
+                    <div className="flex gap-2">
+                      {unpaid > 0 && (
+                        <Badge className="bg-red-500/20 text-red-500 border-red-500/30 font-mono">
+                          未付 ¥{unpaid.toFixed(2)}
+                        </Badge>
+                      )}
+                      {paid > 0 && (
+                        <Badge className="bg-emerald-500/20 text-emerald-500 border-emerald-500/30 font-mono">
+                          已付 ¥{paid.toFixed(2)}
+                        </Badge>
+                      )}
                     </div>
-                  )}
-                </CardContent>
+                  </CardTitle>
+                </CardHeader>
+                {charges.length > 0 && (
+                  <CardContent>
+                    <div className="space-y-2">
+                      {charges.map((charge) => {
+                        const service = data.services.find((s) => s.id === charge.service_id);
+                        return (
+                          <div
+                            key={charge.id}
+                            className={`flex items-center justify-between rounded-lg border p-3 text-sm ${
+                              charge.paid ? "border-emerald-500/30 bg-emerald-500/5" : "border-red-500/30 bg-red-500/5"
+                            }`}
+                          >
+                            <div>
+                              <span className="font-medium">{service?.name}</span>
+                              <span className="ml-2 text-xs text-muted-foreground">
+                                {charge.period_start} ~ {charge.period_end} ({charge.months}个月)
+                              </span>
+                              {charge.note && <span className="ml-2 text-xs text-muted-foreground">· {charge.note}</span>}
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono font-bold">¥{Number(charge.total_cny).toFixed(2)}</span>
+                              <Badge
+                                className={`cursor-pointer ${charge.paid ? "bg-emerald-500/20 text-emerald-500 border-emerald-500/30" : "bg-red-500/20 text-red-500 border-red-500/30"}`}
+                                onClick={() => handleTogglePaid(charge)}
+                              >
+                                {charge.paid ? "已付" : "未付"}
+                              </Badge>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </CardContent>
+                )}
               </Card>
             );
           })}
         </TabsContent>
 
+        {/* ─── Settings tab ─────────────────────────────────────── */}
         <TabsContent value="settings" className="space-y-6">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
-                <Users className="h-4 w-4" /> Members / 成员
+                <Users className="h-4 w-4" /> 订阅人
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
               <div className="flex flex-wrap gap-2">
-                {group.members.map((m) => (
-                  <Badge key={m.id} variant="secondary" className="gap-1 pr-1">
-                    {m.name}
-                    <button
-                      onClick={() => removeMember(m.id)}
-                      className="ml-1 rounded-full p-0.5 hover:bg-destructive/20"
-                    >
+                {data.subscribers.map((s) => (
+                  <Badge key={s.id} variant="secondary" className="gap-1 pr-1">
+                    {s.name}
+                    <button onClick={() => handleRemoveSubscriber(s.id)} className="ml-1 rounded-full p-0.5 hover:bg-destructive/20">
                       <Trash2 className="h-3 w-3" />
                     </button>
                   </Badge>
@@ -290,14 +420,14 @@ export default function SplitBillPage() {
               </div>
               <div className="flex gap-2">
                 <Input
-                  placeholder="New member name / 新成员名"
-                  value={newMemberName}
-                  onChange={(e) => setNewMemberName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && addMember()}
+                  placeholder="新订阅人"
+                  value={newSubscriberName}
+                  onChange={(e) => setNewSubscriberName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleAddSubscriber()}
                   className="max-w-xs"
                 />
-                <Button size="sm" onClick={addMember}>
-                  <Plus className="mr-1 h-4 w-4" /> Add
+                <Button size="sm" onClick={handleAddSubscriber}>
+                  <Plus className="mr-1 h-4 w-4" /> 添加
                 </Button>
               </div>
             </CardContent>
@@ -306,33 +436,23 @@ export default function SplitBillPage() {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
-                <DollarSign className="h-4 w-4" /> Terms & Exchange Rates / 账期与汇率
+                <DollarSign className="h-4 w-4" /> 订阅服务
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
-              {group.terms.map((term) => (
-                <div
-                  key={term.id}
-                  className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between"
-                >
+              {data.services.map((service) => (
+                <div key={service.id} className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
-                    <div className="font-medium">{term.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      SGD→CNY: {term.rates.SGD_CNY} | USD→CNY: {term.rates.USD_CNY}
+                    <div className="font-medium">{service.name}</div>
+                    <div className="text-xs text-muted-foreground font-mono">
+                      {service.monthly_cost} {service.currency} / 月
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setEditingTerm({ ...term });
-                        setEditTermOpen(true);
-                      }}
-                    >
-                      <Edit2 className="mr-1 h-3 w-3" /> Edit
+                    <Button variant="outline" size="sm" onClick={() => { setEditingService({ ...service }); setEditServiceOpen(true); }}>
+                      <Edit2 className="mr-1 h-3 w-3" /> 编辑
                     </Button>
-                    <Button variant="ghost" size="sm" onClick={() => removeTerm(term.id)}>
+                    <Button variant="ghost" size="sm" onClick={() => handleRemoveService(service.id)}>
                       <Trash2 className="h-3 w-3 text-destructive" />
                     </Button>
                   </div>
@@ -342,159 +462,50 @@ export default function SplitBillPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  setEditingTerm({
-                    id: genId(),
-                    name: `Term ${group.terms.length + 1}`,
-                    rates: { SGD_CNY: 5.45, USD_CNY: 6.99 },
-                  });
-                  setEditTermOpen(true);
+                  setEditingService({ id: "", name: "", monthly_cost: 0, currency: "USD" });
+                  setEditServiceOpen(true);
                 }}
               >
-                <Plus className="mr-1 h-4 w-4" /> Add Term / 添加账期
+                <Plus className="mr-1 h-4 w-4" /> 添加服务
               </Button>
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
 
-      {/* Edit term dialog - controlled externally */}
-      <Dialog
-        open={editTermOpen}
-        onOpenChange={(open) => {
-          setEditTermOpen(open);
-          if (!open) setEditingTerm(null);
-        }}
-      >
+      {/* Edit service dialog */}
+      <Dialog open={editServiceOpen} onOpenChange={(open) => { setEditServiceOpen(open); if (!open) setEditingService(null); }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Edit Term / 编辑账期</DialogTitle>
+            <DialogTitle>编辑服务</DialogTitle>
           </DialogHeader>
-          {editingTerm && (
+          {editingService && (
             <div className="grid gap-4 py-4">
               <div className="grid gap-2">
-                <Label>Name / 名称</Label>
-                <Input
-                  value={editingTerm.name}
-                  onChange={(e) => setEditingTerm({ ...editingTerm, name: e.target.value })}
-                />
+                <Label>服务名称</Label>
+                <Input value={editingService.name} onChange={(e) => setEditingService({ ...editingService, name: e.target.value })} />
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="grid gap-2">
-                  <Label>SGD → CNY</Label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={editingTerm.rates.SGD_CNY}
-                    onChange={(e) =>
-                      setEditingTerm({
-                        ...editingTerm,
-                        rates: { ...editingTerm.rates, SGD_CNY: Number(e.target.value) },
-                      })
-                    }
-                  />
+                  <Label>月费</Label>
+                  <Input type="number" step="0.01" value={editingService.monthly_cost} onChange={(e) => setEditingService({ ...editingService, monthly_cost: Number(e.target.value) })} />
                 </div>
                 <div className="grid gap-2">
-                  <Label>USD → CNY</Label>
-                  <Input
-                    type="number"
-                    step="0.01"
-                    value={editingTerm.rates.USD_CNY}
-                    onChange={(e) =>
-                      setEditingTerm({
-                        ...editingTerm,
-                        rates: { ...editingTerm.rates, USD_CNY: Number(e.target.value) },
-                      })
-                    }
-                  />
+                  <Label>货币</Label>
+                  <Select value={editingService.currency} onValueChange={(v) => setEditingService({ ...editingService, currency: v as Currency })}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="USD">USD</SelectItem>
+                      <SelectItem value="SGD">SGD</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
-              <Button onClick={saveTermHandler}>Save / 保存</Button>
+              <Button onClick={handleSaveService}>保存</Button>
             </div>
           )}
         </DialogContent>
       </Dialog>
     </div>
-  );
-}
-
-function TermOverview({
-  summary,
-  settlements,
-}: {
-  summary: TermSummary;
-  settlements: Settlement[];
-}) {
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center justify-between">
-          <span>{summary.termName}</span>
-          <Badge variant="outline" className="font-mono">
-            Total: ¥{summary.totalCNY.toFixed(2)}
-          </Badge>
-        </CardTitle>
-        <p className="text-sm text-muted-foreground">
-          {summary.memberCount} members · Equal share: ¥{summary.equalShare.toFixed(2)} per person
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="grid gap-2">
-          {summary.memberSummaries.map((ms) => {
-            const isOverpaid = ms.owes < -0.01;
-            const isUnderpaid = ms.owes > 0.01;
-            const isBalanced = !isOverpaid && !isUnderpaid;
-            return (
-              <div
-                key={ms.memberId}
-                className={`flex items-center justify-between rounded-lg border p-3 ${
-                  isOverpaid
-                    ? "border-emerald-500/30 bg-emerald-500/5"
-                    : isUnderpaid
-                      ? "border-red-500/30 bg-red-500/5"
-                      : "border-border"
-                }`}
-              >
-                <div>
-                  <span className="font-medium">{ms.memberName}</span>
-                  <span className="ml-2 text-xs text-muted-foreground">Paid ¥{ms.paidCNY.toFixed(2)}</span>
-                </div>
-                <div className="text-right">
-                  {isBalanced && <Badge variant="outline">Balanced / 已平</Badge>}
-                  {isOverpaid && (
-                    <Badge className="bg-emerald-500/20 text-emerald-400 border-emerald-500/30">
-                      Overpaid ¥{Math.abs(ms.owes).toFixed(2)}
-                    </Badge>
-                  )}
-                  {isUnderpaid && (
-                    <Badge className="bg-red-500/20 text-red-400 border-red-500/30">
-                      Owes ¥{ms.owes.toFixed(2)}
-                    </Badge>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {settlements.length > 0 && (
-          <>
-            <Separator />
-            <div>
-              <h4 className="mb-2 text-sm font-semibold">Settlement / 结算</h4>
-              <div className="grid gap-2">
-                {settlements.map((s, i) => (
-                  <div key={i} className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm">
-                    <span className="font-medium text-red-400">{s.from}</span>
-                    <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                    <span className="font-medium text-emerald-400">{s.to}</span>
-                    <span className="ml-auto font-mono">¥{s.amount.toFixed(2)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-      </CardContent>
-    </Card>
   );
 }
