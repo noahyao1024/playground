@@ -23,7 +23,8 @@ export async function GET(req: NextRequest) {
   try {
     const result = await generateChargesForMonth(supabase, month);
     return NextResponse.json({ message: `Generated ${result.generated} charge(s)`, month, ...result });
-  } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null && "message" in err ? (err as { message: string }).message : JSON.stringify(err);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

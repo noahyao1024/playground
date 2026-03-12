@@ -24,6 +24,20 @@ function prorateRatio(startDate: string, billingMonth: string): number {
   return (totalDays - startDay + 1) / totalDays;
 }
 
+/** Generate list of YYYY-MM strings from startMonth to endMonth inclusive */
+function monthRange(startMonth: string, endMonth: string): string[] {
+  const months: string[] = [];
+  const [sy, sm] = startMonth.split("-").map(Number);
+  const [ey, em] = endMonth.split("-").map(Number);
+  let y = sy, m = sm;
+  while (y < ey || (y === ey && m <= em)) {
+    months.push(`${y}-${String(m).padStart(2, "0")}`);
+    m++;
+    if (m > 12) { m = 1; y++; }
+  }
+  return months;
+}
+
 export async function generateChargesForMonth(
   supabase: SupabaseClient,
   month: string,
@@ -31,12 +45,12 @@ export async function generateChargesForMonth(
 ): Promise<{ generated: number; details: Array<{ subscriber: string; service: string; total_cny: number }> }> {
   const [
     { data: subscriptions },
-    { data: existingCharges },
+    { data: allExistingCharges },
     { data: services },
     { data: subscribers },
   ] = await Promise.all([
     supabase.from("subscriptions").select("*").eq("active", true),
-    supabase.from("charges").select("subscriber_id, service_id").eq("period_start", month),
+    supabase.from("charges").select("subscriber_id, service_id, period_start"),
     supabase.from("services").select("*"),
     supabase.from("subscribers").select("*"),
   ]);
@@ -45,44 +59,52 @@ export async function generateChargesForMonth(
     throw new Error("Failed to fetch data");
   }
 
+  // Build a set of "subscriber::service::month" keys for all existing charges
   const billed = new Set(
-    (existingCharges ?? []).map((c: { subscriber_id: string; service_id: string }) => `${c.subscriber_id}::${c.service_id}`)
+    (allExistingCharges ?? []).map((c: { subscriber_id: string; service_id: string; period_start: string }) =>
+      `${c.subscriber_id}::${c.service_id}::${c.period_start}`
+    )
   );
 
   const newCharges: Array<Record<string, unknown>> = [];
   const details: Array<{ subscriber: string; service: string; total_cny: number }> = [];
 
   for (const sub of subscriptions) {
-    const key = `${sub.subscriber_id}::${sub.service_id}`;
-    if (billed.has(key)) continue;
-
     const startDate = sub.start_date ?? sub.created_at?.slice(0, 10) ?? `${month}-01`;
-    const ratio = prorateRatio(startDate, month);
-    if (ratio === 0) continue;
-
+    const startMonth = startDate.slice(0, 7); // YYYY-MM
     const service = services.find((s: { id: string }) => s.id === sub.service_id);
     if (!service) continue;
 
     const monthlyCost = Number(service.monthly_cost);
-    const totalCny = Number((monthlyCost * ratio * exchangeRate).toFixed(2));
-    const note = ratio < 1 ? `Prorated (${Math.round(ratio * 100)}%)` : "Auto-generated";
-
-    newCharges.push({
-      subscriber_id: sub.subscriber_id,
-      service_id: sub.service_id,
-      period_start: month,
-      period_end: month,
-      months: ratio < 1 ? Number(ratio.toFixed(2)) : 1,
-      monthly_cost: monthlyCost,
-      currency: service.currency,
-      exchange_rate: exchangeRate,
-      total_cny: totalCny,
-      paid: false,
-      note,
-    });
-
     const subscriberName = subscribers.find((s: { id: string }) => s.id === sub.subscriber_id)?.name ?? "Unknown";
-    details.push({ subscriber: subscriberName, service: service.name, total_cny: totalCny });
+
+    // Generate charges for every month from subscription start to the target month
+    for (const m of monthRange(startMonth, month)) {
+      const key = `${sub.subscriber_id}::${sub.service_id}::${m}`;
+      if (billed.has(key)) continue;
+
+      const ratio = prorateRatio(startDate, m);
+      if (ratio === 0) continue;
+
+      const totalCny = Number((monthlyCost * ratio * exchangeRate).toFixed(2));
+      const note = ratio < 1 ? `Prorated (${Math.round(ratio * 100)}%)` : "Auto-generated";
+
+      newCharges.push({
+        subscriber_id: sub.subscriber_id,
+        service_id: sub.service_id,
+        period_start: m,
+        period_end: m,
+        months: 1,
+        monthly_cost: monthlyCost,
+        currency: service.currency,
+        exchange_rate: exchangeRate,
+        total_cny: totalCny,
+        paid: false,
+        note,
+      });
+
+      details.push({ subscriber: subscriberName, service: service.name, total_cny: totalCny });
+    }
   }
 
   if (newCharges.length > 0) {

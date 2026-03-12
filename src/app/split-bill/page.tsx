@@ -301,17 +301,15 @@ export default function SubscriptionPage() {
         body: JSON.stringify({ month: billMonth, exchangeRate: billExchangeRate }),
       });
       if (!res.ok) {
-        const count = await billNowClient(billMonth, billExchangeRate);
-        toast.success(count > 0 ? `Generated ${count} charge(s) for ${billMonth}` : `No new charges for ${billMonth}`);
-      } else {
-        const result = await res.json();
-        toast.success(result.generated > 0 ? `Generated ${result.generated} charge(s) for ${billMonth}` : `No new charges for ${billMonth}`);
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || res.statusText);
       }
+      const result = await res.json();
+      toast.success(result.generated > 0 ? `Generated ${result.generated} charge(s) for ${billMonth}` : `No new charges for ${billMonth}`);
       await reload();
-    } catch {
-      const count = await billNowClient(billMonth, billExchangeRate);
-      toast.success(count > 0 ? `Generated ${count} charge(s)` : "No new charges");
-      await reload();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Bill failed: ${msg}`);
     } finally {
       setBilling(false);
     }
