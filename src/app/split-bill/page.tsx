@@ -12,143 +12,87 @@ import {
   deleteService as apiDeleteService,
   addSubscriber as apiAddSubscriber,
   deleteSubscriber as apiDeleteSubscriber,
+  addSubscription as apiAddSubscription,
+  updateSubscription as apiUpdateSubscription,
+  deleteSubscription as apiDeleteSubscription,
   addCharge as apiAddCharge,
   updateCharge as apiUpdateCharge,
   deleteCharge as apiDeleteCharge,
+  billNowClient,
   calcMonths,
   calcTotalCNY,
+  currentMonth as getCurrentMonth,
   type SubscriptionData,
   type Service,
+  type Subscription,
   type ChargeRecord,
   type Currency,
 } from "@/lib/store";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+import { ALLOWED_EMAILS } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { MonthPicker } from "@/components/month-picker";
 import {
-  Plus, Trash2, Edit2, Check, X, Users, DollarSign, Settings, FileText,
-  Search, Download, CheckCheck, TrendingUp, CreditCard, Clock,
+  Plus, Trash2, Edit2, Check, X, Users, DollarSign, Settings,
+  Search, Download, CheckCheck, TrendingUp, Clock,
   ArrowUpDown, ChevronLeft, ChevronRight, BarChart3, Keyboard,
+  Zap, Pause, Play, Receipt, Lock,
 } from "lucide-react";
 import { SpendingPieChart } from "@/components/charts/spending-pie-chart";
 import { PersonBarChart } from "@/components/charts/person-bar-chart";
 
-// ─── Constants ────────────────────────────────────────────────────────
 const PAGE_SIZE = 20;
 
-const AVATAR_COLORS = [
-  "from-purple-500 to-pink-500",
-  "from-blue-500 to-cyan-500",
-  "from-green-500 to-emerald-500",
-  "from-orange-500 to-amber-500",
-  "from-rose-500 to-red-500",
-  "from-indigo-500 to-violet-500",
-  "from-teal-500 to-green-500",
-  "from-fuchsia-500 to-purple-500",
-];
+// ─── Helpers ──────────────────────────────────────────────────────────
+function getInitial(name: string) { return name[0]?.toUpperCase() ?? "?"; }
 
-function getAvatarColor(name: string) {
-  let hash = 0;
-  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
-  return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
-}
-
-// ─── Animated container ───────────────────────────────────────────────
-const fadeUp = {
-  initial: { opacity: 0, y: 20 },
-  animate: { opacity: 1, y: 0 },
-  transition: { duration: 0.4 },
-};
-
-// ─── Skeleton ─────────────────────────────────────────────────────────
 function Skeleton({ className = "" }: { className?: string }) {
-  return <div className={`animate-pulse rounded-lg bg-muted/50 ${className}`} />;
+  return <div className={`animate-pulse rounded-md bg-muted ${className}`} />;
 }
 
 function LoadingSkeleton() {
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {[...Array(4)].map((_, i) => (
-          <Skeleton key={i} className="h-28" />
-        ))}
-      </div>
-      <Skeleton className="h-12 w-64" />
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
+      <Skeleton className="h-10 w-64" />
       <Skeleton className="h-96" />
     </div>
   );
 }
 
-// ─── Avatar ───────────────────────────────────────────────────────────
-function SubscriberAvatar({ name, size = "sm" }: { name: string; size?: "sm" | "md" }) {
-  const sizeClasses = size === "md" ? "h-10 w-10 text-sm" : "h-7 w-7 text-xs";
-  return (
-    <div
-      className={`flex ${sizeClasses} items-center justify-center rounded-full bg-gradient-to-br ${getAvatarColor(name)} font-bold text-white shadow-lg`}
-    >
-      {name[0]?.toUpperCase()}
-    </div>
-  );
+function Avatar({ name, size = "sm" }: { name: string; size?: "sm" | "md" }) {
+  const s = size === "md" ? "h-8 w-8 text-xs" : "h-6 w-6 text-[10px]";
+  return <div className={`flex ${s} items-center justify-center rounded-full bg-muted font-medium text-muted-foreground`}>{getInitial(name)}</div>;
 }
 
-// ─── Confirm dialog ───────────────────────────────────────────────────
-function ConfirmDialog({
-  open,
-  onOpenChange,
-  title,
-  description,
-  onConfirm,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  title: string;
-  description: string;
-  onConfirm: () => void;
+function ConfirmDialog({ open, onOpenChange, title, description, onConfirm }: {
+  open: boolean; onOpenChange: (o: boolean) => void; title: string; description: string; onConfirm: () => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-        </DialogHeader>
+        <DialogHeader><DialogTitle>{title}</DialogTitle></DialogHeader>
         <p className="text-sm text-muted-foreground">{description}</p>
         <div className="flex justify-end gap-2 pt-2">
-          <Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button>
-          <Button
-            variant="destructive"
-            onClick={() => { onConfirm(); onOpenChange(false); }}
-          >
-            确认删除
-          </Button>
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button variant="destructive" size="sm" onClick={() => { onConfirm(); onOpenChange(false); }}>Delete</Button>
         </div>
       </DialogContent>
     </Dialog>
   );
 }
 
-// ─── Keyboard shortcuts help ──────────────────────────────────────────
-function KeyboardHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+function KeyboardHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
-        <DialogHeader>
-          <DialogTitle>Keyboard Shortcuts</DialogTitle>
-        </DialogHeader>
+        <DialogHeader><DialogTitle>Keyboard Shortcuts</DialogTitle></DialogHeader>
         <div className="space-y-2 text-sm">
-          {[
-            ["?", "Show this help"],
-            ["n", "New charge"],
-            ["/", "Focus search"],
-            ["1-4", "Switch tabs"],
-          ].map(([key, desc]) => (
+          {[["?", "Show help"], ["n", "New subscription"], ["/", "Focus search"], ["1-5", "Switch tabs"]].map(([key, desc]) => (
             <div key={key} className="flex items-center justify-between">
               <span className="text-muted-foreground">{desc}</span>
               <kbd className="rounded border bg-muted px-2 py-0.5 font-mono text-xs">{key}</kbd>
@@ -160,18 +104,12 @@ function KeyboardHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (op
   );
 }
 
-// ─── CSV Export ────────────────────────────────────────────────────────
 function exportToCSV(charges: ChargeRecord[], services: Service[], subscribers: { id: string; name: string }[]) {
-  const headers = ["Subscriber", "Service", "Period Start", "Period End", "Months", "Monthly Cost", "Currency", "Exchange Rate", "Total CNY", "Paid", "Paid Date", "Note"];
+  const headers = ["Subscriber", "Service", "Month", "Monthly Cost", "Currency", "Exchange Rate", "Total CNY", "Paid", "Paid Date", "Note"];
   const rows = charges.map((c) => {
     const sub = subscribers.find((s) => s.id === c.subscriber_id);
     const svc = services.find((s) => s.id === c.service_id);
-    return [
-      sub?.name ?? "", svc?.name ?? "", c.period_start, c.period_end,
-      c.months, c.monthly_cost, c.currency, c.exchange_rate,
-      Number(c.total_cny).toFixed(2), c.paid ? "Yes" : "No",
-      c.paid_date ?? "", c.note ?? "",
-    ];
+    return [sub?.name ?? "", svc?.name ?? "", c.period_start, c.monthly_cost, c.currency, c.exchange_rate, Number(c.total_cny).toFixed(2), c.paid ? "Yes" : "No", c.paid_date ?? "", c.note ?? ""];
   });
   const csv = [headers, ...rows].map((r) => r.map((v) => `"${v}"`).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
@@ -181,939 +119,782 @@ function exportToCSV(charges: ChargeRecord[], services: Service[], subscribers: 
   a.download = `subscriptions-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(url);
-  toast.success("CSV exported successfully");
+  toast.success("CSV exported");
+}
+
+function Tab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick} className={`px-3 py-1.5 text-sm rounded-md transition-colors ${active ? "bg-foreground text-background font-medium" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}>
+      {children}
+    </button>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 // Main page
 // ═══════════════════════════════════════════════════════════════════════
-
 export default function SubscriptionPage() {
-  const { status } = useSession();
+  const { data: session, status } = useSession();
   const router = useRouter();
   const searchRef = useRef<HTMLInputElement>(null);
 
+  const canEdit = !!session?.user?.email && ALLOWED_EMAILS.includes(session.user.email);
+
   const [data, setData] = useState<SubscriptionData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState("charges");
+  const [activeTab, setActiveTab] = useState("subscriptions");
+  const [addSubOpen, setAddSubOpen] = useState(false);
   const [addChargeOpen, setAddChargeOpen] = useState(false);
   const [editServiceOpen, setEditServiceOpen] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
+  const [editingSubRate, setEditingSubRate] = useState<{ id: string; rate: number } | null>(null);
   const [newSubscriberName, setNewSubscriberName] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [currentPage, setCurrentPage] = useState(1);
-  const [showCharts, setShowCharts] = useState(false);
   const [keyboardHelpOpen, setKeyboardHelpOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<{ type: string; id: string; name: string } | null>(null);
   const [editingChargeId, setEditingChargeId] = useState<string | null>(null);
   const [editingChargeNote, setEditingChargeNote] = useState("");
+  const [billMonth, setBillMonth] = useState(getCurrentMonth());
+  const [billing, setBilling] = useState(false);
 
-  const [chargeForm, setChargeForm] = useState({
-    subscriberId: "",
-    serviceId: "",
-    periodStart: "",
-    periodEnd: "",
-    exchangeRate: 7.25,
-    note: "",
-  });
+  const [subForm, setSubForm] = useState({ subscriberId: "", serviceId: "", startDate: new Date().toISOString().slice(0, 10) });
+  const [chargeForm, setChargeForm] = useState({ subscriberId: "", serviceId: "", periodStart: getCurrentMonth(), periodEnd: getCurrentMonth(), exchangeRate: 7.25, note: "" });
+  const [billExchangeRate, setBillExchangeRate] = useState(7.25);
 
-  // ─── Auth gate ──────────────────────────────────────────────────────
-  useEffect(() => {
-    if (status === "unauthenticated") router.push("/auth/signin");
-  }, [status, router]);
+  function requireEdit(): boolean {
+    if (canEdit) return true;
+    if (!session?.user) { toast.error("Sign in to make changes"); router.push("/auth/signin"); return false; }
+    toast.error("You don't have permission to make changes");
+    return false;
+  }
 
-  // ─── Data fetch ─────────────────────────────────────────────────────
   const reload = useCallback(async () => {
     const d = await fetchSubscriptionData();
     setData(d);
     setLoading(false);
   }, []);
 
-  useEffect(() => {
-    if (status === "authenticated") reload();
-  }, [reload, status]);
+  // Load data regardless of auth status
+  useEffect(() => { reload(); }, [reload]);
 
-  // ─── Keyboard shortcuts ─────────────────────────────────────────────
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.key === "?") { e.preventDefault(); setKeyboardHelpOpen(true); }
-      if (e.key === "n") { e.preventDefault(); setAddChargeOpen(true); }
+      if (e.key === "n") { e.preventDefault(); setAddSubOpen(true); }
       if (e.key === "/") { e.preventDefault(); searchRef.current?.focus(); }
-      if (e.key === "1") setActiveTab("charges");
-      if (e.key === "2") setActiveTab("people");
-      if (e.key === "3") setActiveTab("charts");
-      if (e.key === "4") setActiveTab("settings");
+      if (e.key === "1") setActiveTab("subscriptions");
+      if (e.key === "2") setActiveTab("charges");
+      if (e.key === "3") setActiveTab("people");
+      if (e.key === "4") setActiveTab("charts");
+      if (e.key === "5") setActiveTab("settings");
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // ─── Summary ────────────────────────────────────────────────────────
+  // ─── Summary ──────────────────────────────────────────────────────
   const summary = useMemo(() => {
-    if (!data) return { totalOwed: 0, totalPaid: 0, totalUnpaid: 0, activeSubscribers: 0, avgRate: 0 };
+    if (!data) return { totalPaid: 0, totalUnpaid: 0, activeSubs: 0, avgRate: 0 };
     const totalPaid = data.charges.filter((c) => c.paid).reduce((s, c) => s + Number(c.total_cny), 0);
     const totalUnpaid = data.charges.filter((c) => !c.paid).reduce((s, c) => s + Number(c.total_cny), 0);
-    const activeSubscribers = data.subscribers.length;
-    const rates = data.charges.map((c) => Number(c.exchange_rate));
+    const activeSubs = data.subscriptions.filter((s) => s.active).length;
+    const rates = data.subscriptions.filter((s) => s.active).map((s) => Number(s.exchange_rate));
     const avgRate = rates.length > 0 ? rates.reduce((a, b) => a + b, 0) / rates.length : 0;
-    return { totalOwed: totalPaid + totalUnpaid, totalPaid, totalUnpaid, activeSubscribers, avgRate };
+    return { totalPaid, totalUnpaid, activeSubs, avgRate };
   }, [data]);
 
-  // ─── Filtered and sorted charges ────────────────────────────────────
+  // ─── Filtered charges ─────────────────────────────────────────────
   const filteredCharges = useMemo(() => {
     if (!data) return [];
     let charges = [...data.charges];
-
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       charges = charges.filter((c) => {
         const sub = data.subscribers.find((s) => s.id === c.subscriber_id);
         const svc = data.services.find((s) => s.id === c.service_id);
-        return (
-          (sub?.name ?? "").toLowerCase().includes(q) ||
-          (svc?.name ?? "").toLowerCase().includes(q) ||
-          c.period_start.includes(q) ||
-          c.period_end.includes(q) ||
-          (c.note ?? "").toLowerCase().includes(q)
-        );
+        return (sub?.name ?? "").toLowerCase().includes(q) || (svc?.name ?? "").toLowerCase().includes(q) || c.period_start.includes(q) || (c.note ?? "").toLowerCase().includes(q);
       });
     }
-
     if (sortColumn) {
       charges.sort((a, b) => {
         let va: string | number = 0, vb: string | number = 0;
         switch (sortColumn) {
-          case "subscriber": {
-            const sa = data.subscribers.find((s) => s.id === a.subscriber_id);
-            const sb = data.subscribers.find((s) => s.id === b.subscriber_id);
-            va = sa?.name ?? ""; vb = sb?.name ?? "";
-            break;
-          }
-          case "service": {
-            const sa = data.services.find((s) => s.id === a.service_id);
-            const sb = data.services.find((s) => s.id === b.service_id);
-            va = sa?.name ?? ""; vb = sb?.name ?? "";
-            break;
-          }
-          case "months": va = a.months; vb = b.months; break;
+          case "subscriber": { va = data.subscribers.find((s) => s.id === a.subscriber_id)?.name ?? ""; vb = data.subscribers.find((s) => s.id === b.subscriber_id)?.name ?? ""; break; }
+          case "service": { va = data.services.find((s) => s.id === a.service_id)?.name ?? ""; vb = data.services.find((s) => s.id === b.service_id)?.name ?? ""; break; }
+          case "month": va = a.period_start; vb = b.period_start; break;
           case "total": va = Number(a.total_cny); vb = Number(b.total_cny); break;
-          case "period": va = a.period_start; vb = b.period_start; break;
           case "paid": va = a.paid ? 1 : 0; vb = b.paid ? 1 : 0; break;
         }
-        if (typeof va === "string") {
-          const cmp = va.localeCompare(vb as string);
-          return sortDir === "asc" ? cmp : -cmp;
-        }
+        if (typeof va === "string") { const cmp = va.localeCompare(vb as string); return sortDir === "asc" ? cmp : -cmp; }
         return sortDir === "asc" ? (va as number) - (vb as number) : (vb as number) - (va as number);
       });
     }
-
     return charges;
   }, [data, searchQuery, sortColumn, sortDir]);
 
   const totalPages = Math.max(1, Math.ceil(filteredCharges.length / PAGE_SIZE));
   const paginatedCharges = filteredCharges.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-
-  // reset page when filter changes
   useEffect(() => { setCurrentPage(1); }, [searchQuery, sortColumn, sortDir]);
 
-  // ─── Sort handler ───────────────────────────────────────────────────
   function handleSort(col: string) {
-    if (sortColumn === col) {
-      setSortDir(sortDir === "asc" ? "desc" : "asc");
-    } else {
-      setSortColumn(col);
-      setSortDir("asc");
+    if (sortColumn === col) setSortDir(sortDir === "asc" ? "desc" : "asc");
+    else { setSortColumn(col); setSortDir("asc"); }
+  }
+
+  // ─── Loading ─────────────────────────────────────────────────────
+  if (loading) return <LoadingSkeleton />;
+  if (!data) return <div className="flex justify-center py-20 text-muted-foreground">Failed to load data</div>;
+
+  // ─── Subscription actions ─────────────────────────────────────────
+  async function handleAddSubscription() {
+    if (!requireEdit()) return;
+    const { subscriberId, serviceId, startDate } = subForm;
+    if (!subscriberId || !serviceId) { toast.error("Please select both a subscriber and a service"); return; }
+    const exists = data!.subscriptions.find((s) => s.subscriber_id === subscriberId && s.service_id === serviceId);
+    if (exists) { toast.error("This subscription already exists"); return; }
+    try {
+      await apiAddSubscription({ subscriber_id: subscriberId, service_id: serviceId, start_date: startDate, active: true });
+      setSubForm({ subscriberId: "", serviceId: "", startDate: new Date().toISOString().slice(0, 10) });
+      setAddSubOpen(false);
+      toast.success("Subscription added");
+      await reload();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : JSON.stringify(err);
+      toast.error(`Failed: ${msg}`);
     }
   }
 
-  // ─── Loading / auth states ──────────────────────────────────────────
-  if (status === "loading" || (status === "authenticated" && loading)) return <LoadingSkeleton />;
-  if (status === "unauthenticated") return null;
-  if (!data) return <div className="flex justify-center py-20 text-muted-foreground">Failed to load data</div>;
+  async function handleToggleSubscription(sub: Subscription) {
+    if (!requireEdit()) return;
+    await apiUpdateSubscription(sub.id, { active: !sub.active });
+    toast.success(sub.active ? "Paused" : "Activated");
+    await reload();
+  }
 
-  // ─── Subscriber actions ─────────────────────────────────────────────
+  async function handleSaveSubRate(id: string, rate: number) {
+    if (!requireEdit()) return;
+    await apiUpdateSubscription(id, { exchange_rate: rate });
+    setEditingSubRate(null);
+    toast.success("Rate updated");
+    await reload();
+  }
+
+  async function handleDeleteSubscription(id: string) {
+    if (!requireEdit()) return;
+    await apiDeleteSubscription(id);
+    toast.success("Removed");
+    await reload();
+  }
+
+  // ─── Bill now ─────────────────────────────────────────────────────
+  async function handleBillNow() {
+    if (!requireEdit()) return;
+    setBilling(true);
+    try {
+      const res = await fetch("/api/bill-now", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ month: billMonth, exchangeRate: billExchangeRate }),
+      });
+      if (!res.ok) {
+        const count = await billNowClient(billMonth, billExchangeRate);
+        toast.success(count > 0 ? `Generated ${count} charge(s) for ${billMonth}` : `No new charges for ${billMonth}`);
+      } else {
+        const result = await res.json();
+        toast.success(result.generated > 0 ? `Generated ${result.generated} charge(s) for ${billMonth}` : `No new charges for ${billMonth}`);
+      }
+      await reload();
+    } catch {
+      const count = await billNowClient(billMonth, billExchangeRate);
+      toast.success(count > 0 ? `Generated ${count} charge(s)` : "No new charges");
+      await reload();
+    } finally {
+      setBilling(false);
+    }
+  }
+
+  // ─── Subscriber actions ───────────────────────────────────────────
   async function handleAddSubscriber() {
+    if (!requireEdit()) return;
     if (!newSubscriberName.trim()) return;
     await apiAddSubscriber(newSubscriberName.trim());
     setNewSubscriberName("");
-    toast.success(`Added subscriber: ${newSubscriberName.trim()}`);
+    toast.success(`Added ${newSubscriberName.trim()}`);
     await reload();
   }
+  async function handleRemoveSubscriber(id: string) { if (!requireEdit()) return; await apiDeleteSubscriber(id); toast.success("Removed"); await reload(); }
 
-  async function handleRemoveSubscriber(id: string) {
-    await apiDeleteSubscriber(id);
-    toast.success("Subscriber removed");
-    await reload();
-  }
-
-  // ─── Service actions ────────────────────────────────────────────────
+  // ─── Service actions ──────────────────────────────────────────────
   async function handleSaveService() {
+    if (!requireEdit()) return;
     if (!editingService) return;
     const exists = data!.services.find((s) => s.id === editingService.id);
     if (exists) {
-      await apiUpdateService(editingService.id, {
-        name: editingService.name,
-        monthly_cost: editingService.monthly_cost,
-        currency: editingService.currency,
-      });
-      toast.success("Service updated");
+      await apiUpdateService(editingService.id, { name: editingService.name, monthly_cost: editingService.monthly_cost, currency: editingService.currency });
+      toast.success("Updated");
     } else {
-      await apiAddService({
-        name: editingService.name,
-        monthly_cost: editingService.monthly_cost,
-        currency: editingService.currency,
-      });
-      toast.success(`Added service: ${editingService.name}`);
+      await apiAddService({ name: editingService.name, monthly_cost: editingService.monthly_cost, currency: editingService.currency });
+      toast.success(`Added ${editingService.name}`);
     }
-    setEditServiceOpen(false);
-    setEditingService(null);
-    await reload();
+    setEditServiceOpen(false); setEditingService(null); await reload();
   }
+  async function handleRemoveService(id: string) { if (!requireEdit()) return; await apiDeleteService(id); toast.success("Removed"); await reload(); }
 
-  async function handleRemoveService(id: string) {
-    await apiDeleteService(id);
-    toast.success("Service removed");
-    await reload();
-  }
-
-  // ─── Charge actions ─────────────────────────────────────────────────
+  // ─── Charge actions ──────────────────────────────────────────────
   async function handleAddCharge() {
+    if (!requireEdit()) return;
     const { subscriberId, serviceId, periodStart, periodEnd, exchangeRate, note } = chargeForm;
-    if (!subscriberId || !serviceId || !periodStart || !periodEnd) return;
-    const service = data!.services.find((s) => s.id === serviceId)!;
+    if (!subscriberId || !serviceId || !periodStart || !periodEnd) { toast.error("Fill in all required fields"); return; }
+    const service = data!.services.find((s) => s.id === serviceId);
+    if (!service) return;
     const months = calcMonths(periodStart, periodEnd);
-    if (months <= 0) return;
-    const totalCNY = calcTotalCNY(months, Number(service.monthly_cost), exchangeRate);
-    await apiAddCharge({
-      subscriber_id: subscriberId,
-      service_id: serviceId,
-      period_start: periodStart,
-      period_end: periodEnd,
-      months,
-      monthly_cost: Number(service.monthly_cost),
-      currency: service.currency,
-      exchange_rate: exchangeRate,
-      total_cny: totalCNY,
-      paid: false,
-      note: note || undefined,
-    });
-    setChargeForm({ subscriberId: "", serviceId: "", periodStart: "", periodEnd: "", exchangeRate: 7.25, note: "" });
-    setAddChargeOpen(false);
-    toast.success("Charge added");
-    await reload();
+    const totalCny = calcTotalCNY(months, Number(service.monthly_cost), exchangeRate);
+    try {
+      await apiAddCharge({
+        subscriber_id: subscriberId, service_id: serviceId,
+        period_start: periodStart, period_end: periodEnd,
+        months, monthly_cost: Number(service.monthly_cost),
+        currency: service.currency, exchange_rate: exchangeRate,
+        total_cny: totalCny, paid: false, note: note || "Manual",
+      });
+      setChargeForm({ subscriberId: "", serviceId: "", periodStart: getCurrentMonth(), periodEnd: getCurrentMonth(), exchangeRate: 7.25, note: "" });
+      setAddChargeOpen(false);
+      toast.success("Charge added");
+      await reload();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : JSON.stringify(err);
+      toast.error(`Failed: ${msg}`);
+    }
   }
 
   async function handleTogglePaid(charge: ChargeRecord) {
-    await apiUpdateCharge(charge.id, {
-      paid: !charge.paid,
-      paid_date: !charge.paid ? new Date().toISOString().slice(0, 10) : undefined,
-    });
-    toast.success(charge.paid ? "Marked as unpaid" : "Marked as paid");
-    await reload();
+    if (!requireEdit()) return;
+    await apiUpdateCharge(charge.id, { paid: !charge.paid, paid_date: !charge.paid ? new Date().toISOString().slice(0, 10) : undefined });
+    toast.success(charge.paid ? "Marked unpaid" : "Marked paid"); await reload();
   }
-
-  async function handleRemoveCharge(id: string) {
-    await apiDeleteCharge(id);
-    toast.success("Charge removed");
-    await reload();
-  }
-
+  async function handleRemoveCharge(id: string) { if (!requireEdit()) return; await apiDeleteCharge(id); toast.success("Removed"); await reload(); }
   async function handleBulkMarkPaid() {
+    if (!requireEdit()) return;
     const unpaid = filteredCharges.filter((c) => !c.paid);
     if (unpaid.length === 0) { toast.info("No unpaid charges"); return; }
-    await Promise.all(
-      unpaid.map((c) =>
-        apiUpdateCharge(c.id, { paid: true, paid_date: new Date().toISOString().slice(0, 10) })
-      )
-    );
-    toast.success(`Marked ${unpaid.length} charges as paid`);
-    await reload();
+    await Promise.all(unpaid.map((c) => apiUpdateCharge(c.id, { paid: true, paid_date: new Date().toISOString().slice(0, 10) })));
+    toast.success(`Marked ${unpaid.length} as paid`); await reload();
   }
-
   async function handleSaveChargeNote(chargeId: string) {
+    if (!requireEdit()) return;
     await apiUpdateCharge(chargeId, { note: editingChargeNote || undefined });
-    setEditingChargeId(null);
-    toast.success("Note updated");
-    await reload();
+    setEditingChargeId(null); toast.success("Note updated"); await reload();
   }
 
-  // ─── Per-subscriber helpers ─────────────────────────────────────────
-  function subscriberCharges(subscriberId: string) {
-    return data!.charges.filter((c) => c.subscriber_id === subscriberId);
-  }
+  // ─── Per-subscriber helpers ───────────────────────────────────────
+  function subscriberCharges(subscriberId: string) { return data!.charges.filter((c) => c.subscriber_id === subscriberId); }
+  function subscriberUnpaid(subscriberId: string) { return subscriberCharges(subscriberId).filter((c) => !c.paid).reduce((s, c) => s + Number(c.total_cny), 0); }
 
-  function subscriberUnpaid(subscriberId: string) {
-    return subscriberCharges(subscriberId)
-      .filter((c) => !c.paid)
-      .reduce((s, c) => s + Number(c.total_cny), 0);
-  }
-
-  // ─── Sortable header ───────────────────────────────────────────────
-  function SortableHead({ column, children }: { column: string; children: React.ReactNode }) {
+  function SortHeader({ column, children }: { column: string; children: React.ReactNode }) {
     return (
-      <TableHead
-        className="cursor-pointer select-none hover:text-foreground transition-colors"
-        onClick={() => handleSort(column)}
-      >
-        <span className="inline-flex items-center gap-1">
-          {children}
-          <ArrowUpDown className={`h-3 w-3 ${sortColumn === column ? "text-foreground" : "text-muted-foreground/50"}`} />
-        </span>
-      </TableHead>
+      <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground cursor-pointer select-none hover:text-foreground transition-colors" onClick={() => handleSort(column)}>
+        <span className="inline-flex items-center gap-1">{children}<ArrowUpDown className={`h-3 w-3 ${sortColumn === column ? "text-foreground" : "text-muted-foreground/30"}`} /></span>
+      </th>
     );
   }
 
   return (
     <div className="space-y-6">
-      {/* ─── Header ──────────────────────────────────────────────────── */}
-      <motion.div {...fadeUp} className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      {/* Header */}
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">订阅管理 / Subscriptions</h1>
-          <p className="text-sm text-muted-foreground">管理代付订阅，跟踪收款状态</p>
+          <h1 className="text-xl font-semibold tracking-tight">Subscriptions</h1>
+          <p className="text-sm text-muted-foreground">Manage subscriptions. Bill monthly, track payments.</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Tooltip>
-            <TooltipTrigger render={<Button variant="outline" size="sm" onClick={() => setKeyboardHelpOpen(true)} />}>
-              <Keyboard className="h-4 w-4" />
-            </TooltipTrigger>
-            <TooltipContent>Keyboard shortcuts (?)</TooltipContent>
-          </Tooltip>
-          <Dialog open={addChargeOpen} onOpenChange={setAddChargeOpen}>
-            <DialogTrigger render={<Button size="sm" />}>
-              <Plus className="mr-1 h-4 w-4" /> 新增账单
+        <div className="flex gap-2 items-center">
+          {!session?.user && (
+            <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => router.push("/auth/signin")}>
+              <Lock className="mr-1.5 h-3 w-3" /> Sign in to edit
+            </Button>
+          )}
+          <Button variant="outline" size="sm" className="h-8 w-8 p-0" onClick={() => setKeyboardHelpOpen(true)}>
+            <Keyboard className="h-3.5 w-3.5" />
+          </Button>
+          {canEdit && <Dialog open={addSubOpen} onOpenChange={setAddSubOpen}>
+            <DialogTrigger render={<Button size="sm" className="h-8" />}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" /> New subscription
             </DialogTrigger>
             <DialogContent>
-              <DialogHeader>
-                <DialogTitle>新增账单 / New Charge</DialogTitle>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label>订阅人</Label>
-                  <Select value={chargeForm.subscriberId || ""} onValueChange={(v) => setChargeForm({ ...chargeForm, subscriberId: v as string })}>
-                    <SelectTrigger><SelectValue placeholder="选择订阅人" /></SelectTrigger>
-                    <SelectContent>
-                      {data.subscribers.map((s) => (
-                        <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+              <DialogHeader><DialogTitle>New Subscription</DialogTitle></DialogHeader>
+              <p className="text-sm text-muted-foreground">Link a person to a service. Charges are generated when you bill.</p>
+              <div className="grid gap-4 pt-2">
+                <div className="grid gap-1.5">
+                  <Label className="text-xs text-muted-foreground">Subscriber</Label>
+                  <select
+                    value={subForm.subscriberId}
+                    onChange={(e) => setSubForm({ ...subForm, subscriberId: e.target.value })}
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="">Select person</option>
+                    {data.subscribers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
                 </div>
-                <div className="grid gap-2">
-                  <Label>服务</Label>
-                  <Select value={chargeForm.serviceId || ""} onValueChange={(v) => setChargeForm({ ...chargeForm, serviceId: v as string })}>
-                    <SelectTrigger><SelectValue placeholder="选择服务" /></SelectTrigger>
-                    <SelectContent>
-                      {data.services.map((s) => (
-                        <SelectItem key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/月)</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs text-muted-foreground">Service</Label>
+                  <select
+                    value={subForm.serviceId}
+                    onChange={(e) => setSubForm({ ...subForm, serviceId: e.target.value })}
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="">Select service</option>
+                    {data.services.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</option>)}
+                  </select>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="grid gap-2">
-                    <Label>起始月份</Label>
-                    <Input type="month" value={chargeForm.periodStart} onChange={(e) => setChargeForm({ ...chargeForm, periodStart: e.target.value })} />
-                  </div>
-                  <div className="grid gap-2">
-                    <Label>结束月份</Label>
-                    <Input type="month" value={chargeForm.periodEnd} onChange={(e) => setChargeForm({ ...chargeForm, periodEnd: e.target.value })} />
-                  </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs text-muted-foreground">Start date</Label>
+                  <Input type="date" className="h-9" value={subForm.startDate} onChange={(e) => setSubForm({ ...subForm, startDate: e.target.value })} />
                 </div>
-                <div className="grid gap-2">
-                  <Label>汇率 (→ CNY)</Label>
-                  <Input type="number" step="0.01" value={chargeForm.exchangeRate} onChange={(e) => setChargeForm({ ...chargeForm, exchangeRate: Number(e.target.value) })} />
-                </div>
-                {chargeForm.serviceId && chargeForm.periodStart && chargeForm.periodEnd && (() => {
-                  const service = data.services.find((s) => s.id === chargeForm.serviceId);
-                  const months = calcMonths(chargeForm.periodStart, chargeForm.periodEnd);
-                  if (!service || months <= 0) return null;
-                  const total = calcTotalCNY(months, Number(service.monthly_cost), chargeForm.exchangeRate);
-                  return (
-                    <div className="rounded-lg bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-purple-500/20 p-3 text-sm">
-                      <div>{months} 个月 × {service.monthly_cost} {service.currency} × {chargeForm.exchangeRate}</div>
-                      <div className="mt-1 text-lg font-bold">= ¥{total.toFixed(2)}</div>
-                    </div>
-                  );
-                })()}
-                <div className="grid gap-2">
-                  <Label>备注</Label>
-                  <Input placeholder="可选备注" value={chargeForm.note} onChange={(e) => setChargeForm({ ...chargeForm, note: e.target.value })} />
-                </div>
-                <Button onClick={handleAddCharge}>添加</Button>
+                <Button size="sm" onClick={handleAddSubscription}>Add subscription</Button>
               </div>
             </DialogContent>
-          </Dialog>
+          </Dialog>}
         </div>
       </motion.div>
 
-      {/* ─── Stats dashboard ─────────────────────────────────────────── */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <motion.div {...fadeUp} transition={{ delay: 0.05 }}>
-          <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-emerald-500/20 to-green-500/10 shadow-lg shadow-emerald-500/5">
-            <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-transparent" />
-            <CardContent className="relative pt-6">
-              <div className="flex items-center gap-2 text-sm text-emerald-400">
-                <Check className="h-4 w-4" />
-                已收 / Paid
-              </div>
-              <div className="mt-1 text-2xl font-bold font-mono text-emerald-400">
-                ¥{summary.totalPaid.toFixed(2)}
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
+      {/* Stats */}
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.05 }} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {[
+          { label: "Paid", value: `\u00a5${summary.totalPaid.toFixed(2)}`, icon: Check, color: "text-emerald-600 dark:text-emerald-400" },
+          { label: "Unpaid", value: `\u00a5${summary.totalUnpaid.toFixed(2)}`, icon: Clock, color: "text-amber-600 dark:text-amber-400" },
+          { label: "Active subscriptions", value: String(summary.activeSubs), icon: Receipt, color: "text-foreground" },
+          { label: "Avg rate", value: summary.avgRate > 0 ? summary.avgRate.toFixed(4) : "\u2014", icon: TrendingUp, color: "text-foreground" },
+        ].map((stat) => (
+          <div key={stat.label} className="rounded-lg border bg-card p-4">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1"><stat.icon className="h-3.5 w-3.5" />{stat.label}</div>
+            <div className={`text-xl font-semibold tabular-nums ${stat.color}`}>{stat.value}</div>
+          </div>
+        ))}
+      </motion.div>
 
-        <motion.div {...fadeUp} transition={{ delay: 0.1 }}>
-          <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-amber-500/20 to-orange-500/10 shadow-lg shadow-amber-500/5">
-            <div className="absolute inset-0 bg-gradient-to-br from-amber-500/5 to-transparent" />
-            <CardContent className="relative pt-6">
-              <div className="flex items-center gap-2 text-sm text-amber-400">
-                <Clock className="h-4 w-4" />
-                未收 / Unpaid
+      {/* Tabs */}
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+          <div className="flex gap-1 rounded-lg bg-muted/50 p-1">
+            <Tab active={activeTab === "subscriptions"} onClick={() => setActiveTab("subscriptions")}>Subscriptions</Tab>
+            <Tab active={activeTab === "charges"} onClick={() => setActiveTab("charges")}>Charges</Tab>
+            <Tab active={activeTab === "people"} onClick={() => setActiveTab("people")}>People</Tab>
+            <Tab active={activeTab === "charts"} onClick={() => setActiveTab("charts")}>Charts</Tab>
+            <Tab active={activeTab === "settings"} onClick={() => setActiveTab("settings")}>Settings</Tab>
+          </div>
+          {activeTab === "charges" && (
+            <div className="flex gap-2 flex-wrap">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
+                <Input ref={searchRef} placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="h-8 w-44 pl-8 text-sm" />
               </div>
-              <div className="mt-1 text-2xl font-bold font-mono text-amber-400">
-                ¥{summary.totalUnpaid.toFixed(2)}
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
+              {canEdit && (
+                <>
+                  <Dialog open={addChargeOpen} onOpenChange={setAddChargeOpen}>
+                    <DialogTrigger render={<Button size="sm" className="h-8" />}>
+                      <Plus className="mr-1 h-3.5 w-3.5" /> Add charge
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader><DialogTitle>Add Manual Charge</DialogTitle></DialogHeader>
+                      <div className="grid gap-4 pt-2">
+                        <div className="grid gap-1.5">
+                          <Label className="text-xs text-muted-foreground">Subscriber</Label>
+                          <select value={chargeForm.subscriberId} onChange={(e) => setChargeForm({ ...chargeForm, subscriberId: e.target.value })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                            <option value="">Select person</option>
+                            {data.subscribers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                          </select>
+                        </div>
+                        <div className="grid gap-1.5">
+                          <Label className="text-xs text-muted-foreground">Service</Label>
+                          <select value={chargeForm.serviceId} onChange={(e) => setChargeForm({ ...chargeForm, serviceId: e.target.value })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                            <option value="">Select service</option>
+                            {data.services.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</option>)}
+                          </select>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="grid gap-1.5">
+                            <Label className="text-xs text-muted-foreground">Start month</Label>
+                            <MonthPicker value={chargeForm.periodStart} onChange={(v) => setChargeForm({ ...chargeForm, periodStart: v })} />
+                          </div>
+                          <div className="grid gap-1.5">
+                            <Label className="text-xs text-muted-foreground">End month</Label>
+                            <MonthPicker value={chargeForm.periodEnd} onChange={(v) => setChargeForm({ ...chargeForm, periodEnd: v })} />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="grid gap-1.5">
+                            <Label className="text-xs text-muted-foreground">Exchange rate (to CNY)</Label>
+                            <Input type="number" step="0.01" className="h-9" value={chargeForm.exchangeRate} onChange={(e) => setChargeForm({ ...chargeForm, exchangeRate: Number(e.target.value) })} />
+                          </div>
+                          <div className="grid gap-1.5">
+                            <Label className="text-xs text-muted-foreground">Note</Label>
+                            <Input className="h-9" value={chargeForm.note} onChange={(e) => setChargeForm({ ...chargeForm, note: e.target.value })} placeholder="Optional" />
+                          </div>
+                        </div>
+                        {chargeForm.subscriberId && chargeForm.serviceId && chargeForm.periodStart && chargeForm.periodEnd && (() => {
+                          const service = data.services.find((s) => s.id === chargeForm.serviceId);
+                          if (!service) return null;
+                          const months = calcMonths(chargeForm.periodStart, chargeForm.periodEnd);
+                          const total = calcTotalCNY(months, Number(service.monthly_cost), chargeForm.exchangeRate);
+                          return (
+                            <div className="rounded-md border bg-muted/50 px-3 py-2.5 text-sm">
+                              <span className="text-muted-foreground">{months} mo x {service.monthly_cost} {service.currency} x {chargeForm.exchangeRate} = </span>
+                              <span className="font-semibold tabular-nums">{"\u00a5"}{total.toFixed(2)}</span>
+                            </div>
+                          );
+                        })()}
+                        <Button size="sm" onClick={handleAddCharge}>Add charge</Button>
+                      </div>
+                    </DialogContent>
+                  </Dialog>
+                  <Button variant="outline" size="sm" className="h-8" onClick={handleBulkMarkPaid}><CheckCheck className="mr-1 h-3.5 w-3.5" /> Bulk pay</Button>
+                </>
+              )}
+              <Button variant="outline" size="sm" className="h-8" onClick={() => exportToCSV(data.charges, data.services, data.subscribers)}><Download className="mr-1 h-3.5 w-3.5" /> CSV</Button>
+            </div>
+          )}
+        </div>
 
-        <motion.div {...fadeUp} transition={{ delay: 0.15 }}>
-          <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-blue-500/20 to-cyan-500/10 shadow-lg shadow-blue-500/5">
-            <div className="absolute inset-0 bg-gradient-to-br from-blue-500/5 to-transparent" />
-            <CardContent className="relative pt-6">
-              <div className="flex items-center gap-2 text-sm text-blue-400">
-                <Users className="h-4 w-4" />
-                订阅人 / Subscribers
-              </div>
-              <div className="mt-1 text-2xl font-bold font-mono text-blue-400">
-                {summary.activeSubscribers}
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        <motion.div {...fadeUp} transition={{ delay: 0.2 }}>
-          <Card className="relative overflow-hidden border-0 bg-gradient-to-br from-purple-500/20 to-pink-500/10 shadow-lg shadow-purple-500/5">
-            <div className="absolute inset-0 bg-gradient-to-br from-purple-500/5 to-transparent" />
-            <CardContent className="relative pt-6">
-              <div className="flex items-center gap-2 text-sm text-purple-400">
-                <TrendingUp className="h-4 w-4" />
-                平均汇率 / Avg Rate
-              </div>
-              <div className="mt-1 text-2xl font-bold font-mono text-purple-400">
-                {summary.avgRate > 0 ? summary.avgRate.toFixed(4) : "—"}
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-      </div>
-
-      {/* ─── Tabs ────────────────────────────────────────────────────── */}
-      <motion.div {...fadeUp} transition={{ delay: 0.25 }}>
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <TabsList>
-              <TabsTrigger value="charges">
-                <FileText className="mr-1 h-4 w-4" /> 账单
-              </TabsTrigger>
-              <TabsTrigger value="people">
-                <Users className="mr-1 h-4 w-4" /> 按人查看
-              </TabsTrigger>
-              <TabsTrigger value="charts">
-                <BarChart3 className="mr-1 h-4 w-4" /> 图表
-              </TabsTrigger>
-              <TabsTrigger value="settings">
-                <Settings className="mr-1 h-4 w-4" /> 设置
-              </TabsTrigger>
-            </TabsList>
-            {activeTab === "charges" && (
-              <div className="flex flex-wrap gap-2">
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    ref={searchRef}
-                    placeholder="Search charges..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="h-9 w-48 pl-9 text-sm"
-                  />
-                </div>
-                <Tooltip>
-                  <TooltipTrigger render={<Button variant="outline" size="sm" onClick={handleBulkMarkPaid} />}>
-                    <CheckCheck className="mr-1 h-4 w-4" /> Bulk Pay
-                  </TooltipTrigger>
-                  <TooltipContent>Mark all filtered unpaid as paid</TooltipContent>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger render={<Button variant="outline" size="sm" onClick={() => exportToCSV(data.charges, data.services, data.subscribers)} />}>
-                    <Download className="mr-1 h-4 w-4" /> CSV
-                  </TooltipTrigger>
-                  <TooltipContent>Export all charges to CSV</TooltipContent>
-                </Tooltip>
+        {/* ═══ Subscriptions tab ═══════════════════════════════════════ */}
+        {activeTab === "subscriptions" && (
+          <div className="space-y-4">
+            {/* Bill now */}
+            {canEdit && (
+              <div className="flex items-center gap-2 rounded-lg border bg-card p-3 flex-wrap">
+                <Zap className="h-4 w-4 text-muted-foreground" />
+                <span className="text-sm text-muted-foreground">Generate charges for</span>
+                <MonthPicker value={billMonth} onChange={setBillMonth} />
+                <span className="text-sm text-muted-foreground">at rate</span>
+                <Input type="number" step="0.01" className="h-8 w-20 text-sm" value={billExchangeRate} onChange={(e) => setBillExchangeRate(Number(e.target.value))} />
+                <Button size="sm" className="h-8" onClick={handleBillNow} disabled={billing}>
+                  {billing ? "Billing..." : "Bill now"}
+                </Button>
               </div>
             )}
-          </div>
 
-          {/* ─── Charges tab ──────────────────────────────────────── */}
-          <TabsContent value="charges">
-            <Card className="glass-card">
-              <CardContent className="pt-6">
-                {filteredCharges.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-16 text-center">
-                    <div className="rounded-full bg-muted/50 p-4 mb-4">
-                      <CreditCard className="h-8 w-8 text-muted-foreground" />
-                    </div>
-                    <h3 className="font-medium text-lg">
-                      {searchQuery ? "No matching charges" : "暂无账单"}
-                    </h3>
-                    <p className="text-sm text-muted-foreground mt-1 max-w-sm">
-                      {searchQuery
-                        ? "Try adjusting your search query"
-                        : "Click the 「新增账单」button above to add your first charge"}
-                    </p>
-                  </div>
-                ) : (
-                  <>
-                    <div className="overflow-x-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <SortableHead column="subscriber">订阅人</SortableHead>
-                            <SortableHead column="service">服务</SortableHead>
-                            <SortableHead column="period">周期</SortableHead>
-                            <SortableHead column="months">月数</SortableHead>
-                            <TableHead>单价</TableHead>
-                            <TableHead>汇率</TableHead>
-                            <SortableHead column="total">合计 (CNY)</SortableHead>
-                            <SortableHead column="paid">状态</SortableHead>
-                            <TableHead className="w-20"></TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          <AnimatePresence>
-                            {paginatedCharges.map((charge) => {
-                              const subscriber = data.subscribers.find((s) => s.id === charge.subscriber_id);
-                              const service = data.services.find((s) => s.id === charge.service_id);
-                              return (
-                                <motion.tr
-                                  key={charge.id}
-                                  initial={{ opacity: 0 }}
-                                  animate={{ opacity: 1 }}
-                                  exit={{ opacity: 0 }}
-                                  className={`border-b transition-colors hover:bg-muted/50 ${
-                                    charge.paid
-                                      ? "bg-emerald-500/[0.03] hover:bg-emerald-500/[0.07]"
-                                      : ""
-                                  }`}
-                                >
-                                  <TableCell>
-                                    <div className="flex items-center gap-2">
-                                      <SubscriberAvatar name={subscriber?.name ?? "?"} />
-                                      <span className="font-medium">{subscriber?.name ?? "Unknown"}</span>
-                                    </div>
-                                  </TableCell>
-                                  <TableCell>{service?.name ?? "Unknown"}</TableCell>
-                                  <TableCell className="text-xs text-muted-foreground">{charge.period_start} ~ {charge.period_end}</TableCell>
-                                  <TableCell>{charge.months}</TableCell>
-                                  <TableCell className="font-mono text-xs">{charge.monthly_cost} {charge.currency}</TableCell>
-                                  <TableCell className="font-mono text-xs">{charge.exchange_rate}</TableCell>
-                                  <TableCell className="font-mono font-bold">¥{Number(charge.total_cny).toFixed(2)}</TableCell>
-                                  <TableCell>
-                                    <Badge
-                                      className={`cursor-pointer transition-all hover:scale-105 ${
-                                        charge.paid
-                                          ? "bg-emerald-500/20 text-emerald-500 border-emerald-500/30"
-                                          : "bg-amber-500/20 text-amber-500 border-amber-500/30"
-                                      }`}
-                                      onClick={() => handleTogglePaid(charge)}
-                                    >
-                                      {charge.paid ? (
-                                        <>✅ 已付</>
-                                      ) : (
-                                        <>⏳ 未付</>
-                                      )}
-                                    </Badge>
-                                  </TableCell>
-                                  <TableCell>
-                                    <div className="flex gap-1">
-                                      {editingChargeId === charge.id ? (
-                                        <div className="flex gap-1">
-                                          <Input
-                                            className="h-7 w-24 text-xs"
-                                            value={editingChargeNote}
-                                            onChange={(e) => setEditingChargeNote(e.target.value)}
-                                            onKeyDown={(e) => {
-                                              if (e.key === "Enter") handleSaveChargeNote(charge.id);
-                                              if (e.key === "Escape") setEditingChargeId(null);
-                                            }}
-                                            autoFocus
-                                          />
-                                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => handleSaveChargeNote(charge.id)}>
-                                            <Check className="h-3 w-3" />
-                                          </Button>
-                                        </div>
-                                      ) : (
-                                        <>
-                                          <Tooltip>
-                                            <TooltipTrigger
-                                              render={
-                                                <Button
-                                                  variant="ghost"
-                                                  size="icon"
-                                                  className="h-7 w-7"
-                                                  onClick={() => {
-                                                    setEditingChargeId(charge.id);
-                                                    setEditingChargeNote(charge.note ?? "");
-                                                  }}
-                                                />
-                                              }
-                                            >
-                                              <Edit2 className="h-3 w-3" />
-                                            </TooltipTrigger>
-                                            <TooltipContent>Edit note</TooltipContent>
-                                          </Tooltip>
-                                          <Button
-                                            variant="ghost"
-                                            size="icon"
-                                            className="h-7 w-7"
-                                            onClick={() => setConfirmDelete({ type: "charge", id: charge.id, name: `${subscriber?.name} - ${service?.name}` })}
-                                          >
-                                            <Trash2 className="h-3 w-3 text-destructive" />
-                                          </Button>
-                                        </>
-                                      )}
-                                    </div>
-                                  </TableCell>
-                                </motion.tr>
-                              );
-                            })}
-                          </AnimatePresence>
-                        </TableBody>
-                      </Table>
-                    </div>
-
-                    {/* Pagination */}
-                    {totalPages > 1 && (
-                      <div className="flex items-center justify-between pt-4 text-sm">
-                        <span className="text-muted-foreground">
-                          Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filteredCharges.length)} of {filteredCharges.length}
-                        </span>
-                        <div className="flex gap-1">
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-8 w-8"
-                            disabled={currentPage === 1}
-                            onClick={() => setCurrentPage((p) => p - 1)}
-                          >
-                            <ChevronLeft className="h-4 w-4" />
-                          </Button>
-                          {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                            <Button
-                              key={page}
-                              variant={currentPage === page ? "default" : "outline"}
-                              size="icon"
-                              className="h-8 w-8"
-                              onClick={() => setCurrentPage(page)}
-                            >
-                              {page}
-                            </Button>
-                          ))}
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-8 w-8"
-                            disabled={currentPage === totalPages}
-                            onClick={() => setCurrentPage((p) => p + 1)}
-                          >
-                            <ChevronRight className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          {/* ─── People tab ───────────────────────────────────────── */}
-          <TabsContent value="people" className="space-y-4">
-            {data.subscribers.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-center">
-                <div className="rounded-full bg-muted/50 p-4 mb-4">
-                  <Users className="h-8 w-8 text-muted-foreground" />
+            {/* Subscriptions list */}
+            <div className="rounded-lg border bg-card">
+              {data.subscriptions.length === 0 ? (
+                <div className="flex flex-col items-center py-16 text-center">
+                  <p className="text-sm text-muted-foreground">No subscriptions yet. Add one above to get started.</p>
                 </div>
-                <h3 className="font-medium text-lg">No subscribers yet</h3>
-                <p className="text-sm text-muted-foreground mt-1">Go to Settings to add subscribers</p>
+              ) : (
+                <div className="divide-y">
+                  {data.subscriptions.map((sub) => {
+                    const subscriber = data.subscribers.find((s) => s.id === sub.subscriber_id);
+                    const service = data.services.find((s) => s.id === sub.service_id);
+                    return (
+                      <div key={sub.id} className={`flex items-center justify-between px-4 py-3 transition-colors hover:bg-muted/30 ${!sub.active ? "opacity-50" : ""}`}>
+                        <div className="flex items-center gap-3 min-w-0">
+                          <Avatar name={subscriber?.name ?? "?"} />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 text-sm">
+                              <span className="font-medium">{subscriber?.name ?? "?"}</span>
+                              <span className="text-muted-foreground">{"\u2192"}</span>
+                              <span>{service?.name ?? "?"}</span>
+                            </div>
+                            <div className="text-xs text-muted-foreground tabular-nums">
+                              {service?.monthly_cost} {service?.currency}/mo {"\u00b7"} since {sub.start_date ?? sub.created_at?.slice(0, 10) ?? "—"}
+                            </div>
+                          </div>
+                        </div>
+                        {canEdit && (
+                          <div className="flex items-center gap-1">
+                            <Tooltip>
+                              <TooltipTrigger render={<button onClick={() => handleToggleSubscription(sub)} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors" />}>
+                                {sub.active ? <Pause className="h-3 w-3 text-muted-foreground" /> : <Play className="h-3 w-3 text-muted-foreground" />}
+                              </TooltipTrigger>
+                              <TooltipContent>{sub.active ? "Pause" : "Activate"}</TooltipContent>
+                            </Tooltip>
+                            <button onClick={() => setConfirmDelete({ type: "subscription", id: sub.id, name: `${subscriber?.name} - ${service?.name}` })} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors">
+                              <Trash2 className="h-3 w-3 text-muted-foreground" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ═══ Charges tab ═════════════════════════════════════════════ */}
+        {activeTab === "charges" && (
+          <div className="rounded-lg border bg-card">
+            {filteredCharges.length === 0 ? (
+              <div className="flex flex-col items-center py-16 text-center">
+                <p className="text-sm text-muted-foreground">{searchQuery ? "No matching charges." : "No charges yet. Use \"Bill now\" to generate."}</p>
               </div>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="border-b">
+                      <tr>
+                        <SortHeader column="subscriber">Person</SortHeader>
+                        <SortHeader column="service">Service</SortHeader>
+                        <SortHeader column="month">Month</SortHeader>
+                        <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground">Price</th>
+                        <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground">Rate</th>
+                        <SortHeader column="total">Total</SortHeader>
+                        <SortHeader column="paid">Status</SortHeader>
+                        {canEdit && <th className="h-9 px-3 w-16"></th>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <AnimatePresence>
+                        {paginatedCharges.map((charge) => {
+                          const subscriber = data.subscribers.find((s) => s.id === charge.subscriber_id);
+                          const service = data.services.find((s) => s.id === charge.service_id);
+                          return (
+                            <motion.tr key={charge.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                              <td className="px-3 py-2.5"><div className="flex items-center gap-2"><Avatar name={subscriber?.name ?? "?"} /><span className="font-medium text-sm">{subscriber?.name ?? "?"}</span></div></td>
+                              <td className="px-3 py-2.5 text-sm">{service?.name ?? "?"}</td>
+                              <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.period_start}</td>
+                              <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.monthly_cost} {charge.currency}</td>
+                              <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.exchange_rate}</td>
+                              <td className="px-3 py-2.5 font-medium tabular-nums">{"\u00a5"}{Number(charge.total_cny).toFixed(2)}</td>
+                              <td className="px-3 py-2.5">
+                                {canEdit ? (
+                                  <button onClick={() => handleTogglePaid(charge)} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
+                                    {charge.paid ? "Paid" : "Unpaid"}
+                                  </button>
+                                ) : (
+                                  <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
+                                    {charge.paid ? "Paid" : "Unpaid"}
+                                  </span>
+                                )}
+                              </td>
+                              {canEdit && (
+                                <td className="px-3 py-2.5">
+                                  <div className="flex gap-0.5">
+                                    {editingChargeId === charge.id ? (
+                                      <div className="flex gap-1">
+                                        <Input className="h-7 w-24 text-xs" value={editingChargeNote} onChange={(e) => setEditingChargeNote(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") handleSaveChargeNote(charge.id); if (e.key === "Escape") setEditingChargeId(null); }} autoFocus />
+                                        <button onClick={() => handleSaveChargeNote(charge.id)} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Check className="h-3 w-3" /></button>
+                                      </div>
+                                    ) : (
+                                      <>
+                                        <button onClick={() => { setEditingChargeId(charge.id); setEditingChargeNote(charge.note ?? ""); }} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Edit2 className="h-3 w-3 text-muted-foreground" /></button>
+                                        <button onClick={() => setConfirmDelete({ type: "charge", id: charge.id, name: `${subscriber?.name} - ${service?.name}` })} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Trash2 className="h-3 w-3 text-muted-foreground" /></button>
+                                      </>
+                                    )}
+                                  </div>
+                                </td>
+                              )}
+                            </motion.tr>
+                          );
+                        })}
+                      </AnimatePresence>
+                    </tbody>
+                  </table>
+                </div>
+                {totalPages > 1 && (
+                  <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
+                    <span>{(currentPage - 1) * PAGE_SIZE + 1}{"\u2013"}{Math.min(currentPage * PAGE_SIZE, filteredCharges.length)} of {filteredCharges.length}</span>
+                    <div className="flex gap-1">
+                      <button className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted disabled:opacity-30 transition-colors" disabled={currentPage === 1} onClick={() => setCurrentPage((p) => p - 1)}><ChevronLeft className="h-3.5 w-3.5" /></button>
+                      {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                        <button key={page} onClick={() => setCurrentPage(page)} className={`h-7 w-7 flex items-center justify-center rounded-md text-xs transition-colors ${currentPage === page ? "bg-foreground text-background font-medium" : "hover:bg-muted"}`}>{page}</button>
+                      ))}
+                      <button className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted disabled:opacity-30 transition-colors" disabled={currentPage === totalPages} onClick={() => setCurrentPage((p) => p + 1)}><ChevronRight className="h-3.5 w-3.5" /></button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ═══ People tab ══════════════════════════════════════════════ */}
+        {activeTab === "people" && (
+          <div className="space-y-3">
+            {data.subscribers.length === 0 ? (
+              <div className="flex flex-col items-center py-16 text-center"><p className="text-sm text-muted-foreground">No subscribers yet.</p></div>
             ) : (
               data.subscribers.map((subscriber) => {
                 const charges = subscriberCharges(subscriber.id);
+                const subs = data.subscriptions.filter((s) => s.subscriber_id === subscriber.id && s.active);
                 const unpaid = subscriberUnpaid(subscriber.id);
                 const paid = charges.filter((c) => c.paid).reduce((s, c) => s + Number(c.total_cny), 0);
                 return (
-                  <motion.div key={subscriber.id} {...fadeUp}>
-                    <Card className="glass-card">
-                      <CardHeader>
-                        <CardTitle className="flex items-center justify-between text-base">
-                          <div className="flex items-center gap-3">
-                            <SubscriberAvatar name={subscriber.name} size="md" />
-                            <span>{subscriber.name}</span>
-                          </div>
-                          <div className="flex gap-2">
-                            {unpaid > 0 && (
-                              <Badge className="bg-amber-500/20 text-amber-500 border-amber-500/30 font-mono">
-                                ⏳ 未付 ¥{unpaid.toFixed(2)}
-                              </Badge>
-                            )}
-                            {paid > 0 && (
-                              <Badge className="bg-emerald-500/20 text-emerald-500 border-emerald-500/30 font-mono">
-                                ✅ 已付 ¥{paid.toFixed(2)}
-                              </Badge>
-                            )}
-                          </div>
-                        </CardTitle>
-                      </CardHeader>
-                      {charges.length > 0 && (
-                        <CardContent>
-                          <div className="space-y-2">
-                            {charges.map((charge) => {
-                              const service = data.services.find((s) => s.id === charge.service_id);
-                              return (
-                                <motion.div
-                                  key={charge.id}
-                                  whileHover={{ scale: 1.005 }}
-                                  className={`flex items-center justify-between rounded-lg border p-3 text-sm transition-colors ${
-                                    charge.paid
-                                      ? "border-emerald-500/20 bg-emerald-500/5"
-                                      : "border-amber-500/20 bg-amber-500/5"
-                                  }`}
-                                >
-                                  <div>
-                                    <span className="font-medium">{service?.name}</span>
-                                    <span className="ml-2 text-xs text-muted-foreground">
-                                      {charge.period_start} ~ {charge.period_end} ({charge.months}个月)
-                                    </span>
-                                    {charge.note && <span className="ml-2 text-xs text-muted-foreground">· {charge.note}</span>}
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-mono font-bold">¥{Number(charge.total_cny).toFixed(2)}</span>
-                                    <Badge
-                                      className={`cursor-pointer transition-all hover:scale-105 ${
-                                        charge.paid
-                                          ? "bg-emerald-500/20 text-emerald-500 border-emerald-500/30"
-                                          : "bg-amber-500/20 text-amber-500 border-amber-500/30"
-                                      }`}
-                                      onClick={() => handleTogglePaid(charge)}
-                                    >
-                                      {charge.paid ? "✅ 已付" : "⏳ 未付"}
-                                    </Badge>
-                                  </div>
-                                </motion.div>
-                              );
-                            })}
-                          </div>
-                        </CardContent>
-                      )}
-                    </Card>
-                  </motion.div>
+                  <div key={subscriber.id} className="rounded-lg border bg-card">
+                    <div className="flex items-center justify-between px-4 py-3 border-b">
+                      <div className="flex items-center gap-2.5">
+                        <Avatar name={subscriber.name} size="md" />
+                        <div>
+                          <span className="font-medium text-sm">{subscriber.name}</span>
+                          {subs.length > 0 && (
+                            <div className="flex gap-1 mt-0.5">
+                              {subs.map((s) => {
+                                const svc = data.services.find((sv) => sv.id === s.service_id);
+                                return <span key={s.id} className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{svc?.name}</span>;
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex gap-3 text-xs tabular-nums">
+                        {unpaid > 0 && <span className="text-amber-600 dark:text-amber-400">{"\u00a5"}{unpaid.toFixed(2)} unpaid</span>}
+                        {paid > 0 && <span className="text-emerald-600 dark:text-emerald-400">{"\u00a5"}{paid.toFixed(2)} paid</span>}
+                      </div>
+                    </div>
+                    {charges.length > 0 && (
+                      <div className="divide-y">
+                        {charges.map((charge) => {
+                          const service = data.services.find((s) => s.id === charge.service_id);
+                          return (
+                            <div key={charge.id} className="flex items-center justify-between px-4 py-2.5 text-sm hover:bg-muted/30 transition-colors">
+                              <div className="flex items-center gap-2">
+                                <span>{service?.name}</span>
+                                <span className="text-xs text-muted-foreground">{charge.period_start}</span>
+                                {charge.note && <span className="text-xs text-muted-foreground">{"\u00b7"} {charge.note}</span>}
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="font-medium tabular-nums">{"\u00a5"}{Number(charge.total_cny).toFixed(2)}</span>
+                                {canEdit ? (
+                                  <button onClick={() => handleTogglePaid(charge)} className={`text-xs font-medium px-2 py-0.5 rounded-md transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
+                                    {charge.paid ? "Paid" : "Unpaid"}
+                                  </button>
+                                ) : (
+                                  <span className={`text-xs font-medium px-2 py-0.5 rounded-md ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
+                                    {charge.paid ? "Paid" : "Unpaid"}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 );
               })
             )}
-          </TabsContent>
+          </div>
+        )}
 
-          {/* ─── Charts tab ───────────────────────────────────────── */}
-          <TabsContent value="charts" className="space-y-4">
-            {data.charges.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-center">
-                <div className="rounded-full bg-muted/50 p-4 mb-4">
-                  <BarChart3 className="h-8 w-8 text-muted-foreground" />
+        {/* ═══ Charts tab ══════════════════════════════════════════════ */}
+        {activeTab === "charts" && (
+          data.charges.length === 0 ? (
+            <div className="flex flex-col items-center py-16 text-center"><p className="text-sm text-muted-foreground">Add charges to see charts.</p></div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="rounded-lg border bg-card p-4">
+                <p className="text-xs font-medium text-muted-foreground mb-3">Spending by service</p>
+                <SpendingPieChart charges={data.charges} services={data.services} />
+              </div>
+              <div className="rounded-lg border bg-card p-4">
+                <p className="text-xs font-medium text-muted-foreground mb-3">Paid vs unpaid by person</p>
+                <PersonBarChart charges={data.charges} subscribers={data.subscribers} />
+              </div>
+            </div>
+          )
+        )}
+
+        {/* ═══ Settings tab ════════════════════════════════════════════ */}
+        {activeTab === "settings" && (
+          <div className="space-y-4">
+            <div className="rounded-lg border bg-card p-4 space-y-3">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Subscribers</p>
+              <div className="flex flex-wrap gap-1.5">
+                {data.subscribers.map((s) => (
+                  <div key={s.id} className="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-sm">
+                    <Avatar name={s.name} />
+                    {s.name}
+                    {canEdit && <button onClick={() => setConfirmDelete({ type: "subscriber", id: s.id, name: s.name })} className="ml-0.5 rounded p-0.5 hover:bg-muted transition-colors"><X className="h-3 w-3 text-muted-foreground" /></button>}
+                  </div>
+                ))}
+              </div>
+              {canEdit && (
+                <div className="flex gap-2">
+                  <Input placeholder="Name" value={newSubscriberName} onChange={(e) => setNewSubscriberName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleAddSubscriber()} className="h-8 max-w-xs text-sm" />
+                  <Button size="sm" className="h-8" onClick={handleAddSubscriber}><Plus className="mr-1 h-3.5 w-3.5" /> Add</Button>
                 </div>
-                <h3 className="font-medium text-lg">No data to visualize</h3>
-                <p className="text-sm text-muted-foreground mt-1">Add some charges first to see charts</p>
-              </div>
-            ) : (
-              <div className="grid gap-4 md:grid-cols-2">
-                <motion.div {...fadeUp}>
-                  <Card className="glass-card">
-                    <CardHeader>
-                      <CardTitle className="text-sm font-medium text-muted-foreground">
-                        Spending by Service / 按服务支出
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <SpendingPieChart charges={data.charges} services={data.services} />
-                    </CardContent>
-                  </Card>
-                </motion.div>
-                <motion.div {...fadeUp} transition={{ delay: 0.1 }}>
-                  <Card className="glass-card">
-                    <CardHeader>
-                      <CardTitle className="text-sm font-medium text-muted-foreground">
-                        Paid vs Owed / 已付 vs 未付
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <PersonBarChart charges={data.charges} subscribers={data.subscribers} />
-                    </CardContent>
-                  </Card>
-                </motion.div>
-              </div>
-            )}
-          </TabsContent>
+              )}
+            </div>
 
-          {/* ─── Settings tab ─────────────────────────────────────── */}
-          <TabsContent value="settings" className="space-y-6">
-            <motion.div {...fadeUp}>
-              <Card className="glass-card">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Users className="h-4 w-4" /> 订阅人
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  <div className="flex flex-wrap gap-2">
-                    {data.subscribers.map((s) => (
-                      <Badge key={s.id} variant="secondary" className="gap-2 pr-1 pl-1">
-                        <SubscriberAvatar name={s.name} />
-                        {s.name}
-                        <button
-                          onClick={() => setConfirmDelete({ type: "subscriber", id: s.id, name: s.name })}
-                          className="ml-1 rounded-full p-0.5 hover:bg-destructive/20 transition-colors"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    ))}
-                  </div>
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="新订阅人"
-                      value={newSubscriberName}
-                      onChange={(e) => setNewSubscriberName(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleAddSubscriber()}
-                      className="max-w-xs"
-                    />
-                    <Button size="sm" onClick={handleAddSubscriber}>
-                      <Plus className="mr-1 h-4 w-4" /> 添加
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            </motion.div>
-
-            <motion.div {...fadeUp} transition={{ delay: 0.1 }}>
-              <Card className="glass-card">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <DollarSign className="h-4 w-4" /> 订阅服务
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                  {data.services.map((service) => (
-                    <motion.div
-                      key={service.id}
-                      whileHover={{ scale: 1.005 }}
-                      className="flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center sm:justify-between transition-colors hover:bg-muted/30"
-                    >
-                      <div>
-                        <div className="font-medium">{service.name}</div>
-                        <div className="text-xs text-muted-foreground font-mono">
-                          {service.monthly_cost} {service.currency} / 月
-                        </div>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button variant="outline" size="sm" onClick={() => { setEditingService({ ...service }); setEditServiceOpen(true); }}>
-                          <Edit2 className="mr-1 h-3 w-3" /> 编辑
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setConfirmDelete({ type: "service", id: service.id, name: service.name })}
-                        >
-                          <Trash2 className="h-3 w-3 text-destructive" />
-                        </Button>
-                      </div>
-                    </motion.div>
-                  ))}
-                  {data.services.length === 0 && (
-                    <div className="flex flex-col items-center justify-center py-8 text-center">
-                      <DollarSign className="h-8 w-8 text-muted-foreground mb-2" />
-                      <p className="text-sm text-muted-foreground">No services yet. Add your first subscription service.</p>
+            <div className="rounded-lg border bg-card p-4 space-y-3">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Services</p>
+              <div className="divide-y -mx-4">
+                {data.services.map((service) => (
+                  <div key={service.id} className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/30 transition-colors">
+                    <div>
+                      <span className="text-sm font-medium">{service.name}</span>
+                      <span className="ml-2 text-xs text-muted-foreground tabular-nums">{service.monthly_cost} {service.currency}/mo</span>
                     </div>
-                  )}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      setEditingService({ id: "", name: "", monthly_cost: 0, currency: "USD" });
-                      setEditServiceOpen(true);
-                    }}
-                  >
-                    <Plus className="mr-1 h-4 w-4" /> 添加服务
-                  </Button>
-                </CardContent>
-              </Card>
-            </motion.div>
-          </TabsContent>
-        </Tabs>
+                    {canEdit && (
+                      <div className="flex gap-1">
+                        <button onClick={() => { setEditingService({ ...service }); setEditServiceOpen(true); }} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Edit2 className="h-3 w-3 text-muted-foreground" /></button>
+                        <button onClick={() => setConfirmDelete({ type: "service", id: service.id, name: service.name })} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Trash2 className="h-3 w-3 text-muted-foreground" /></button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {data.services.length === 0 && <p className="text-sm text-muted-foreground py-4 text-center">No services yet.</p>}
+              {canEdit && (
+                <Button variant="outline" size="sm" className="h-8" onClick={() => { setEditingService({ id: "", name: "", monthly_cost: 0, currency: "USD" }); setEditServiceOpen(true); }}>
+                  <Plus className="mr-1 h-3.5 w-3.5" /> Add service
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
       </motion.div>
 
-      {/* ─── Edit service dialog ─────────────────────────────────────── */}
+      {/* Edit service dialog */}
       <Dialog open={editServiceOpen} onOpenChange={(open) => { setEditServiceOpen(open); if (!open) setEditingService(null); }}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>编辑服务</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>{editingService?.id ? "Edit Service" : "New Service"}</DialogTitle></DialogHeader>
           {editingService && (
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <Label>服务名称</Label>
-                <Input value={editingService.name} onChange={(e) => setEditingService({ ...editingService, name: e.target.value })} />
+            <div className="grid gap-4 pt-2">
+              <div className="grid gap-1.5">
+                <Label className="text-xs text-muted-foreground">Name</Label>
+                <Input className="h-9" value={editingService.name} onChange={(e) => setEditingService({ ...editingService, name: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label>月费</Label>
-                  <Input type="number" step="0.01" value={editingService.monthly_cost} onChange={(e) => setEditingService({ ...editingService, monthly_cost: Number(e.target.value) })} />
+              <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-1.5">
+                  <Label className="text-xs text-muted-foreground">Monthly cost</Label>
+                  <Input type="number" step="0.01" className="h-9" value={editingService.monthly_cost} onChange={(e) => setEditingService({ ...editingService, monthly_cost: Number(e.target.value) })} />
                 </div>
-                <div className="grid gap-2">
-                  <Label>货币</Label>
-                  <Select value={editingService.currency} onValueChange={(v) => setEditingService({ ...editingService, currency: v as Currency })}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="USD">USD</SelectItem>
-                      <SelectItem value="SGD">SGD</SelectItem>
-                    </SelectContent>
-                  </Select>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs text-muted-foreground">Currency</Label>
+                  <select
+                    value={editingService.currency}
+                    onChange={(e) => setEditingService({ ...editingService, currency: e.target.value as Currency })}
+                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  >
+                    <option value="USD">USD</option>
+                    <option value="SGD">SGD</option>
+                  </select>
                 </div>
               </div>
-              <Button onClick={handleSaveService}>保存</Button>
+              <Button size="sm" onClick={handleSaveService}>Save</Button>
             </div>
           )}
         </DialogContent>
       </Dialog>
 
-      {/* ─── Confirm delete dialog ───────────────────────────────────── */}
       <ConfirmDialog
         open={!!confirmDelete}
         onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
-        title="确认删除"
-        description={`Are you sure you want to delete "${confirmDelete?.name}"? This action cannot be undone.`}
+        title="Delete"
+        description={`Delete "${confirmDelete?.name}"? This cannot be undone.`}
         onConfirm={() => {
           if (!confirmDelete) return;
           if (confirmDelete.type === "charge") handleRemoveCharge(confirmDelete.id);
           if (confirmDelete.type === "subscriber") handleRemoveSubscriber(confirmDelete.id);
           if (confirmDelete.type === "service") handleRemoveService(confirmDelete.id);
+          if (confirmDelete.type === "subscription") handleDeleteSubscription(confirmDelete.id);
         }}
       />
 
-      {/* ─── Keyboard shortcuts help ─────────────────────────────────── */}
       <KeyboardHelp open={keyboardHelpOpen} onOpenChange={setKeyboardHelpOpen} />
     </div>
   );

@@ -1,6 +1,15 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 
+export const ALLOWED_EMAILS = [
+  "nicholasyao.sg@gmail.com",
+  "hi@noahyao.me",
+];
+
+export function isAllowedEmail(email: string | null | undefined): boolean {
+  return !!email && ALLOWED_EMAILS.includes(email);
+}
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
     Google({

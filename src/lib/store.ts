@@ -1,5 +1,20 @@
 import { supabase } from "./supabase";
 
+// ─── Server write helper ────────────────────────────────────────────
+
+async function serverWrite(action: string, table: string, payload: Record<string, unknown> = {}) {
+  const res = await fetch("/api/data", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action, table, ...payload }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
+  return res.json();
+}
+
 // ─── Types ───────────────────────────────────────────────────────────
 
 export type Currency = "USD" | "SGD";
@@ -14,6 +29,16 @@ export interface Service {
 export interface Subscriber {
   id: string;
   name: string;
+}
+
+export interface Subscription {
+  id: string;
+  subscriber_id: string;
+  service_id: string;
+  start_date: string; // YYYY-MM-DD
+  exchange_rate?: number; // legacy, now set at charge time
+  active: boolean;
+  created_at?: string;
 }
 
 export interface ChargeRecord {
@@ -35,6 +60,7 @@ export interface ChargeRecord {
 export interface SubscriptionData {
   services: Service[];
   subscribers: Subscriber[];
+  subscriptions: Subscription[];
   charges: ChargeRecord[];
 }
 
@@ -43,12 +69,18 @@ export interface SubscriptionData {
 const LS_KEY = "subscriptionData";
 
 function readLocal(): SubscriptionData {
-  if (typeof window === "undefined") return { services: [], subscribers: [], charges: [] };
+  if (typeof window === "undefined") return { services: [], subscribers: [], subscriptions: [], charges: [] };
   try {
     const raw = localStorage.getItem(LS_KEY);
-    return raw ? JSON.parse(raw) : { services: [], subscribers: [], charges: [] };
+    const data = raw ? JSON.parse(raw) : {};
+    return {
+      services: data.services ?? [],
+      subscribers: data.subscribers ?? [],
+      subscriptions: data.subscriptions ?? [],
+      charges: data.charges ?? [],
+    };
   } catch {
-    return { services: [], subscribers: [], charges: [] };
+    return { services: [], subscribers: [], subscriptions: [], charges: [] };
   }
 }
 
@@ -63,24 +95,27 @@ function localId(): string {
     : Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 }
 
-// ─── Supabase operations (with localStorage fallback) ────────────────
+// ─── Fetch all ───────────────────────────────────────────────────────
 
 export async function fetchSubscriptionData(): Promise<SubscriptionData> {
   if (!supabase) return readLocal();
 
-  const [{ data: services }, { data: subscribers }, { data: charges }] = await Promise.all([
+  const [{ data: services }, { data: subscribers }, { data: subscriptions }, { data: charges }] = await Promise.all([
     supabase.from("services").select("*").order("created_at"),
     supabase.from("subscribers").select("*").order("created_at"),
+    supabase.from("subscriptions").select("*").order("created_at"),
     supabase.from("charges").select("*").order("created_at"),
   ]);
   return {
     services: (services ?? []) as Service[],
     subscribers: (subscribers ?? []) as Subscriber[],
+    subscriptions: (subscriptions ?? []) as Subscription[],
     charges: (charges ?? []) as ChargeRecord[],
   };
 }
 
-// Services
+// ─── Services ────────────────────────────────────────────────────────
+
 export async function addService(service: Omit<Service, "id">) {
   if (!supabase) {
     const data = readLocal();
@@ -89,9 +124,7 @@ export async function addService(service: Omit<Service, "id">) {
     writeLocal(data);
     return newService;
   }
-  const { data, error } = await supabase.from("services").insert(service).select().single();
-  if (error) throw error;
-  return data as Service;
+  return await serverWrite("insert", "services", { data: service }) as Service;
 }
 
 export async function updateService(id: string, updates: Partial<Service>) {
@@ -101,8 +134,7 @@ export async function updateService(id: string, updates: Partial<Service>) {
     writeLocal(data);
     return;
   }
-  const { error } = await supabase.from("services").update(updates).eq("id", id);
-  if (error) throw error;
+  await serverWrite("update", "services", { id, updates });
 }
 
 export async function deleteService(id: string) {
@@ -112,11 +144,11 @@ export async function deleteService(id: string) {
     writeLocal(data);
     return;
   }
-  const { error } = await supabase.from("services").delete().eq("id", id);
-  if (error) throw error;
+  await serverWrite("delete", "services", { id });
 }
 
-// Subscribers
+// ─── Subscribers ─────────────────────────────────────────────────────
+
 export async function addSubscriber(name: string) {
   if (!supabase) {
     const data = readLocal();
@@ -125,9 +157,7 @@ export async function addSubscriber(name: string) {
     writeLocal(data);
     return newSub;
   }
-  const { data, error } = await supabase.from("subscribers").insert({ name }).select().single();
-  if (error) throw error;
-  return data as Subscriber;
+  return await serverWrite("insert", "subscribers", { data: { name } }) as Subscriber;
 }
 
 export async function deleteSubscriber(id: string) {
@@ -137,11 +167,44 @@ export async function deleteSubscriber(id: string) {
     writeLocal(data);
     return;
   }
-  const { error } = await supabase.from("subscribers").delete().eq("id", id);
-  if (error) throw error;
+  await serverWrite("delete", "subscribers", { id });
 }
 
-// Charges
+// ─── Subscriptions ───────────────────────────────────────────────────
+
+export async function addSubscription(sub: Omit<Subscription, "id" | "created_at">) {
+  if (!supabase) {
+    const data = readLocal();
+    const newSub: Subscription = { id: localId(), ...sub };
+    data.subscriptions.push(newSub);
+    writeLocal(data);
+    return newSub;
+  }
+  return await serverWrite("insert", "subscriptions", { data: sub }) as Subscription;
+}
+
+export async function updateSubscription(id: string, updates: Partial<Subscription>) {
+  if (!supabase) {
+    const data = readLocal();
+    data.subscriptions = data.subscriptions.map((s) => (s.id === id ? { ...s, ...updates } : s));
+    writeLocal(data);
+    return;
+  }
+  await serverWrite("update", "subscriptions", { id, updates });
+}
+
+export async function deleteSubscription(id: string) {
+  if (!supabase) {
+    const data = readLocal();
+    data.subscriptions = data.subscriptions.filter((s) => s.id !== id);
+    writeLocal(data);
+    return;
+  }
+  await serverWrite("delete", "subscriptions", { id });
+}
+
+// ─── Charges ─────────────────────────────────────────────────────────
+
 export async function addCharge(charge: Omit<ChargeRecord, "id">) {
   if (!supabase) {
     const data = readLocal();
@@ -150,9 +213,7 @@ export async function addCharge(charge: Omit<ChargeRecord, "id">) {
     writeLocal(data);
     return newCharge;
   }
-  const { data, error } = await supabase.from("charges").insert(charge).select().single();
-  if (error) throw error;
-  return data as ChargeRecord;
+  return await serverWrite("insert", "charges", { data: charge }) as ChargeRecord;
 }
 
 export async function updateCharge(id: string, updates: Partial<ChargeRecord>) {
@@ -162,8 +223,7 @@ export async function updateCharge(id: string, updates: Partial<ChargeRecord>) {
     writeLocal(data);
     return;
   }
-  const { error } = await supabase.from("charges").update(updates).eq("id", id);
-  if (error) throw error;
+  await serverWrite("update", "charges", { id, updates });
 }
 
 export async function deleteCharge(id: string) {
@@ -173,11 +233,73 @@ export async function deleteCharge(id: string) {
     writeLocal(data);
     return;
   }
-  const { error } = await supabase.from("charges").delete().eq("id", id);
-  if (error) throw error;
+  await serverWrite("delete", "charges", { id });
+}
+
+// ─── Client-side billing (localStorage fallback) ─────────────────────
+
+export async function billNowClient(month: string, exchangeRate: number): Promise<number> {
+  const data = readLocal();
+  let count = 0;
+  for (const sub of data.subscriptions) {
+    if (!sub.active) continue;
+    const startDate = sub.start_date ?? sub.created_at?.slice(0, 10) ?? `${month}-01`;
+    const ratio = prorateRatio(startDate, month);
+    if (ratio === 0) continue;
+    const exists = data.charges.some(
+      (c) => c.subscriber_id === sub.subscriber_id && c.service_id === sub.service_id && c.period_start === month
+    );
+    if (exists) continue;
+    const service = data.services.find((s) => s.id === sub.service_id);
+    if (!service) continue;
+    const monthlyCost = Number(service.monthly_cost);
+    const totalCny = monthlyCost * ratio * exchangeRate;
+    const note = ratio < 1 ? `Prorated (${Math.round(ratio * 100)}%)` : "Auto-generated";
+    data.charges.push({
+      id: localId(),
+      subscriber_id: sub.subscriber_id,
+      service_id: sub.service_id,
+      period_start: month,
+      period_end: month,
+      months: ratio < 1 ? Number(ratio.toFixed(2)) : 1,
+      monthly_cost: monthlyCost,
+      currency: service.currency,
+      exchange_rate: exchangeRate,
+      total_cny: Number(totalCny.toFixed(2)),
+      paid: false,
+      note,
+    });
+    count++;
+  }
+  writeLocal(data);
+  return count;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────
+
+/** Days in a given month (YYYY-MM) */
+export function daysInMonth(month: string): number {
+  const [y, m] = month.split("-").map(Number);
+  return new Date(y, m, 0).getDate();
+}
+
+/**
+ * Calculate the prorate ratio for a subscription in a given billing month.
+ * - If start_date is before the month → 1 (full month)
+ * - If start_date is within the month → (remaining days) / (total days)
+ * - If start_date is after the month → 0 (don't bill)
+ */
+export function prorateRatio(startDate: string, billingMonth: string): number {
+  const monthStart = `${billingMonth}-01`;
+  const totalDays = daysInMonth(billingMonth);
+  const monthEnd = `${billingMonth}-${String(totalDays).padStart(2, "0")}`;
+
+  if (startDate <= monthStart) return 1;
+  if (startDate > monthEnd) return 0;
+
+  const startDay = parseInt(startDate.split("-")[2], 10);
+  return (totalDays - startDay + 1) / totalDays;
+}
 
 export function calcMonths(start: string, end: string): number {
   const [sy, sm] = start.split("-").map(Number);
@@ -187,6 +309,11 @@ export function calcMonths(start: string, end: string): number {
 
 export function calcTotalCNY(months: number, monthlyCost: number, exchangeRate: number): number {
   return months * monthlyCost * exchangeRate;
+}
+
+export function currentMonth(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 }
 
 // ─── Machine (kept as localStorage) ──────────────────────────────────

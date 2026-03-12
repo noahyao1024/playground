@@ -1,0 +1,29 @@
+import { NextRequest, NextResponse } from "next/server";
+import { getServerSupabase, generateChargesForMonth } from "@/lib/billing";
+
+export async function GET(req: NextRequest) {
+  // Verify the request is from Vercel Cron
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 500 });
+  }
+  const authHeader = req.headers.get("authorization");
+  if (authHeader !== `Bearer ${cronSecret}`) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const supabase = getServerSupabase();
+  if (!supabase) {
+    return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
+  }
+
+  const now = new Date();
+  const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+  try {
+    const result = await generateChargesForMonth(supabase, month);
+    return NextResponse.json({ message: `Generated ${result.generated} charge(s)`, month, ...result });
+  } catch (err) {
+    return NextResponse.json({ error: String(err) }, { status: 500 });
+  }
+}

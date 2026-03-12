@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter } from "next/font/google";
+import { Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { SessionProvider } from "@/components/session-provider";
 import { Navbar } from "@/components/navbar";
@@ -7,7 +8,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { Toaster } from "sonner";
 import "./globals.css";
 
-const geistSans = Geist({
+const inter = Inter({
   variable: "--font-geist-sans",
   subsets: ["latin"],
 });
@@ -29,12 +30,12 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
+      <body className={`${inter.variable} ${geistMono.variable} antialiased`}>
         <SessionProvider>
           <ThemeProvider>
             <TooltipProvider>
               <Navbar />
-              <main className="mx-auto max-w-6xl px-4 py-8">{children}</main>
+              <main className="mx-auto max-w-5xl px-6 py-10">{children}</main>
               <Toaster richColors position="bottom-right" />
             </TooltipProvider>
           </ThemeProvider>
