@@ -161,7 +161,7 @@ export default function SubscriptionPage() {
   const [billing, setBilling] = useState(false);
 
   const [subForm, setSubForm] = useState({ subscriberId: "", serviceId: "", startDate: new Date().toISOString().slice(0, 10) });
-  const [chargeForm, setChargeForm] = useState({ subscriberId: "", serviceId: "", periodStart: getCurrentMonth(), periodEnd: getCurrentMonth(), exchangeRate: 7.25, note: "" });
+  const [chargeForm, setChargeForm] = useState({ subscriberId: "", serviceId: "", date: new Date().toISOString().slice(0, 10), exchangeRate: 7.25, note: "" });
   const [billExchangeRate, setBillExchangeRate] = useState(7.25);
 
   function requireEdit(): boolean {
@@ -351,21 +351,21 @@ export default function SubscriptionPage() {
   // ─── Charge actions ──────────────────────────────────────────────
   async function handleAddCharge() {
     if (!requireEdit()) return;
-    const { subscriberId, serviceId, periodStart, periodEnd, exchangeRate, note } = chargeForm;
-    if (!subscriberId || !serviceId || !periodStart || !periodEnd) { toast.error("Fill in all required fields"); return; }
+    const { subscriberId, serviceId, date, exchangeRate, note } = chargeForm;
+    if (!subscriberId || !serviceId || !date) { toast.error("Fill in all required fields"); return; }
     const service = data!.services.find((s) => s.id === serviceId);
     if (!service) return;
-    const months = calcMonths(periodStart, periodEnd);
-    const totalCny = calcTotalCNY(months, Number(service.monthly_cost), exchangeRate);
+    const month = date.slice(0, 7); // YYYY-MM
+    const totalCny = Number((Number(service.monthly_cost) * exchangeRate).toFixed(2));
     try {
       await apiAddCharge({
         subscriber_id: subscriberId, service_id: serviceId,
-        period_start: periodStart, period_end: periodEnd,
-        months, monthly_cost: Number(service.monthly_cost),
+        period_start: month, period_end: month,
+        months: 1, monthly_cost: Number(service.monthly_cost),
         currency: service.currency, exchange_rate: exchangeRate,
         total_cny: totalCny, paid: false, note: note || "Manual",
       });
-      setChargeForm({ subscriberId: "", serviceId: "", periodStart: getCurrentMonth(), periodEnd: getCurrentMonth(), exchangeRate: 7.25, note: "" });
+      setChargeForm({ subscriberId: "", serviceId: "", date: new Date().toISOString().slice(0, 10), exchangeRate: 7.25, note: "" });
       setAddChargeOpen(false);
       toast.success("Charge added");
       await reload();
@@ -518,15 +518,9 @@ export default function SubscriptionPage() {
                             {data.services.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</option>)}
                           </select>
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div className="grid gap-1.5">
-                            <Label className="text-xs text-muted-foreground">Start month</Label>
-                            <MonthPicker value={chargeForm.periodStart} onChange={(v) => setChargeForm({ ...chargeForm, periodStart: v })} />
-                          </div>
-                          <div className="grid gap-1.5">
-                            <Label className="text-xs text-muted-foreground">End month</Label>
-                            <MonthPicker value={chargeForm.periodEnd} onChange={(v) => setChargeForm({ ...chargeForm, periodEnd: v })} />
-                          </div>
+                        <div className="grid gap-1.5">
+                          <Label className="text-xs text-muted-foreground">Date</Label>
+                          <Input type="date" className="h-9" value={chargeForm.date} onChange={(e) => setChargeForm({ ...chargeForm, date: e.target.value })} />
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div className="grid gap-1.5">
@@ -538,14 +532,13 @@ export default function SubscriptionPage() {
                             <Input className="h-9" value={chargeForm.note} onChange={(e) => setChargeForm({ ...chargeForm, note: e.target.value })} placeholder="Optional" />
                           </div>
                         </div>
-                        {chargeForm.subscriberId && chargeForm.serviceId && chargeForm.periodStart && chargeForm.periodEnd && (() => {
+                        {chargeForm.subscriberId && chargeForm.serviceId && (() => {
                           const service = data.services.find((s) => s.id === chargeForm.serviceId);
                           if (!service) return null;
-                          const months = calcMonths(chargeForm.periodStart, chargeForm.periodEnd);
-                          const total = calcTotalCNY(months, Number(service.monthly_cost), chargeForm.exchangeRate);
+                          const total = Number(service.monthly_cost) * chargeForm.exchangeRate;
                           return (
                             <div className="rounded-md border bg-muted/50 px-3 py-2.5 text-sm">
-                              <span className="text-muted-foreground">{months} mo x {service.monthly_cost} {service.currency} x {chargeForm.exchangeRate} = </span>
+                              <span className="text-muted-foreground">{service.monthly_cost} {service.currency} x {chargeForm.exchangeRate} = </span>
                               <span className="font-semibold tabular-nums">{"\u00a5"}{total.toFixed(2)}</span>
                             </div>
                           );
