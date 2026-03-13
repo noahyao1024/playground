@@ -138,16 +138,16 @@
   @apply border-white/5 bg-card/30;
 }
 
-/* Glow effects for stat cards */
-.shadow-emerald-500\/5 {
-  box-shadow: 0 4px 20px oklch(0.76 0.17 163 / 8%);
+/* Colored glass-card glow variants */
+.glass-card-emerald {
+  box-shadow: 0 4px 24px oklch(0.76 0.17 163 / 8%), 0 1px 3px oklch(0 0 0 / 5%);
 }
-.shadow-amber-500\/5 {
-  box-shadow: 0 4px 20px oklch(0.77 0.16 70 / 8%);
+.glass-card-amber {
+  box-shadow: 0 4px 24px oklch(0.77 0.16 70 / 8%), 0 1px 3px oklch(0 0 0 / 5%);
 }
-.shadow-blue-500\/5 {
-  box-shadow: 0 4px 20px oklch(0.62 0.21 260 / 8%);
+.glass-card-blue {
+  box-shadow: 0 4px 24px oklch(0.62 0.21 260 / 8%), 0 1px 3px oklch(0 0 0 / 5%);
 }
-.shadow-purple-500\/5 {
-  box-shadow: 0 4px 20px oklch(0.55 0.25 303 / 8%);
+.glass-card-purple {
+  box-shadow: 0 4px 24px oklch(0.55 0.25 303 / 8%), 0 1px 3px oklch(0 0 0 / 5%);
 }

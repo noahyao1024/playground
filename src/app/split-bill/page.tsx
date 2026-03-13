@@ -19,9 +19,6 @@ import {
   addCharge as apiAddCharge,
   updateCharge as apiUpdateCharge,
   deleteCharge as apiDeleteCharge,
-  billNowClient,
-  calcMonths,
-  calcTotalCNY,
   currentMonth as getCurrentMonth,
   type SubscriptionData,
   type Service,
@@ -34,17 +31,22 @@ import { ALLOWED_EMAILS } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Avatar as ShadAvatar, AvatarFallback } from "@/components/ui/avatar";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { MonthPicker } from "@/components/month-picker";
 import {
-  Plus, Trash2, Edit2, Check, X, Users, DollarSign, Settings,
+  Plus, Trash2, Edit2, Check, X,
   Search, Download, CheckCheck, TrendingUp, Clock,
-  ArrowUpDown, ChevronLeft, ChevronRight, BarChart3, Keyboard,
+  ArrowUpDown, ChevronLeft, ChevronRight, Keyboard,
   Zap, Pause, Play, Receipt, Lock,
 } from "lucide-react";
 import { SpendingPieChart } from "@/components/charts/spending-pie-chart";
 import { PersonBarChart } from "@/components/charts/person-bar-chart";
+import { getServiceIcon, getPersonColor } from "@/lib/service-icons";
 
 const PAGE_SIZE = 20;
 
@@ -58,16 +60,39 @@ function Skeleton({ className = "" }: { className?: string }) {
 function LoadingSkeleton() {
   return (
     <div className="space-y-6">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24" />)}</div>
       <Skeleton className="h-10 w-64" />
       <Skeleton className="h-96" />
     </div>
   );
 }
 
-function Avatar({ name, size = "sm" }: { name: string; size?: "sm" | "md" }) {
-  const s = size === "md" ? "h-8 w-8 text-xs" : "h-6 w-6 text-[10px]";
-  return <div className={`flex ${s} items-center justify-center rounded-full bg-muted font-medium text-muted-foreground`}>{getInitial(name)}</div>;
+function PersonAvatar({ name, index = 0, size = "sm" }: { name: string; index?: number; size?: "sm" | "default" }) {
+  const colors = getPersonColor(index);
+  return (
+    <ShadAvatar size={size}>
+      <AvatarFallback
+        className="font-semibold text-white"
+        style={{ background: `linear-gradient(135deg, ${colors.from}, ${colors.to})` }}
+      >
+        {getInitial(name)}
+      </AvatarFallback>
+    </ShadAvatar>
+  );
+}
+
+function ServiceIcon({ name, size = "sm" }: { name: string; size?: "sm" | "md" }) {
+  const { Icon, from, to } = getServiceIcon(name);
+  const s = size === "md" ? "h-8 w-8" : "h-6 w-6";
+  const iconS = size === "md" ? "h-4 w-4" : "h-3 w-3";
+  return (
+    <div
+      className={`${s} flex shrink-0 items-center justify-center rounded-lg text-white`}
+      style={{ background: `linear-gradient(135deg, ${from}, ${to})` }}
+    >
+      <Icon className={iconS} />
+    </div>
+  );
 }
 
 function ConfirmDialog({ open, onOpenChange, title, description, onConfirm }: {
@@ -123,19 +148,11 @@ function exportToCSV(charges: ChargeRecord[], services: Service[], subscribers: 
   toast.success("CSV exported");
 }
 
-function Tab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button onClick={onClick} className={`px-3 py-1.5 text-sm rounded-md transition-colors ${active ? "bg-foreground text-background font-medium" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}>
-      {children}
-    </button>
-  );
-}
-
 // ═══════════════════════════════════════════════════════════════════════
 // Main page
 // ═══════════════════════════════════════════════════════════════════════
 export default function SubscriptionPage() {
-  const { data: session, status } = useSession();
+  const { data: session } = useSession();
   const router = useRouter();
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -148,7 +165,6 @@ export default function SubscriptionPage() {
   const [addChargeOpen, setAddChargeOpen] = useState(false);
   const [editServiceOpen, setEditServiceOpen] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
-  const [editingSubRate, setEditingSubRate] = useState<{ id: string; rate: number } | null>(null);
   const [newSubscriberName, setNewSubscriberName] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [sortColumn, setSortColumn] = useState<string | null>(null);
@@ -187,7 +203,6 @@ export default function SubscriptionPage() {
     }
   }, []);
 
-  // Load data regardless of auth status
   useEffect(() => { reload(); }, [reload]);
 
   // Fetch live exchange rates
@@ -284,6 +299,9 @@ export default function SubscriptionPage() {
   if (loading) return <LoadingSkeleton />;
   if (!data) return <div className="flex justify-center py-20 text-muted-foreground">Failed to load data</div>;
 
+  // ─── Helper to get subscriber index ─────────────────────────────
+  function subIndex(id: string) { return Math.max(0, data!.subscribers.findIndex((s) => s.id === id)); }
+
   // ─── Subscription actions ─────────────────────────────────────────
   async function handleAddSubscription() {
     if (!requireEdit()) return;
@@ -307,14 +325,6 @@ export default function SubscriptionPage() {
     if (!requireEdit()) return;
     await apiUpdateSubscription(sub.id, { active: !sub.active });
     toast.success(sub.active ? "Paused" : "Activated");
-    await reload();
-  }
-
-  async function handleSaveSubRate(id: string, rate: number) {
-    if (!requireEdit()) return;
-    await apiUpdateSubscription(id, { exchange_rate: rate });
-    setEditingSubRate(null);
-    toast.success("Rate updated");
     await reload();
   }
 
@@ -397,7 +407,7 @@ export default function SubscriptionPage() {
     if (!subscriberId || !serviceId || !date) { toast.error("Fill in all required fields"); return; }
     const service = data!.services.find((s) => s.id === serviceId);
     if (!service) return;
-    const month = date.slice(0, 7); // YYYY-MM
+    const month = date.slice(0, 7);
     const totalCny = Number((Number(service.monthly_cost) * exchangeRate).toFixed(2));
     try {
       await apiAddCharge({
@@ -407,7 +417,7 @@ export default function SubscriptionPage() {
         currency: service.currency, exchange_rate: exchangeRate,
         total_cny: totalCny, paid: false, note: note || "Manual",
       });
-      setChargeForm({ subscriberId: "", serviceId: "", date: new Date().toISOString().slice(0, 10), exchangeRate: 7.25, note: "" });
+      setChargeForm({ subscriberId: "", serviceId: "", date: new Date().toISOString().slice(0, 10), exchangeRate: liveRates?.USD ?? 7.25, note: "" });
       setAddChargeOpen(false);
       toast.success("Charge added");
       await reload();
@@ -442,11 +452,19 @@ export default function SubscriptionPage() {
 
   function SortHeader({ column, children }: { column: string; children: React.ReactNode }) {
     return (
-      <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground cursor-pointer select-none hover:text-foreground transition-colors" onClick={() => handleSort(column)}>
+      <TableHead className="cursor-pointer select-none hover:text-foreground transition-colors text-xs font-medium text-muted-foreground" onClick={() => handleSort(column)}>
         <span className="inline-flex items-center gap-1">{children}<ArrowUpDown className={`h-3 w-3 ${sortColumn === column ? "text-foreground" : "text-muted-foreground/30"}`} /></span>
-      </th>
+      </TableHead>
     );
   }
+
+  // ─── Stats config ─────────────────────────────────────────────────
+  const stats = [
+    { label: "Paid", value: `\u00a5${summary.totalPaid.toFixed(2)}`, icon: Check, iconBg: "bg-emerald-500/15", iconColor: "text-emerald-600 dark:text-emerald-400", color: "text-emerald-600 dark:text-emerald-400", glowClass: "glass-card-emerald" },
+    { label: "Unpaid", value: `\u00a5${summary.totalUnpaid.toFixed(2)}`, icon: Clock, iconBg: "bg-amber-500/15", iconColor: "text-amber-600 dark:text-amber-400", color: "text-amber-600 dark:text-amber-400", glowClass: "glass-card-amber" },
+    { label: "Active", value: String(summary.activeSubs), icon: Receipt, iconBg: "bg-blue-500/15", iconColor: "text-blue-600 dark:text-blue-400", color: "text-blue-600 dark:text-blue-400", glowClass: "glass-card-blue" },
+    { label: liveRates ? "Live rate" : "Avg rate", value: liveRates ? Object.entries(liveRates).map(([cur, rate]) => `${cur} ${rate}`).join(" / ") : Object.keys(summary.avgRates).length > 0 ? Object.entries(summary.avgRates).map(([cur, rate]) => `${cur} ${rate.toFixed(2)}`).join(" / ") : "\u2014", icon: TrendingUp, iconBg: "bg-purple-500/15", iconColor: "text-purple-600 dark:text-purple-400", color: "text-purple-600 dark:text-purple-400", glowClass: "glass-card-purple" },
+  ];
 
   return (
     <div className="space-y-6">
@@ -475,22 +493,14 @@ export default function SubscriptionPage() {
               <div className="grid gap-4 pt-2">
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Subscriber</Label>
-                  <select
-                    value={subForm.subscriberId}
-                    onChange={(e) => setSubForm({ ...subForm, subscriberId: e.target.value })}
-                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
+                  <select value={subForm.subscriberId} onChange={(e) => setSubForm({ ...subForm, subscriberId: e.target.value })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
                     <option value="">Select person</option>
                     {data.subscribers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
                 </div>
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Service</Label>
-                  <select
-                    value={subForm.serviceId}
-                    onChange={(e) => setSubForm({ ...subForm, serviceId: e.target.value })}
-                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
+                  <select value={subForm.serviceId} onChange={(e) => setSubForm({ ...subForm, serviceId: e.target.value })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
                     <option value="">Select service</option>
                     {data.services.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</option>)}
                   </select>
@@ -508,15 +518,15 @@ export default function SubscriptionPage() {
 
       {/* Stats */}
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.05 }} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {[
-          { label: "Paid", value: `\u00a5${summary.totalPaid.toFixed(2)}`, icon: Check, color: "text-emerald-600 dark:text-emerald-400" },
-          { label: "Unpaid", value: `\u00a5${summary.totalUnpaid.toFixed(2)}`, icon: Clock, color: "text-amber-600 dark:text-amber-400" },
-          { label: "Active subscriptions", value: String(summary.activeSubs), icon: Receipt, color: "text-foreground" },
-          { label: liveRates ? "Live rate" : "Avg rate", value: liveRates ? Object.entries(liveRates).map(([cur, rate]) => `${cur} ${rate}`).join(" / ") : Object.keys(summary.avgRates).length > 0 ? Object.entries(summary.avgRates).map(([cur, rate]) => `${cur} ${rate.toFixed(2)}`).join(" / ") : "\u2014", icon: TrendingUp, color: "text-foreground" },
-        ].map((stat) => (
-          <div key={stat.label} className="rounded-lg border bg-card p-4">
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1"><stat.icon className="h-3.5 w-3.5" />{stat.label}</div>
-            <div className={`text-xl font-semibold tabular-nums ${stat.color}`}>{stat.value}</div>
+        {stats.map((stat) => (
+          <div key={stat.label} className={`glass-card rounded-xl p-4 ${stat.glowClass}`}>
+            <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+              <div className={`h-7 w-7 rounded-lg flex items-center justify-center ${stat.iconBg}`}>
+                <stat.icon className={`h-3.5 w-3.5 ${stat.iconColor}`} />
+              </div>
+              {stat.label}
+            </div>
+            <div className={`text-2xl font-bold tabular-nums tracking-tight ${stat.color}`}>{stat.value}</div>
           </div>
         ))}
       </motion.div>
@@ -524,13 +534,15 @@ export default function SubscriptionPage() {
       {/* Tabs */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
-          <div className="flex gap-1 rounded-lg bg-muted/50 p-1">
-            <Tab active={activeTab === "subscriptions"} onClick={() => setActiveTab("subscriptions")}>Subscriptions</Tab>
-            <Tab active={activeTab === "charges"} onClick={() => setActiveTab("charges")}>Charges</Tab>
-            <Tab active={activeTab === "people"} onClick={() => setActiveTab("people")}>People</Tab>
-            <Tab active={activeTab === "charts"} onClick={() => setActiveTab("charts")}>Charts</Tab>
-            <Tab active={activeTab === "settings"} onClick={() => setActiveTab("settings")}>Settings</Tab>
-          </div>
+          <Tabs value={activeTab} onValueChange={(val) => setActiveTab(val as string)}>
+            <TabsList>
+              <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
+              <TabsTrigger value="charges">Charges</TabsTrigger>
+              <TabsTrigger value="people">People</TabsTrigger>
+              <TabsTrigger value="charts">Charts</TabsTrigger>
+              <TabsTrigger value="settings">Settings</TabsTrigger>
+            </TabsList>
+          </Tabs>
           {activeTab === "charges" && (
             <div className="flex gap-2 flex-wrap">
               <div className="relative">
@@ -570,7 +582,7 @@ export default function SubscriptionPage() {
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div className="grid gap-1.5">
-                            <Label className="text-xs text-muted-foreground">Exchange rate (to CNY) {liveRates && <span className="text-emerald-600 dark:text-emerald-400">Live</span>}</Label>
+                            <Label className="text-xs text-muted-foreground">Exchange rate {liveRates && <span className="text-emerald-600 dark:text-emerald-400">(Live)</span>}</Label>
                             <Input type="number" step="0.01" className="h-9" value={chargeForm.exchangeRate} onChange={(e) => setChargeForm({ ...chargeForm, exchangeRate: Number(e.target.value) })} />
                           </div>
                           <div className="grid gap-1.5">
@@ -583,9 +595,9 @@ export default function SubscriptionPage() {
                           if (!service) return null;
                           const total = Number(service.monthly_cost) * chargeForm.exchangeRate;
                           return (
-                            <div className="rounded-md border bg-muted/50 px-3 py-2.5 text-sm">
-                              <span className="text-muted-foreground">{service.monthly_cost} {service.currency} x {chargeForm.exchangeRate} = </span>
-                              <span className="font-semibold tabular-nums">{"\u00a5"}{total.toFixed(2)}</span>
+                            <div className="rounded-lg border bg-muted/30 px-3 py-2.5 text-sm">
+                              <span className="text-muted-foreground">{service.monthly_cost} {service.currency} × {chargeForm.exchangeRate} = </span>
+                              <span className="text-lg font-bold tabular-nums text-foreground">{"\u00a5"}{total.toFixed(2)}</span>
                             </div>
                           );
                         })()}
@@ -604,10 +616,9 @@ export default function SubscriptionPage() {
         {/* ═══ Subscriptions tab ═══════════════════════════════════════ */}
         {activeTab === "subscriptions" && (
           <div className="space-y-4">
-            {/* Bill now */}
             {canEdit && (
-              <div className="flex items-center gap-2 rounded-lg border bg-card p-3 flex-wrap">
-                <Zap className="h-4 w-4 text-muted-foreground" />
+              <div className="flex items-center gap-2 rounded-xl border bg-card/50 p-3 flex-wrap backdrop-blur-sm">
+                <Zap className="h-4 w-4 text-amber-500" />
                 <span className="text-sm text-muted-foreground">Generate charges for</span>
                 <MonthPicker value={billMonth} onChange={setBillMonth} />
                 <span className="text-sm text-muted-foreground">at rate</span>
@@ -623,8 +634,7 @@ export default function SubscriptionPage() {
               </div>
             )}
 
-            {/* Subscriptions list */}
-            <div className="rounded-lg border bg-card">
+            <div className="rounded-xl border bg-card/50 backdrop-blur-sm">
               {data.subscriptions.length === 0 ? (
                 <div className="flex flex-col items-center py-16 text-center">
                   <p className="text-sm text-muted-foreground">No subscriptions yet. Add one above to get started.</p>
@@ -637,15 +647,16 @@ export default function SubscriptionPage() {
                     return (
                       <div key={sub.id} className={`flex items-center justify-between px-4 py-3 transition-colors hover:bg-muted/30 ${!sub.active ? "opacity-50" : ""}`}>
                         <div className="flex items-center gap-3 min-w-0">
-                          <Avatar name={subscriber?.name ?? "?"} />
+                          <PersonAvatar name={subscriber?.name ?? "?"} index={subIndex(sub.subscriber_id)} />
                           <div className="min-w-0">
                             <div className="flex items-center gap-2 text-sm">
                               <span className="font-medium">{subscriber?.name ?? "?"}</span>
                               <span className="text-muted-foreground">{"\u2192"}</span>
+                              <ServiceIcon name={service?.name ?? ""} />
                               <span>{service?.name ?? "?"}</span>
                             </div>
                             <div className="text-xs text-muted-foreground tabular-nums">
-                              {service?.monthly_cost} {service?.currency}/mo {"\u00b7"} since {sub.start_date ?? sub.created_at?.slice(0, 10) ?? "—"}
+                              <span className="font-semibold text-foreground">{service?.monthly_cost} {service?.currency}</span>/mo {"\u00b7"} since {sub.start_date ?? sub.created_at?.slice(0, 10) ?? "\u2014"}
                             </div>
                           </div>
                         </div>
@@ -673,77 +684,81 @@ export default function SubscriptionPage() {
 
         {/* ═══ Charges tab ═════════════════════════════════════════════ */}
         {activeTab === "charges" && (
-          <div className="rounded-lg border bg-card">
+          <div className="rounded-xl border bg-card/50 backdrop-blur-sm">
             {filteredCharges.length === 0 ? (
               <div className="flex flex-col items-center py-16 text-center">
                 <p className="text-sm text-muted-foreground">{searchQuery ? "No matching charges." : "No charges yet. Use \"Bill now\" to generate."}</p>
               </div>
             ) : (
               <>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="border-b">
-                      <tr>
-                        <SortHeader column="subscriber">Person</SortHeader>
-                        <SortHeader column="service">Service</SortHeader>
-                        <SortHeader column="month">Month</SortHeader>
-                        <SortHeader column="date">Bill Date</SortHeader>
-                        <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground">Price</th>
-                        <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground">Rate</th>
-                        <SortHeader column="total">Total</SortHeader>
-                        <SortHeader column="paid">Status</SortHeader>
-                        {canEdit && <th className="h-9 px-3 w-16"></th>}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <AnimatePresence>
-                        {paginatedCharges.map((charge) => {
-                          const subscriber = data.subscribers.find((s) => s.id === charge.subscriber_id);
-                          const service = data.services.find((s) => s.id === charge.service_id);
-                          return (
-                            <motion.tr key={charge.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
-                              <td className="px-3 py-2.5"><div className="flex items-center gap-2"><Avatar name={subscriber?.name ?? "?"} /><span className="font-medium text-sm">{subscriber?.name ?? "?"}</span></div></td>
-                              <td className="px-3 py-2.5 text-sm">{service?.name ?? "?"}</td>
-                              <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.period_start}</td>
-                              <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.created_at?.slice(0, 10) ?? "—"}</td>
-                              <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.monthly_cost} {charge.currency}</td>
-                              <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.exchange_rate}</td>
-                              <td className="px-3 py-2.5 font-medium tabular-nums">{"\u00a5"}{Number(charge.total_cny).toFixed(2)}</td>
-                              <td className="px-3 py-2.5">
-                                {canEdit ? (
-                                  <button onClick={() => handleTogglePaid(charge)} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <SortHeader column="subscriber">Person</SortHeader>
+                      <SortHeader column="service">Service</SortHeader>
+                      <SortHeader column="month">Month</SortHeader>
+                      <SortHeader column="date">Bill Date</SortHeader>
+                      <TableHead className="text-xs font-medium text-muted-foreground">Price</TableHead>
+                      <TableHead className="text-xs font-medium text-muted-foreground">Rate</TableHead>
+                      <SortHeader column="total">Total</SortHeader>
+                      <SortHeader column="paid">Status</SortHeader>
+                      {canEdit && <TableHead className="w-16" />}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    <AnimatePresence>
+                      {paginatedCharges.map((charge) => {
+                        const subscriber = data.subscribers.find((s) => s.id === charge.subscriber_id);
+                        const service = data.services.find((s) => s.id === charge.service_id);
+                        return (
+                          <motion.tr key={charge.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                            <TableCell><div className="flex items-center gap-2"><PersonAvatar name={subscriber?.name ?? "?"} index={subIndex(charge.subscriber_id)} /><span className="font-medium text-sm">{subscriber?.name ?? "?"}</span></div></TableCell>
+                            <TableCell><div className="flex items-center gap-2"><ServiceIcon name={service?.name ?? ""} /><span className="text-sm">{service?.name ?? "?"}</span></div></TableCell>
+                            <TableCell className="text-xs tabular-nums text-muted-foreground">{charge.period_start}</TableCell>
+                            <TableCell className="text-xs tabular-nums text-muted-foreground">{charge.created_at?.slice(0, 10) ?? "\u2014"}</TableCell>
+                            <TableCell className="text-xs tabular-nums text-muted-foreground">{charge.monthly_cost} {charge.currency}</TableCell>
+                            <TableCell className="text-xs tabular-nums text-muted-foreground">{charge.exchange_rate}</TableCell>
+                            <TableCell>
+                              <span className={`text-sm font-bold tabular-nums ${charge.paid ? "text-emerald-600 dark:text-emerald-400" : "text-foreground"}`}>
+                                {"\u00a5"}{Number(charge.total_cny).toFixed(2)}
+                              </span>
+                            </TableCell>
+                            <TableCell>
+                              {canEdit ? (
+                                <button onClick={() => handleTogglePaid(charge)}>
+                                  <Badge variant="outline" className={`cursor-pointer transition-colors ${charge.paid ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
                                     {charge.paid ? "Paid" : "Unpaid"}
-                                  </button>
-                                ) : (
-                                  <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
-                                    {charge.paid ? "Paid" : "Unpaid"}
-                                  </span>
-                                )}
-                              </td>
-                              {canEdit && (
-                                <td className="px-3 py-2.5">
-                                  <div className="flex gap-0.5">
-                                    {editingChargeId === charge.id ? (
-                                      <div className="flex gap-1">
-                                        <Input className="h-7 w-24 text-xs" value={editingChargeNote} onChange={(e) => setEditingChargeNote(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") handleSaveChargeNote(charge.id); if (e.key === "Escape") setEditingChargeId(null); }} autoFocus />
-                                        <button onClick={() => handleSaveChargeNote(charge.id)} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Check className="h-3 w-3" /></button>
-                                      </div>
-                                    ) : (
-                                      <>
-                                        <button onClick={() => { setEditingChargeId(charge.id); setEditingChargeNote(charge.note ?? ""); }} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Edit2 className="h-3 w-3 text-muted-foreground" /></button>
-                                        <button onClick={() => setConfirmDelete({ type: "charge", id: charge.id, name: `${subscriber?.name} - ${service?.name}` })} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Trash2 className="h-3 w-3 text-muted-foreground" /></button>
-                                      </>
-                                    )}
-                                  </div>
-                                </td>
+                                  </Badge>
+                                </button>
+                              ) : (
+                                <Badge variant="outline" className={charge.paid ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400"}>
+                                  {charge.paid ? "Paid" : "Unpaid"}
+                                </Badge>
                               )}
-                            </motion.tr>
-                          );
-                        })}
-                      </AnimatePresence>
-                    </tbody>
-                  </table>
-                </div>
+                            </TableCell>
+                            {canEdit && (
+                              <TableCell>
+                                <div className="flex gap-0.5">
+                                  {editingChargeId === charge.id ? (
+                                    <div className="flex gap-1">
+                                      <Input className="h-7 w-24 text-xs" value={editingChargeNote} onChange={(e) => setEditingChargeNote(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") handleSaveChargeNote(charge.id); if (e.key === "Escape") setEditingChargeId(null); }} autoFocus />
+                                      <button onClick={() => handleSaveChargeNote(charge.id)} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Check className="h-3 w-3" /></button>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <button onClick={() => { setEditingChargeId(charge.id); setEditingChargeNote(charge.note ?? ""); }} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Edit2 className="h-3 w-3 text-muted-foreground" /></button>
+                                      <button onClick={() => setConfirmDelete({ type: "charge", id: charge.id, name: `${subscriber?.name} - ${service?.name}` })} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Trash2 className="h-3 w-3 text-muted-foreground" /></button>
+                                    </>
+                                  )}
+                                </div>
+                              </TableCell>
+                            )}
+                          </motion.tr>
+                        );
+                      })}
+                    </AnimatePresence>
+                  </TableBody>
+                </Table>
                 {totalPages > 1 && (
                   <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
                     <span>{(currentPage - 1) * PAGE_SIZE + 1}{"\u2013"}{Math.min(currentPage * PAGE_SIZE, filteredCharges.length)} of {filteredCharges.length}</span>
@@ -767,31 +782,36 @@ export default function SubscriptionPage() {
             {data.subscribers.length === 0 ? (
               <div className="flex flex-col items-center py-16 text-center"><p className="text-sm text-muted-foreground">No subscribers yet.</p></div>
             ) : (
-              data.subscribers.map((subscriber) => {
+              data.subscribers.map((subscriber, idx) => {
                 const charges = subscriberCharges(subscriber.id);
                 const subs = data.subscriptions.filter((s) => s.subscriber_id === subscriber.id && s.active);
                 const unpaid = subscriberUnpaid(subscriber.id);
                 const paid = charges.filter((c) => c.paid).reduce((s, c) => s + Number(c.total_cny), 0);
                 return (
-                  <div key={subscriber.id} className="rounded-lg border bg-card">
+                  <div key={subscriber.id} className="rounded-xl border bg-card/50 backdrop-blur-sm overflow-hidden">
                     <div className="flex items-center justify-between px-4 py-3 border-b">
                       <div className="flex items-center gap-2.5">
-                        <Avatar name={subscriber.name} size="md" />
+                        <PersonAvatar name={subscriber.name} index={idx} size="default" />
                         <div>
                           <span className="font-medium text-sm">{subscriber.name}</span>
                           {subs.length > 0 && (
-                            <div className="flex gap-1 mt-0.5">
+                            <div className="flex gap-1.5 mt-0.5">
                               {subs.map((s) => {
                                 const svc = data.services.find((sv) => sv.id === s.service_id);
-                                return <span key={s.id} className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{svc?.name}</span>;
+                                return (
+                                  <span key={s.id} className="inline-flex items-center gap-1 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                                    <ServiceIcon name={svc?.name ?? ""} size="sm" />
+                                    {svc?.name}
+                                  </span>
+                                );
                               })}
                             </div>
                           )}
                         </div>
                       </div>
-                      <div className="flex gap-3 text-xs tabular-nums">
-                        {unpaid > 0 && <span className="text-amber-600 dark:text-amber-400">{"\u00a5"}{unpaid.toFixed(2)} unpaid</span>}
-                        {paid > 0 && <span className="text-emerald-600 dark:text-emerald-400">{"\u00a5"}{paid.toFixed(2)} paid</span>}
+                      <div className="flex gap-3 text-sm tabular-nums font-semibold">
+                        {unpaid > 0 && <span className="text-amber-600 dark:text-amber-400">{"\u00a5"}{unpaid.toFixed(2)}</span>}
+                        {paid > 0 && <span className="text-emerald-600 dark:text-emerald-400">{"\u00a5"}{paid.toFixed(2)}</span>}
                       </div>
                     </div>
                     {charges.length > 0 && (
@@ -801,20 +821,23 @@ export default function SubscriptionPage() {
                           return (
                             <div key={charge.id} className="flex items-center justify-between px-4 py-2.5 text-sm hover:bg-muted/30 transition-colors">
                               <div className="flex items-center gap-2">
+                                <ServiceIcon name={service?.name ?? ""} />
                                 <span>{service?.name}</span>
                                 <span className="text-xs text-muted-foreground">{charge.period_start}</span>
                                 {charge.note && <span className="text-xs text-muted-foreground">{"\u00b7"} {charge.note}</span>}
                               </div>
                               <div className="flex items-center gap-3">
-                                <span className="font-medium tabular-nums">{"\u00a5"}{Number(charge.total_cny).toFixed(2)}</span>
+                                <span className={`font-bold tabular-nums ${charge.paid ? "text-emerald-600 dark:text-emerald-400" : "text-foreground"}`}>{"\u00a5"}{Number(charge.total_cny).toFixed(2)}</span>
                                 {canEdit ? (
-                                  <button onClick={() => handleTogglePaid(charge)} className={`text-xs font-medium px-2 py-0.5 rounded-md transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
-                                    {charge.paid ? "Paid" : "Unpaid"}
+                                  <button onClick={() => handleTogglePaid(charge)}>
+                                    <Badge variant="outline" className={`cursor-pointer text-xs transition-colors ${charge.paid ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
+                                      {charge.paid ? "Paid" : "Unpaid"}
+                                    </Badge>
                                   </button>
                                 ) : (
-                                  <span className={`text-xs font-medium px-2 py-0.5 rounded-md ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
+                                  <Badge variant="outline" className={`text-xs ${charge.paid ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
                                     {charge.paid ? "Paid" : "Unpaid"}
-                                  </span>
+                                  </Badge>
                                 )}
                               </div>
                             </div>
@@ -835,11 +858,11 @@ export default function SubscriptionPage() {
             <div className="flex flex-col items-center py-16 text-center"><p className="text-sm text-muted-foreground">Add charges to see charts.</p></div>
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
-              <div className="rounded-lg border bg-card p-4">
+              <div className="rounded-xl border bg-card/50 backdrop-blur-sm p-4">
                 <p className="text-xs font-medium text-muted-foreground mb-3">Spending by service</p>
                 <SpendingPieChart charges={data.charges} services={data.services} />
               </div>
-              <div className="rounded-lg border bg-card p-4">
+              <div className="rounded-xl border bg-card/50 backdrop-blur-sm p-4">
                 <p className="text-xs font-medium text-muted-foreground mb-3">Paid vs unpaid by person</p>
                 <PersonBarChart charges={data.charges} subscribers={data.subscribers} />
               </div>
@@ -850,12 +873,12 @@ export default function SubscriptionPage() {
         {/* ═══ Settings tab ════════════════════════════════════════════ */}
         {activeTab === "settings" && (
           <div className="space-y-4">
-            <div className="rounded-lg border bg-card p-4 space-y-3">
+            <div className="rounded-xl border bg-card/50 backdrop-blur-sm p-4 space-y-3">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Subscribers</p>
               <div className="flex flex-wrap gap-1.5">
-                {data.subscribers.map((s) => (
-                  <div key={s.id} className="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-sm">
-                    <Avatar name={s.name} />
+                {data.subscribers.map((s, idx) => (
+                  <div key={s.id} className="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm bg-card/50">
+                    <PersonAvatar name={s.name} index={idx} />
                     {editingSubscriberId === s.id ? (
                       <div className="flex items-center gap-1">
                         <Input className="h-6 w-24 text-xs" value={editingSubscriberName} onChange={(e) => setEditingSubscriberName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") handleRenameSubscriber(s.id); if (e.key === "Escape") setEditingSubscriberId(null); }} autoFocus />
@@ -880,14 +903,17 @@ export default function SubscriptionPage() {
               )}
             </div>
 
-            <div className="rounded-lg border bg-card p-4 space-y-3">
+            <div className="rounded-xl border bg-card/50 backdrop-blur-sm p-4 space-y-3">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Services</p>
               <div className="divide-y -mx-4">
                 {data.services.map((service) => (
                   <div key={service.id} className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/30 transition-colors">
-                    <div>
-                      <span className="text-sm font-medium">{service.name}</span>
-                      <span className="ml-2 text-xs text-muted-foreground tabular-nums">{service.monthly_cost} {service.currency}/mo</span>
+                    <div className="flex items-center gap-2.5">
+                      <ServiceIcon name={service.name} size="md" />
+                      <div>
+                        <span className="text-sm font-medium">{service.name}</span>
+                        <Badge variant="secondary" className="ml-2 tabular-nums">{service.monthly_cost} {service.currency}/mo</Badge>
+                      </div>
                     </div>
                     {canEdit && (
                       <div className="flex gap-1">
