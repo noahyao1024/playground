@@ -166,6 +166,7 @@ export default function SubscriptionPage() {
   const [subForm, setSubForm] = useState({ subscriberId: "", serviceId: "", startDate: new Date().toISOString().slice(0, 10) });
   const [chargeForm, setChargeForm] = useState({ subscriberId: "", serviceId: "", date: new Date().toISOString().slice(0, 10), exchangeRate: 7.25, note: "" });
   const [billExchangeRate, setBillExchangeRate] = useState(7.25);
+  const [liveRates, setLiveRates] = useState<Record<string, number> | null>(null);
 
   function requireEdit(): boolean {
     if (canEdit) return true;
@@ -188,6 +189,22 @@ export default function SubscriptionPage() {
 
   // Load data regardless of auth status
   useEffect(() => { reload(); }, [reload]);
+
+  // Fetch live exchange rates
+  useEffect(() => {
+    fetch("/api/exchange-rate")
+      .then((r) => r.json())
+      .then((rates) => {
+        if (rates && !rates.error) {
+          setLiveRates(rates);
+          if (rates.USD) {
+            setBillExchangeRate(rates.USD);
+            setChargeForm((f) => ({ ...f, exchangeRate: rates.USD }));
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -495,7 +512,7 @@ export default function SubscriptionPage() {
           { label: "Paid", value: `\u00a5${summary.totalPaid.toFixed(2)}`, icon: Check, color: "text-emerald-600 dark:text-emerald-400" },
           { label: "Unpaid", value: `\u00a5${summary.totalUnpaid.toFixed(2)}`, icon: Clock, color: "text-amber-600 dark:text-amber-400" },
           { label: "Active subscriptions", value: String(summary.activeSubs), icon: Receipt, color: "text-foreground" },
-          { label: "Avg rate", value: Object.keys(summary.avgRates).length > 0 ? Object.entries(summary.avgRates).map(([cur, rate]) => `${cur} ${rate.toFixed(2)}`).join(" / ") : "\u2014", icon: TrendingUp, color: "text-foreground" },
+          { label: liveRates ? "Live rate" : "Avg rate", value: liveRates ? Object.entries(liveRates).map(([cur, rate]) => `${cur} ${rate}`).join(" / ") : Object.keys(summary.avgRates).length > 0 ? Object.entries(summary.avgRates).map(([cur, rate]) => `${cur} ${rate.toFixed(2)}`).join(" / ") : "\u2014", icon: TrendingUp, color: "text-foreground" },
         ].map((stat) => (
           <div key={stat.label} className="rounded-lg border bg-card p-4">
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1"><stat.icon className="h-3.5 w-3.5" />{stat.label}</div>
@@ -538,7 +555,11 @@ export default function SubscriptionPage() {
                         </div>
                         <div className="grid gap-1.5">
                           <Label className="text-xs text-muted-foreground">Service</Label>
-                          <select value={chargeForm.serviceId} onChange={(e) => setChargeForm({ ...chargeForm, serviceId: e.target.value })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                          <select value={chargeForm.serviceId} onChange={(e) => {
+                            const svc = data.services.find((s) => s.id === e.target.value);
+                            const rate = svc && liveRates?.[svc.currency] ? liveRates[svc.currency] : chargeForm.exchangeRate;
+                            setChargeForm({ ...chargeForm, serviceId: e.target.value, exchangeRate: rate });
+                          }} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
                             <option value="">Select service</option>
                             {data.services.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</option>)}
                           </select>
@@ -549,7 +570,7 @@ export default function SubscriptionPage() {
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div className="grid gap-1.5">
-                            <Label className="text-xs text-muted-foreground">Exchange rate (to CNY)</Label>
+                            <Label className="text-xs text-muted-foreground">Exchange rate (to CNY) {liveRates && <span className="text-emerald-600 dark:text-emerald-400">Live</span>}</Label>
                             <Input type="number" step="0.01" className="h-9" value={chargeForm.exchangeRate} onChange={(e) => setChargeForm({ ...chargeForm, exchangeRate: Number(e.target.value) })} />
                           </div>
                           <div className="grid gap-1.5">
@@ -591,6 +612,11 @@ export default function SubscriptionPage() {
                 <MonthPicker value={billMonth} onChange={setBillMonth} />
                 <span className="text-sm text-muted-foreground">at rate</span>
                 <Input type="number" step="0.01" className="h-8 w-20 text-sm" value={billExchangeRate} onChange={(e) => setBillExchangeRate(Number(e.target.value))} />
+                {liveRates && (
+                  <span className="text-xs text-muted-foreground">
+                    Live: {Object.entries(liveRates).map(([c, r]) => `${c} ${r}`).join(" / ")}
+                  </span>
+                )}
                 <Button size="sm" className="h-8" onClick={handleBillNow} disabled={billing}>
                   {billing ? "Billing..." : "Bill now"}
                 </Button>
