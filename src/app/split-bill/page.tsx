@@ -481,10 +481,10 @@ export default function SubscriptionPage() {
 
   // ─── Stats config ─────────────────────────────────────────────────
   const stats = [
-    { label: "Paid", value: `\u00a5${summary.totalPaid.toFixed(2)}`, icon: Check, iconBg: "bg-emerald-500/15", iconColor: "text-emerald-600 dark:text-emerald-400", color: "text-emerald-600 dark:text-emerald-400", glowClass: "glass-card-emerald" },
-    { label: "Unpaid", value: `\u00a5${summary.totalUnpaid.toFixed(2)}`, icon: Clock, iconBg: "bg-amber-500/15", iconColor: "text-amber-600 dark:text-amber-400", color: "text-amber-600 dark:text-amber-400", glowClass: "glass-card-amber" },
+    { label: "Paid", value: `¥ ${summary.totalPaid.toFixed(2)}`, icon: Check, iconBg: "bg-emerald-500/15", iconColor: "text-emerald-600 dark:text-emerald-400", color: "text-emerald-600 dark:text-emerald-400", glowClass: "glass-card-emerald" },
+    { label: "Unpaid", value: `¥ ${summary.totalUnpaid.toFixed(2)}`, icon: Clock, iconBg: "bg-amber-500/15", iconColor: "text-amber-600 dark:text-amber-400", color: "text-amber-600 dark:text-amber-400", glowClass: "glass-card-amber" },
     { label: "Active", value: String(summary.activeSubs), icon: Receipt, iconBg: "bg-blue-500/15", iconColor: "text-blue-600 dark:text-blue-400", color: "text-blue-600 dark:text-blue-400", glowClass: "glass-card-blue" },
-    { label: liveRates ? "Live rate" : "Avg rate", value: liveRates ? Object.entries(liveRates).map(([cur, rate]) => `${cur} ${rate}`).join(" / ") : Object.keys(summary.avgRates).length > 0 ? Object.entries(summary.avgRates).map(([cur, rate]) => `${cur} ${rate.toFixed(2)}`).join(" / ") : "\u2014", icon: TrendingUp, iconBg: "bg-purple-500/15", iconColor: "text-purple-600 dark:text-purple-400", color: "text-purple-600 dark:text-purple-400", glowClass: "glass-card-purple" },
+    { label: liveRates ? "Live rate" : "Avg rate", value: null as string | null, rateEntries: liveRates ? Object.entries(liveRates) : Object.keys(summary.avgRates).length > 0 ? Object.entries(summary.avgRates).map(([cur, rate]) => [cur, Number(rate.toFixed(4))] as [string, number]) : null, icon: TrendingUp, iconBg: "bg-purple-500/15", iconColor: "text-purple-600 dark:text-purple-400", color: "text-purple-600 dark:text-purple-400", glowClass: "glass-card-purple" },
   ];
 
   return (
@@ -547,7 +547,20 @@ export default function SubscriptionPage() {
               </div>
               {stat.label}
             </div>
-            <div className={`text-2xl font-bold tabular-nums tracking-tight ${stat.color}`}>{stat.value}</div>
+            {stat.rateEntries ? (
+              <div className="flex flex-col gap-1">
+                {stat.rateEntries.map(([cur, rate]) => (
+                  <div key={cur} className={`flex items-baseline gap-2 ${stat.color}`}>
+                    <span className="text-xs font-medium text-muted-foreground">{cur}</span>
+                    <span className="text-lg font-bold tabular-nums tracking-tight">{rate}</span>
+                  </div>
+                ))}
+              </div>
+            ) : stat.value != null ? (
+              <div className={`text-2xl font-bold tabular-nums tracking-tight ${stat.color}`}>{stat.value}</div>
+            ) : (
+              <div className={`text-2xl font-bold tabular-nums tracking-tight ${stat.color}`}>{"\u2014"}</div>
+            )}
           </div>
         ))}
       </motion.div>

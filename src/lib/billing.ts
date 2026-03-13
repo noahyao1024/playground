@@ -7,21 +7,11 @@ export function getServerSupabase(): SupabaseClient | null {
   return createClient(url, key);
 }
 
-/** Days in a given month (YYYY-MM) */
-function daysInMonth(month: string): number {
-  const [y, m] = month.split("-").map(Number);
-  return new Date(y, m, 0).getDate();
-}
-
-/** Prorate ratio: 1 if start <= month start, 0 if start > month end, else fraction */
-function prorateRatio(startDate: string, billingMonth: string): number {
-  const monthStart = `${billingMonth}-01`;
-  const totalDays = daysInMonth(billingMonth);
-  const monthEnd = `${billingMonth}-${String(totalDays).padStart(2, "0")}`;
-  if (startDate <= monthStart) return 1;
-  if (startDate > monthEnd) return 0;
-  const startDay = parseInt(startDate.split("-")[2], 10);
-  return (totalDays - startDay + 1) / totalDays;
+/** Check if a subscription should be billed for a given month.
+ *  Returns true if the start date falls within or before the billing month. */
+function shouldBillMonth(startDate: string, billingMonth: string): boolean {
+  const startMonth = startDate.slice(0, 7);
+  return startMonth <= billingMonth;
 }
 
 /** Generate list of YYYY-MM strings from startMonth to endMonth inclusive */
@@ -97,12 +87,11 @@ export async function generateChargesForMonth(
       const key = `${sub.subscriber_id}::${sub.service_id}::${m}`;
       if (billed.has(key)) continue;
 
-      const ratio = prorateRatio(startDate, m);
-      if (ratio === 0) continue;
+      if (!shouldBillMonth(startDate, m)) continue;
 
       const rate = exchangeRates[service.currency] ?? exchangeRates.USD ?? 7.25;
-      const totalCny = Number((monthlyCost * ratio * rate).toFixed(2));
-      const note = ratio < 1 ? `Prorated (${Math.round(ratio * 100)}%)` : "Auto-generated";
+      const totalCny = Number((monthlyCost * rate).toFixed(2));
+      const note = "Auto-generated";
 
       newCharges.push({
         subscriber_id: sub.subscriber_id,
