@@ -232,6 +232,7 @@ export default function SubscriptionPage() {
           case "subscriber": { va = data.subscribers.find((s) => s.id === a.subscriber_id)?.name ?? ""; vb = data.subscribers.find((s) => s.id === b.subscriber_id)?.name ?? ""; break; }
           case "service": { va = data.services.find((s) => s.id === a.service_id)?.name ?? ""; vb = data.services.find((s) => s.id === b.service_id)?.name ?? ""; break; }
           case "month": va = a.period_start; vb = b.period_start; break;
+          case "date": va = a.created_at ?? ""; vb = b.created_at ?? ""; break;
           case "total": va = Number(a.total_cny); vb = Number(b.total_cny); break;
           case "paid": va = a.paid ? 1 : 0; vb = b.paid ? 1 : 0; break;
         }
@@ -636,6 +637,7 @@ export default function SubscriptionPage() {
                         <SortHeader column="subscriber">Person</SortHeader>
                         <SortHeader column="service">Service</SortHeader>
                         <SortHeader column="month">Month</SortHeader>
+                        <SortHeader column="date">Bill Date</SortHeader>
                         <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground">Price</th>
                         <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground">Rate</th>
                         <SortHeader column="total">Total</SortHeader>
@@ -653,6 +655,7 @@ export default function SubscriptionPage() {
                               <td className="px-3 py-2.5"><div className="flex items-center gap-2"><Avatar name={subscriber?.name ?? "?"} /><span className="font-medium text-sm">{subscriber?.name ?? "?"}</span></div></td>
                               <td className="px-3 py-2.5 text-sm">{service?.name ?? "?"}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.period_start}</td>
+                              <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.created_at?.slice(0, 10) ?? "—"}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.monthly_cost} {charge.currency}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.exchange_rate}</td>
                               <td className="px-3 py-2.5 font-medium tabular-nums">{"\u00a5"}{Number(charge.total_cny).toFixed(2)}</td>

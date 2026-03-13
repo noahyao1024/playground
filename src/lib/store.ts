@@ -55,6 +55,7 @@ export interface ChargeRecord {
   paid: boolean;
   paid_date?: string;
   note?: string;
+  created_at?: string;
 }
 
 export interface SubscriptionData {
