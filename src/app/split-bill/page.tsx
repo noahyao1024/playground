@@ -172,9 +172,15 @@ export default function SubscriptionPage() {
   }
 
   const reload = useCallback(async () => {
-    const d = await fetchSubscriptionData();
-    setData(d);
-    setLoading(false);
+    try {
+      const d = await fetchSubscriptionData();
+      setData(d);
+    } catch (err) {
+      console.error("Failed to load data:", err);
+      setData({ services: [], subscribers: [], subscriptions: [], charges: [] });
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   // Load data regardless of auth status
