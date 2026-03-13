@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, isAllowedEmail } from "@/lib/auth";
-import { getServerSupabase, generateChargesForMonth } from "@/lib/billing";
+import { getServerSupabase, generateChargesForMonth, fetchExchangeRates } from "@/lib/billing";
 
 export async function POST(req: NextRequest) {
   // Check auth + whitelist
@@ -14,13 +14,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
   }
 
-  // Accept optional month and exchangeRate params
+  // Accept optional month and exchangeRates params
   let month: string;
-  let exchangeRate = 7.25;
+  let exchangeRates: Record<string, number> | undefined;
   try {
     const body = await req.json();
     month = body.month;
-    if (body.exchangeRate) exchangeRate = Number(body.exchangeRate);
+    if (body.exchangeRates && typeof body.exchangeRates === "object") {
+      exchangeRates = body.exchangeRates;
+    } else if (body.exchangeRate) {
+      // Legacy: single rate treated as USD
+      exchangeRates = { USD: Number(body.exchangeRate) };
+    }
   } catch {
     const now = new Date();
     month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -31,9 +36,16 @@ export async function POST(req: NextRequest) {
     month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
   }
 
+  // Fetch live rates if not provided
+  if (!exchangeRates) {
+    const proto = req.headers.get("x-forwarded-proto") ?? "https";
+    const host = req.headers.get("host") ?? "localhost:3000";
+    exchangeRates = await fetchExchangeRates(`${proto}://${host}`);
+  }
+
   try {
-    const result = await generateChargesForMonth(supabase, month, exchangeRate);
-    return NextResponse.json({ message: `Generated ${result.generated} charge(s)`, month, ...result });
+    const result = await generateChargesForMonth(supabase, month, exchangeRates);
+    return NextResponse.json({ message: `Generated ${result.generated} charge(s)`, month, exchangeRates, ...result });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null && "message" in err ? (err as { message: string }).message : JSON.stringify(err);
     return NextResponse.json({ error: msg }, { status: 500 });

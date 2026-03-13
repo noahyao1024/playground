@@ -59,8 +59,8 @@ function Skeleton({ className = "" }: { className?: string }) {
 
 function LoadingSkeleton() {
   return (
-    <div className="space-y-6">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-24" />)}</div>
+    <div className="space-y-8">
+      <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-28 rounded-2xl" />)}</div>
       <Skeleton className="h-10 w-64" />
       <Skeleton className="h-96" />
     </div>
@@ -343,7 +343,7 @@ export default function SubscriptionPage() {
       const res = await fetch("/api/bill-now", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ month: billMonth, exchangeRate: billExchangeRate }),
+        body: JSON.stringify({ month: billMonth, exchangeRates: liveRates ?? { USD: billExchangeRate } }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -467,7 +467,7 @@ export default function SubscriptionPage() {
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Header */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -517,12 +517,12 @@ export default function SubscriptionPage() {
       </motion.div>
 
       {/* Stats */}
-      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.05 }} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.05 }} className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => (
-          <div key={stat.label} className={`glass-card rounded-xl p-4 ${stat.glowClass}`}>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
-              <div className={`h-7 w-7 rounded-lg flex items-center justify-center ${stat.iconBg}`}>
-                <stat.icon className={`h-3.5 w-3.5 ${stat.iconColor}`} />
+          <div key={stat.label} className={`glass-card rounded-2xl p-6 ${stat.glowClass}`}>
+            <div className="flex items-center gap-2.5 text-sm text-muted-foreground mb-3">
+              <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${stat.iconBg}`}>
+                <stat.icon className={`h-4 w-4 ${stat.iconColor}`} />
               </div>
               {stat.label}
             </div>
@@ -533,7 +533,7 @@ export default function SubscriptionPage() {
 
       {/* Tabs */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
           <Tabs value={activeTab} onValueChange={(val) => setActiveTab(val as string)}>
             <TabsList>
               <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
@@ -615,18 +615,27 @@ export default function SubscriptionPage() {
 
         {/* ═══ Subscriptions tab ═══════════════════════════════════════ */}
         {activeTab === "subscriptions" && (
-          <div className="space-y-4">
+          <div className="space-y-5">
             {canEdit && (
-              <div className="flex items-center gap-2 rounded-xl border bg-card/50 p-3 flex-wrap backdrop-blur-sm">
+              <div className="flex items-center gap-3 rounded-2xl border bg-card/50 p-4 flex-wrap backdrop-blur-sm">
                 <Zap className="h-4 w-4 text-amber-500" />
                 <span className="text-sm text-muted-foreground">Generate charges for</span>
                 <MonthPicker value={billMonth} onChange={setBillMonth} />
-                <span className="text-sm text-muted-foreground">at rate</span>
-                <Input type="number" step="0.01" className="h-8 w-20 text-sm" value={billExchangeRate} onChange={(e) => setBillExchangeRate(Number(e.target.value))} />
                 {liveRates && (
-                  <span className="text-xs text-muted-foreground">
-                    Live: {Object.entries(liveRates).map(([c, r]) => `${c} ${r}`).join(" / ")}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {Object.entries(liveRates).map(([cur, rate]) => (
+                      <Badge key={cur} variant="secondary" className="tabular-nums text-xs">
+                        {cur} {rate}
+                      </Badge>
+                    ))}
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400">LIVE</span>
+                  </div>
+                )}
+                {!liveRates && (
+                  <>
+                    <span className="text-sm text-muted-foreground">at rate</span>
+                    <Input type="number" step="0.01" className="h-8 w-20 text-sm" value={billExchangeRate} onChange={(e) => setBillExchangeRate(Number(e.target.value))} />
+                  </>
                 )}
                 <Button size="sm" className="h-8" onClick={handleBillNow} disabled={billing}>
                   {billing ? "Billing..." : "Bill now"}
@@ -634,7 +643,7 @@ export default function SubscriptionPage() {
               </div>
             )}
 
-            <div className="rounded-xl border bg-card/50 backdrop-blur-sm">
+            <div className="rounded-2xl border bg-card/50 backdrop-blur-sm">
               {data.subscriptions.length === 0 ? (
                 <div className="flex flex-col items-center py-16 text-center">
                   <p className="text-sm text-muted-foreground">No subscriptions yet. Add one above to get started.</p>
@@ -645,8 +654,8 @@ export default function SubscriptionPage() {
                     const subscriber = data.subscribers.find((s) => s.id === sub.subscriber_id);
                     const service = data.services.find((s) => s.id === sub.service_id);
                     return (
-                      <div key={sub.id} className={`flex items-center justify-between px-4 py-3 transition-colors hover:bg-muted/30 ${!sub.active ? "opacity-50" : ""}`}>
-                        <div className="flex items-center gap-3 min-w-0">
+                      <div key={sub.id} className={`flex items-center justify-between px-5 py-4 transition-colors hover:bg-muted/30 ${!sub.active ? "opacity-50" : ""}`}>
+                        <div className="flex items-center gap-3.5 min-w-0">
                           <PersonAvatar name={subscriber?.name ?? "?"} index={subIndex(sub.subscriber_id)} />
                           <div className="min-w-0">
                             <div className="flex items-center gap-2 text-sm">
@@ -684,7 +693,7 @@ export default function SubscriptionPage() {
 
         {/* ═══ Charges tab ═════════════════════════════════════════════ */}
         {activeTab === "charges" && (
-          <div className="rounded-xl border bg-card/50 backdrop-blur-sm">
+          <div className="rounded-2xl border bg-card/50 backdrop-blur-sm">
             {filteredCharges.length === 0 ? (
               <div className="flex flex-col items-center py-16 text-center">
                 <p className="text-sm text-muted-foreground">{searchQuery ? "No matching charges." : "No charges yet. Use \"Bill now\" to generate."}</p>
@@ -760,7 +769,7 @@ export default function SubscriptionPage() {
                   </TableBody>
                 </Table>
                 {totalPages > 1 && (
-                  <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
+                  <div className="flex items-center justify-between border-t px-5 py-3 text-xs text-muted-foreground">
                     <span>{(currentPage - 1) * PAGE_SIZE + 1}{"\u2013"}{Math.min(currentPage * PAGE_SIZE, filteredCharges.length)} of {filteredCharges.length}</span>
                     <div className="flex gap-1">
                       <button className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted disabled:opacity-30 transition-colors" disabled={currentPage === 1} onClick={() => setCurrentPage((p) => p - 1)}><ChevronLeft className="h-3.5 w-3.5" /></button>
@@ -778,7 +787,7 @@ export default function SubscriptionPage() {
 
         {/* ═══ People tab ══════════════════════════════════════════════ */}
         {activeTab === "people" && (
-          <div className="space-y-3">
+          <div className="space-y-4">
             {data.subscribers.length === 0 ? (
               <div className="flex flex-col items-center py-16 text-center"><p className="text-sm text-muted-foreground">No subscribers yet.</p></div>
             ) : (
@@ -788,9 +797,9 @@ export default function SubscriptionPage() {
                 const unpaid = subscriberUnpaid(subscriber.id);
                 const paid = charges.filter((c) => c.paid).reduce((s, c) => s + Number(c.total_cny), 0);
                 return (
-                  <div key={subscriber.id} className="rounded-xl border bg-card/50 backdrop-blur-sm overflow-hidden">
-                    <div className="flex items-center justify-between px-4 py-3 border-b">
-                      <div className="flex items-center gap-2.5">
+                  <div key={subscriber.id} className="rounded-2xl border bg-card/50 backdrop-blur-sm overflow-hidden">
+                    <div className="flex items-center justify-between px-5 py-4 border-b">
+                      <div className="flex items-center gap-3">
                         <PersonAvatar name={subscriber.name} index={idx} size="default" />
                         <div>
                           <span className="font-medium text-sm">{subscriber.name}</span>
@@ -819,7 +828,7 @@ export default function SubscriptionPage() {
                         {charges.map((charge) => {
                           const service = data.services.find((s) => s.id === charge.service_id);
                           return (
-                            <div key={charge.id} className="flex items-center justify-between px-4 py-2.5 text-sm hover:bg-muted/30 transition-colors">
+                            <div key={charge.id} className="flex items-center justify-between px-5 py-3.5 text-sm hover:bg-muted/30 transition-colors">
                               <div className="flex items-center gap-2">
                                 <ServiceIcon name={service?.name ?? ""} />
                                 <span>{service?.name}</span>
@@ -857,13 +866,13 @@ export default function SubscriptionPage() {
           data.charges.length === 0 ? (
             <div className="flex flex-col items-center py-16 text-center"><p className="text-sm text-muted-foreground">Add charges to see charts.</p></div>
           ) : (
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="rounded-xl border bg-card/50 backdrop-blur-sm p-4">
-                <p className="text-xs font-medium text-muted-foreground mb-3">Spending by service</p>
+            <div className="grid gap-5 md:grid-cols-2">
+              <div className="rounded-2xl border bg-card/50 backdrop-blur-sm p-6">
+                <p className="text-sm font-medium text-muted-foreground mb-4">Spending by service</p>
                 <SpendingPieChart charges={data.charges} services={data.services} />
               </div>
-              <div className="rounded-xl border bg-card/50 backdrop-blur-sm p-4">
-                <p className="text-xs font-medium text-muted-foreground mb-3">Paid vs unpaid by person</p>
+              <div className="rounded-2xl border bg-card/50 backdrop-blur-sm p-6">
+                <p className="text-sm font-medium text-muted-foreground mb-4">Paid vs unpaid by person</p>
                 <PersonBarChart charges={data.charges} subscribers={data.subscribers} />
               </div>
             </div>
@@ -872,12 +881,12 @@ export default function SubscriptionPage() {
 
         {/* ═══ Settings tab ════════════════════════════════════════════ */}
         {activeTab === "settings" && (
-          <div className="space-y-4">
-            <div className="rounded-xl border bg-card/50 backdrop-blur-sm p-4 space-y-3">
+          <div className="space-y-5">
+            <div className="rounded-2xl border bg-card/50 backdrop-blur-sm p-6 space-y-4">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Subscribers</p>
-              <div className="flex flex-wrap gap-1.5">
+              <div className="flex flex-wrap gap-2">
                 {data.subscribers.map((s, idx) => (
-                  <div key={s.id} className="flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-sm bg-card/50">
+                  <div key={s.id} className="flex items-center gap-2 rounded-xl border px-3 py-2 text-sm bg-card/50">
                     <PersonAvatar name={s.name} index={idx} />
                     {editingSubscriberId === s.id ? (
                       <div className="flex items-center gap-1">
@@ -903,12 +912,12 @@ export default function SubscriptionPage() {
               )}
             </div>
 
-            <div className="rounded-xl border bg-card/50 backdrop-blur-sm p-4 space-y-3">
+            <div className="rounded-2xl border bg-card/50 backdrop-blur-sm p-6 space-y-4">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Services</p>
-              <div className="divide-y -mx-4">
+              <div className="divide-y -mx-6">
                 {data.services.map((service) => (
-                  <div key={service.id} className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/30 transition-colors">
-                    <div className="flex items-center gap-2.5">
+                  <div key={service.id} className="flex items-center justify-between px-6 py-3.5 hover:bg-muted/30 transition-colors">
+                    <div className="flex items-center gap-3">
                       <ServiceIcon name={service.name} size="md" />
                       <div>
                         <span className="text-sm font-medium">{service.name}</span>

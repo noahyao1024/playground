@@ -38,10 +38,24 @@ function monthRange(startMonth: string, endMonth: string): string[] {
   return months;
 }
 
+/** Fetch live exchange rates from our API, with fallback defaults */
+export async function fetchExchangeRates(baseUrl?: string): Promise<Record<string, number>> {
+  const defaults: Record<string, number> = { USD: 7.25, SGD: 5.39 };
+  try {
+    const url = baseUrl ? `${baseUrl}/api/exchange-rate` : "/api/exchange-rate";
+    const res = await fetch(url, { next: { revalidate: 600 } });
+    if (!res.ok) return defaults;
+    const data = await res.json();
+    return { ...defaults, ...data };
+  } catch {
+    return defaults;
+  }
+}
+
 export async function generateChargesForMonth(
   supabase: SupabaseClient,
   month: string,
-  exchangeRate: number = 7.25
+  exchangeRates: Record<string, number> = { USD: 7.25, SGD: 5.39 }
 ): Promise<{ generated: number; details: Array<{ subscriber: string; service: string; total_cny: number }> }> {
   const [
     { data: subscriptions },
@@ -86,7 +100,8 @@ export async function generateChargesForMonth(
       const ratio = prorateRatio(startDate, m);
       if (ratio === 0) continue;
 
-      const totalCny = Number((monthlyCost * ratio * exchangeRate).toFixed(2));
+      const rate = exchangeRates[service.currency] ?? exchangeRates.USD ?? 7.25;
+      const totalCny = Number((monthlyCost * ratio * rate).toFixed(2));
       const note = ratio < 1 ? `Prorated (${Math.round(ratio * 100)}%)` : "Auto-generated";
 
       newCharges.push({
@@ -97,7 +112,7 @@ export async function generateChargesForMonth(
         months: 1,
         monthly_cost: monthlyCost,
         currency: service.currency,
-        exchange_rate: exchangeRate,
+        exchange_rate: rate,
         total_cny: totalCny,
         paid: false,
         note,
