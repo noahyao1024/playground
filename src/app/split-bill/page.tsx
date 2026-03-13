@@ -176,6 +176,7 @@ export default function SubscriptionPage() {
   const [editingChargeNote, setEditingChargeNote] = useState("");
   const [billMonth, setBillMonth] = useState(getCurrentMonth());
   const [billing, setBilling] = useState(false);
+  const [recalculating, setRecalculating] = useState(false);
   const [editingSubscriberId, setEditingSubscriberId] = useState<string | null>(null);
   const [editingSubscriberName, setEditingSubscriberName] = useState("");
 
@@ -357,6 +358,26 @@ export default function SubscriptionPage() {
       toast.error(`Bill failed: ${msg}`);
     } finally {
       setBilling(false);
+    }
+  }
+
+  async function handleRecalcCharges() {
+    if (!requireEdit()) return;
+    setRecalculating(true);
+    try {
+      const res = await fetch("/api/recalc-charges", { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || res.statusText);
+      }
+      const result = await res.json();
+      toast.success(result.updated > 0 ? `Recalculated ${result.updated} charge(s) with live rates` : "All charges already have correct rates");
+      await reload();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Recalc failed: ${msg}`);
+    } finally {
+      setRecalculating(false);
     }
   }
 
@@ -639,6 +660,9 @@ export default function SubscriptionPage() {
                 )}
                 <Button size="sm" className="h-8" onClick={handleBillNow} disabled={billing}>
                   {billing ? "Billing..." : "Bill now"}
+                </Button>
+                <Button variant="outline" size="sm" className="h-8" onClick={handleRecalcCharges} disabled={recalculating}>
+                  {recalculating ? "Recalculating..." : "Recalc rates"}
                 </Button>
               </div>
             )}
