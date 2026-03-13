@@ -102,8 +102,8 @@ export async function fetchSubscriptionData(): Promise<SubscriptionData> {
   if (!supabase) return readLocal();
 
   const [{ data: services }, { data: subscribers }, { data: subscriptions }, { data: charges }] = await Promise.all([
-    supabase.from("services").select("*").order("created_at"),
-    supabase.from("subscribers").select("*").order("created_at"),
+    supabase.from("services").select("*").order("name"),
+    supabase.from("subscribers").select("*").order("name"),
     supabase.from("subscriptions").select("*").order("created_at"),
     supabase.from("charges").select("*").order("created_at"),
   ]);
@@ -159,6 +159,16 @@ export async function addSubscriber(name: string) {
     return newSub;
   }
   return await serverWrite("insert", "subscribers", { data: { name } }) as Subscriber;
+}
+
+export async function updateSubscriber(id: string, updates: Partial<Subscriber>) {
+  if (!supabase) {
+    const data = readLocal();
+    data.subscribers = data.subscribers.map((s) => (s.id === id ? { ...s, ...updates } : s));
+    writeLocal(data);
+    return;
+  }
+  await serverWrite("update", "subscribers", { id, updates });
 }
 
 export async function deleteSubscriber(id: string) {

@@ -23,8 +23,8 @@ export function PersonBarChart({ charges, subscribers }: PersonBarChartProps) {
   if (data.length === 0) return null;
 
   return (
-    <div className="h-[280px] w-full">
-      <ResponsiveContainer width="100%" height="100%">
+    <div className="w-full" style={{ minHeight: 280 }}>
+      <ResponsiveContainer width="99%" height={280}>
         <BarChart data={data} barGap={4}>
           <XAxis
             dataKey="name"

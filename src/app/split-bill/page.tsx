@@ -11,6 +11,7 @@ import {
   updateService as apiUpdateService,
   deleteService as apiDeleteService,
   addSubscriber as apiAddSubscriber,
+  updateSubscriber as apiUpdateSubscriber,
   deleteSubscriber as apiDeleteSubscriber,
   addSubscription as apiAddSubscription,
   updateSubscription as apiUpdateSubscription,
@@ -159,6 +160,8 @@ export default function SubscriptionPage() {
   const [editingChargeNote, setEditingChargeNote] = useState("");
   const [billMonth, setBillMonth] = useState(getCurrentMonth());
   const [billing, setBilling] = useState(false);
+  const [editingSubscriberId, setEditingSubscriberId] = useState<string | null>(null);
+  const [editingSubscriberName, setEditingSubscriberName] = useState("");
 
   const [subForm, setSubForm] = useState({ subscriberId: "", serviceId: "", startDate: new Date().toISOString().slice(0, 10) });
   const [chargeForm, setChargeForm] = useState({ subscriberId: "", serviceId: "", date: new Date().toISOString().slice(0, 10), exchangeRate: 7.25, note: "" });
@@ -204,13 +207,21 @@ export default function SubscriptionPage() {
 
   // ─── Summary ──────────────────────────────────────────────────────
   const summary = useMemo(() => {
-    if (!data) return { totalPaid: 0, totalUnpaid: 0, activeSubs: 0, avgRate: 0 };
+    if (!data) return { totalPaid: 0, totalUnpaid: 0, activeSubs: 0, avgRates: {} as Record<string, number> };
     const totalPaid = data.charges.filter((c) => c.paid).reduce((s, c) => s + Number(c.total_cny), 0);
     const totalUnpaid = data.charges.filter((c) => !c.paid).reduce((s, c) => s + Number(c.total_cny), 0);
     const activeSubs = data.subscriptions.filter((s) => s.active).length;
-    const rates = data.subscriptions.filter((s) => s.active).map((s) => Number(s.exchange_rate));
-    const avgRate = rates.length > 0 ? rates.reduce((a, b) => a + b, 0) / rates.length : 0;
-    return { totalPaid, totalUnpaid, activeSubs, avgRate };
+    const rateByCurrency: Record<string, number[]> = {};
+    for (const c of data.charges) {
+      const cur = c.currency ?? "USD";
+      if (!rateByCurrency[cur]) rateByCurrency[cur] = [];
+      rateByCurrency[cur].push(Number(c.exchange_rate));
+    }
+    const avgRates: Record<string, number> = {};
+    for (const [cur, rates] of Object.entries(rateByCurrency)) {
+      avgRates[cur] = rates.reduce((a, b) => a + b, 0) / rates.length;
+    }
+    return { totalPaid, totalUnpaid, activeSubs, avgRates };
   }, [data]);
 
   // ─── Filtered charges ─────────────────────────────────────────────
@@ -330,6 +341,19 @@ export default function SubscriptionPage() {
     setNewSubscriberName("");
     toast.success(`Added ${newSubscriberName.trim()}`);
     await reload();
+  }
+  async function handleRenameSubscriber(id: string) {
+    if (!requireEdit()) return;
+    const name = editingSubscriberName.trim();
+    if (!name) { toast.error("Name cannot be empty"); return; }
+    try {
+      await apiUpdateSubscriber(id, { name });
+      setEditingSubscriberId(null);
+      toast.success("Renamed");
+      await reload();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to rename");
+    }
   }
   async function handleRemoveSubscriber(id: string) { if (!requireEdit()) return; await apiDeleteSubscriber(id); toast.success("Removed"); await reload(); }
 
@@ -471,7 +495,7 @@ export default function SubscriptionPage() {
           { label: "Paid", value: `\u00a5${summary.totalPaid.toFixed(2)}`, icon: Check, color: "text-emerald-600 dark:text-emerald-400" },
           { label: "Unpaid", value: `\u00a5${summary.totalUnpaid.toFixed(2)}`, icon: Clock, color: "text-amber-600 dark:text-amber-400" },
           { label: "Active subscriptions", value: String(summary.activeSubs), icon: Receipt, color: "text-foreground" },
-          { label: "Avg rate", value: summary.avgRate > 0 ? summary.avgRate.toFixed(4) : "\u2014", icon: TrendingUp, color: "text-foreground" },
+          { label: "Avg rate", value: Object.keys(summary.avgRates).length > 0 ? Object.entries(summary.avgRates).map(([cur, rate]) => `${cur} ${rate.toFixed(2)}`).join(" / ") : "\u2014", icon: TrendingUp, color: "text-foreground" },
         ].map((stat) => (
           <div key={stat.label} className="rounded-lg border bg-card p-4">
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1"><stat.icon className="h-3.5 w-3.5" />{stat.label}</div>
@@ -806,8 +830,19 @@ export default function SubscriptionPage() {
                 {data.subscribers.map((s) => (
                   <div key={s.id} className="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-sm">
                     <Avatar name={s.name} />
-                    {s.name}
-                    {canEdit && <button onClick={() => setConfirmDelete({ type: "subscriber", id: s.id, name: s.name })} className="ml-0.5 rounded p-0.5 hover:bg-muted transition-colors"><X className="h-3 w-3 text-muted-foreground" /></button>}
+                    {editingSubscriberId === s.id ? (
+                      <div className="flex items-center gap-1">
+                        <Input className="h-6 w-24 text-xs" value={editingSubscriberName} onChange={(e) => setEditingSubscriberName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") handleRenameSubscriber(s.id); if (e.key === "Escape") setEditingSubscriberId(null); }} autoFocus />
+                        <button onClick={() => handleRenameSubscriber(s.id)} className="rounded p-0.5 hover:bg-muted transition-colors"><Check className="h-3 w-3" /></button>
+                        <button onClick={() => setEditingSubscriberId(null)} className="rounded p-0.5 hover:bg-muted transition-colors"><X className="h-3 w-3 text-muted-foreground" /></button>
+                      </div>
+                    ) : (
+                      <>
+                        {s.name}
+                        {canEdit && <button onClick={() => { setEditingSubscriberId(s.id); setEditingSubscriberName(s.name); }} className="ml-0.5 rounded p-0.5 hover:bg-muted transition-colors"><Edit2 className="h-3 w-3 text-muted-foreground" /></button>}
+                        {canEdit && <button onClick={() => setConfirmDelete({ type: "subscriber", id: s.id, name: s.name })} className="ml-0.5 rounded p-0.5 hover:bg-muted transition-colors"><X className="h-3 w-3 text-muted-foreground" /></button>}
+                      </>
+                    )}
                   </div>
                 ))}
               </div>

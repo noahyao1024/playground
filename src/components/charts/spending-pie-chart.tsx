@@ -28,8 +28,8 @@ export function SpendingPieChart({ charges, services }: SpendingPieChartProps) {
   if (data.length === 0) return null;
 
   return (
-    <div className="h-[280px] w-full">
-      <ResponsiveContainer width="100%" height="100%">
+    <div className="w-full" style={{ minHeight: 280 }}>
+      <ResponsiveContainer width="99%" height={280}>
         <PieChart>
           <Pie
             data={data}
