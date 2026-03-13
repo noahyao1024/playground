@@ -361,6 +361,22 @@ export default function SubscriptionPage() {
     }
   }
 
+  async function handleClearCharges() {
+    if (!requireEdit()) return;
+    try {
+      const res = await fetch("/api/clear-charges", { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || res.statusText);
+      }
+      toast.success("All charges cleared");
+      await reload();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Clear failed: ${msg}`);
+    }
+  }
+
   async function handleRecalcCharges() {
     if (!requireEdit()) return;
     setRecalculating(true);
@@ -651,7 +667,7 @@ export default function SubscriptionPage() {
         {activeTab === "subscriptions" && (
           <div className="space-y-5">
             {canEdit && (
-              <div className="flex items-center gap-3 rounded-2xl border bg-card/50 p-4 flex-wrap backdrop-blur-sm">
+              <div className="relative z-10 flex items-center gap-3 rounded-2xl border bg-card/50 p-4 flex-wrap backdrop-blur-sm">
                 <Zap className="h-4 w-4 text-amber-500" />
                 <span className="text-sm text-muted-foreground">Generate charges for</span>
                 <MonthPicker value={billMonth} onChange={setBillMonth} />
@@ -676,6 +692,9 @@ export default function SubscriptionPage() {
                 </Button>
                 <Button variant="outline" size="sm" className="h-8" onClick={handleRecalcCharges} disabled={recalculating}>
                   {recalculating ? "Recalculating..." : "Recalc rates"}
+                </Button>
+                <Button variant="outline" size="sm" className="h-8 text-destructive hover:text-destructive" onClick={() => setConfirmDelete({ type: "all-charges", id: "", name: "all charges" })}>
+                  <Trash2 className="mr-1 h-3.5 w-3.5" /> Clear
                 </Button>
               </div>
             )}
@@ -1025,6 +1044,7 @@ export default function SubscriptionPage() {
           if (confirmDelete.type === "subscriber") handleRemoveSubscriber(confirmDelete.id);
           if (confirmDelete.type === "service") handleRemoveService(confirmDelete.id);
           if (confirmDelete.type === "subscription") handleDeleteSubscription(confirmDelete.id);
+          if (confirmDelete.type === "all-charges") handleClearCharges();
         }}
       />
 
