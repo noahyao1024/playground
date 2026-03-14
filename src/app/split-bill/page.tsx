@@ -37,6 +37,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Avatar as ShadAvatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MonthPicker } from "@/components/month-picker";
 import {
   Plus, Trash2, Edit2, Check, X,
@@ -530,17 +531,25 @@ export default function SubscriptionPage() {
               <div className="grid gap-4 pt-2">
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Subscriber</Label>
-                  <select value={subForm.subscriberId} onChange={(e) => setSubForm({ ...subForm, subscriberId: e.target.value })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
-                    <option value="">Select person</option>
-                    {data.subscribers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
+                  <Select value={subForm.subscriberId} onValueChange={(val) => setSubForm({ ...subForm, subscriberId: val as string })}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="Select person" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {data.subscribers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Service</Label>
-                  <select value={subForm.serviceId} onChange={(e) => setSubForm({ ...subForm, serviceId: e.target.value })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
-                    <option value="">Select service</option>
-                    {data.services.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</option>)}
-                  </select>
+                  <Select value={subForm.serviceId} onValueChange={(val) => setSubForm({ ...subForm, serviceId: val as string })}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue placeholder="Select service" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {data.services.map((s) => <SelectItem key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Start date</Label>
@@ -610,21 +619,29 @@ export default function SubscriptionPage() {
                       <div className="grid gap-4 pt-2">
                         <div className="grid gap-1.5">
                           <Label className="text-xs text-muted-foreground">Subscriber</Label>
-                          <select value={chargeForm.subscriberId} onChange={(e) => setChargeForm({ ...chargeForm, subscriberId: e.target.value })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
-                            <option value="">Select person</option>
-                            {data.subscribers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                          </select>
+                          <Select value={chargeForm.subscriberId} onValueChange={(val) => setChargeForm({ ...chargeForm, subscriberId: val as string })}>
+                            <SelectTrigger className="w-full h-9">
+                              <SelectValue placeholder="Select person" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {data.subscribers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
                         </div>
                         <div className="grid gap-1.5">
                           <Label className="text-xs text-muted-foreground">Service</Label>
-                          <select value={chargeForm.serviceId} onChange={(e) => {
-                            const svc = data.services.find((s) => s.id === e.target.value);
+                          <Select value={chargeForm.serviceId} onValueChange={(val) => {
+                            const svc = data.services.find((s) => s.id === val);
                             const rate = svc && liveRates?.[svc.currency] ? liveRates[svc.currency] : chargeForm.exchangeRate;
-                            setChargeForm({ ...chargeForm, serviceId: e.target.value, exchangeRate: rate });
-                          }} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
-                            <option value="">Select service</option>
-                            {data.services.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</option>)}
-                          </select>
+                            setChargeForm({ ...chargeForm, serviceId: val as string, exchangeRate: rate });
+                          }}>
+                            <SelectTrigger className="w-full h-9">
+                              <SelectValue placeholder="Select service" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {data.services.map((s) => <SelectItem key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</SelectItem>)}
+                            </SelectContent>
+                          </Select>
                         </div>
                         <div className="grid gap-1.5">
                           <Label className="text-xs text-muted-foreground">Date</Label>
@@ -1017,14 +1034,15 @@ export default function SubscriptionPage() {
                 </div>
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Currency</Label>
-                  <select
-                    value={editingService.currency}
-                    onChange={(e) => setEditingService({ ...editingService, currency: e.target.value as Currency })}
-                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
-                    <option value="USD">USD</option>
-                    <option value="SGD">SGD</option>
-                  </select>
+                  <Select value={editingService.currency} onValueChange={(val) => setEditingService({ ...editingService, currency: val as Currency })}>
+                    <SelectTrigger className="w-full h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="USD">USD</SelectItem>
+                      <SelectItem value="SGD">SGD</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
               <Button size="sm" onClick={handleSaveService}>Save</Button>
