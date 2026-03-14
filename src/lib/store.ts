@@ -38,6 +38,7 @@ export interface Subscription {
   start_date: string; // YYYY-MM-DD
   exchange_rate?: number; // legacy, now set at charge time
   active: boolean;
+  payment_method_id?: string;
   created_at?: string;
 }
 
@@ -54,8 +55,42 @@ export interface ChargeRecord {
   total_cny: number;
   paid: boolean;
   paid_date?: string;
+  payment_method_id?: string;
   note?: string;
   created_at?: string;
+}
+
+export type CardType = "visa" | "mastercard" | "amex" | "discover" | "unionpay" | "jcb" | "diners" | "unknown";
+
+export interface PaymentMethod {
+  id: string;
+  label: string;
+  cardholder_name: string;
+  card_type: CardType;
+  last4: string;
+  expiry_month: number;
+  expiry_year: number;
+  is_default: boolean;
+  created_at?: string;
+}
+
+export function detectCardType(cardNumber: string): CardType {
+  const n = cardNumber.replace(/\D/g, "");
+  if (!n) return "unknown";
+  if (/^4/.test(n)) return "visa";
+  if (/^5[1-5]/.test(n) || /^2(2[2-9][1-9]|2[3-9]\d|[3-6]\d{2}|7[01]\d|720)/.test(n)) return "mastercard";
+  if (/^3[47]/.test(n)) return "amex";
+  if (/^6(?:011|5)/.test(n)) return "discover";
+  if (/^62/.test(n)) return "unionpay";
+  if (/^35(?:2[89]|[3-8])/.test(n)) return "jcb";
+  if (/^3(?:0[0-5]|[68])/.test(n)) return "diners";
+  return "unknown";
+}
+
+export function maskCardNumber(cardNumber: string): string {
+  const n = cardNumber.replace(/\D/g, "");
+  if (n.length < 4) return n;
+  return `**** **** **** ${n.slice(-4)}`;
 }
 
 export interface SubscriptionData {
@@ -63,6 +98,7 @@ export interface SubscriptionData {
   subscribers: Subscriber[];
   subscriptions: Subscription[];
   charges: ChargeRecord[];
+  payment_methods: PaymentMethod[];
 }
 
 // ─── localStorage fallback helpers ───────────────────────────────────
@@ -70,7 +106,7 @@ export interface SubscriptionData {
 const LS_KEY = "subscriptionData";
 
 function readLocal(): SubscriptionData {
-  if (typeof window === "undefined") return { services: [], subscribers: [], subscriptions: [], charges: [] };
+  if (typeof window === "undefined") return { services: [], subscribers: [], subscriptions: [], charges: [], payment_methods: [] };
   try {
     const raw = localStorage.getItem(LS_KEY);
     const data = raw ? JSON.parse(raw) : {};
@@ -79,9 +115,10 @@ function readLocal(): SubscriptionData {
       subscribers: data.subscribers ?? [],
       subscriptions: data.subscriptions ?? [],
       charges: data.charges ?? [],
+      payment_methods: data.payment_methods ?? [],
     };
   } catch {
-    return { services: [], subscribers: [], subscriptions: [], charges: [] };
+    return { services: [], subscribers: [], subscriptions: [], charges: [], payment_methods: [] };
   }
 }
 
@@ -101,17 +138,19 @@ function localId(): string {
 export async function fetchSubscriptionData(): Promise<SubscriptionData> {
   if (!supabase) return readLocal();
 
-  const [{ data: services }, { data: subscribers }, { data: subscriptions }, { data: charges }] = await Promise.all([
+  const [{ data: services }, { data: subscribers }, { data: subscriptions }, { data: charges }, { data: payment_methods }] = await Promise.all([
     supabase.from("services").select("*").order("name"),
     supabase.from("subscribers").select("*").order("name"),
     supabase.from("subscriptions").select("*").order("created_at"),
     supabase.from("charges").select("*").order("created_at"),
+    supabase.from("payment_methods").select("*").order("created_at"),
   ]);
   return {
     services: (services ?? []) as Service[],
     subscribers: (subscribers ?? []) as Subscriber[],
     subscriptions: (subscriptions ?? []) as Subscription[],
     charges: (charges ?? []) as ChargeRecord[],
+    payment_methods: (payment_methods ?? []) as PaymentMethod[],
   };
 }
 
@@ -245,6 +284,47 @@ export async function deleteCharge(id: string) {
     return;
   }
   await serverWrite("delete", "charges", { id });
+}
+
+// ─── Payment Methods ──────────────────────────────────────────────────
+
+export async function addPaymentMethod(pm: Omit<PaymentMethod, "id" | "created_at">) {
+  if (!supabase) {
+    const data = readLocal();
+    if (pm.is_default) data.payment_methods = data.payment_methods.map((p) => ({ ...p, is_default: false }));
+    const newPm: PaymentMethod = { id: localId(), ...pm };
+    data.payment_methods.push(newPm);
+    writeLocal(data);
+    return newPm;
+  }
+  if (pm.is_default) {
+    await serverWrite("update", "payment_methods", { id: "__all__", updates: { is_default: false } }).catch(() => {});
+  }
+  return await serverWrite("insert", "payment_methods", { data: pm }) as PaymentMethod;
+}
+
+export async function updatePaymentMethod(id: string, updates: Partial<PaymentMethod>) {
+  if (!supabase) {
+    const data = readLocal();
+    if (updates.is_default) data.payment_methods = data.payment_methods.map((p) => ({ ...p, is_default: false }));
+    data.payment_methods = data.payment_methods.map((p) => (p.id === id ? { ...p, ...updates } : p));
+    writeLocal(data);
+    return;
+  }
+  if (updates.is_default) {
+    await serverWrite("update", "payment_methods", { id: "__all__", updates: { is_default: false } }).catch(() => {});
+  }
+  await serverWrite("update", "payment_methods", { id, updates });
+}
+
+export async function deletePaymentMethod(id: string) {
+  if (!supabase) {
+    const data = readLocal();
+    data.payment_methods = data.payment_methods.filter((p) => p.id !== id);
+    writeLocal(data);
+    return;
+  }
+  await serverWrite("delete", "payment_methods", { id });
 }
 
 // ─── Client-side billing (localStorage fallback) ─────────────────────

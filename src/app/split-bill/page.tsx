@@ -19,6 +19,11 @@ import {
   addCharge as apiAddCharge,
   updateCharge as apiUpdateCharge,
   deleteCharge as apiDeleteCharge,
+  addPaymentMethod as apiAddPaymentMethod,
+  updatePaymentMethod as apiUpdatePaymentMethod,
+  deletePaymentMethod as apiDeletePaymentMethod,
+  detectCardType,
+  maskCardNumber,
   billNowClient,
   calcMonths,
   calcTotalCNY,
@@ -27,6 +32,8 @@ import {
   type Service,
   type Subscription,
   type ChargeRecord,
+  type PaymentMethod,
+  type CardType,
   type Currency,
 } from "@/lib/store";
 
@@ -41,7 +48,7 @@ import {
   Plus, Trash2, Edit2, Check, X, Users, DollarSign, Settings,
   Search, Download, CheckCheck, TrendingUp, Clock,
   ArrowUpDown, ChevronLeft, ChevronRight, BarChart3, Keyboard,
-  Zap, Pause, Play, Receipt, Lock,
+  Zap, Pause, Play, Receipt, Lock, CreditCard, Star,
 } from "lucide-react";
 import { SpendingPieChart } from "@/components/charts/spending-pie-chart";
 import { PersonBarChart } from "@/components/charts/person-bar-chart";
@@ -93,7 +100,7 @@ function KeyboardHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
       <DialogContent>
         <DialogHeader><DialogTitle>Keyboard Shortcuts</DialogTitle></DialogHeader>
         <div className="space-y-2 text-sm">
-          {[["?", "Show help"], ["n", "New subscription"], ["/", "Focus search"], ["1-5", "Switch tabs"]].map(([key, desc]) => (
+          {[["?", "Show help"], ["n", "New subscription"], ["/", "Focus search"], ["1-6", "Switch tabs"]].map(([key, desc]) => (
             <div key={key} className="flex items-center justify-between">
               <span className="text-muted-foreground">{desc}</span>
               <kbd className="rounded border bg-muted px-2 py-0.5 font-mono text-xs">{key}</kbd>
@@ -129,6 +136,35 @@ function Tab({ active, onClick, children }: { active: boolean; onClick: () => vo
       {children}
     </button>
   );
+}
+
+const CARD_TYPE_LABELS: Record<string, string> = {
+  visa: "Visa", mastercard: "MC", amex: "Amex", discover: "Discover",
+  unionpay: "UnionPay", jcb: "JCB", diners: "Diners", unknown: "Card",
+};
+
+function CardIcon({ type, className = "h-4 w-4" }: { type: string; className?: string }) {
+  const colors: Record<string, string> = {
+    visa: "text-blue-500", mastercard: "text-orange-500", amex: "text-indigo-500",
+    discover: "text-amber-500", unionpay: "text-red-500", jcb: "text-green-500",
+    diners: "text-cyan-500", unknown: "text-muted-foreground",
+  };
+  return <CreditCard className={`${className} ${colors[type] ?? colors.unknown}`} />;
+}
+
+function PaymentMethodBadge({ pm }: { pm: PaymentMethod | undefined }) {
+  if (!pm) return <span className="text-xs text-muted-foreground">—</span>;
+  return (
+    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+      <CardIcon type={pm.card_type} className="h-3 w-3" />
+      <span>{CARD_TYPE_LABELS[pm.card_type] ?? "Card"} ****{pm.last4}</span>
+    </span>
+  );
+}
+
+function formatCardInput(value: string): string {
+  const digits = value.replace(/\D/g, "").slice(0, 16);
+  return digits.replace(/(.{4})/g, "$1 ").trim();
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -168,6 +204,13 @@ export default function SubscriptionPage() {
   const [billExchangeRate, setBillExchangeRate] = useState(7.25);
   const [liveRates, setLiveRates] = useState<Record<string, number> | null>(null);
 
+  // Payment methods
+  const [addPmOpen, setAddPmOpen] = useState(false);
+  const [editingPm, setEditingPm] = useState<PaymentMethod | null>(null);
+  const [pmForm, setPmForm] = useState({ label: "", cardholderName: "", cardNumber: "", expiryMonth: new Date().getMonth() + 1, expiryYear: new Date().getFullYear() + 1, isDefault: false });
+  const [payChargeMethodOpen, setPayChargeMethodOpen] = useState<string | null>(null);
+  const [subPayMethodOpen, setSubPayMethodOpen] = useState<string | null>(null);
+
   function requireEdit(): boolean {
     if (canEdit) return true;
     if (!session?.user) { toast.error("Sign in to make changes"); router.push("/auth/signin"); return false; }
@@ -181,7 +224,7 @@ export default function SubscriptionPage() {
       setData(d);
     } catch (err) {
       console.error("Failed to load data:", err);
-      setData({ services: [], subscribers: [], subscriptions: [], charges: [] });
+      setData({ services: [], subscribers: [], subscriptions: [], charges: [], payment_methods: [] });
     } finally {
       setLoading(false);
     }
@@ -215,8 +258,9 @@ export default function SubscriptionPage() {
       if (e.key === "1") setActiveTab("subscriptions");
       if (e.key === "2") setActiveTab("charges");
       if (e.key === "3") setActiveTab("people");
-      if (e.key === "4") setActiveTab("charts");
-      if (e.key === "5") setActiveTab("settings");
+      if (e.key === "4") setActiveTab("payment-methods");
+      if (e.key === "5") setActiveTab("charts");
+      if (e.key === "6") setActiveTab("settings");
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -436,6 +480,65 @@ export default function SubscriptionPage() {
     setEditingChargeId(null); toast.success("Note updated"); await reload();
   }
 
+  // ─── Payment method actions ──────────────────────────────────────
+  function resetPmForm() {
+    setPmForm({ label: "", cardholderName: "", cardNumber: "", expiryMonth: new Date().getMonth() + 1, expiryYear: new Date().getFullYear() + 1, isDefault: false });
+  }
+
+  async function handleSavePaymentMethod() {
+    if (!requireEdit()) return;
+    const digits = pmForm.cardNumber.replace(/\D/g, "");
+    if (digits.length < 4) { toast.error("Enter a valid card number"); return; }
+    if (!pmForm.cardholderName.trim()) { toast.error("Enter cardholder name"); return; }
+    const pm = {
+      label: pmForm.label.trim() || `${CARD_TYPE_LABELS[detectCardType(digits)]} ****${digits.slice(-4)}`,
+      cardholder_name: pmForm.cardholderName.trim(),
+      card_type: detectCardType(digits),
+      last4: digits.slice(-4),
+      expiry_month: pmForm.expiryMonth,
+      expiry_year: pmForm.expiryYear,
+      is_default: pmForm.isDefault,
+    };
+    try {
+      if (editingPm) {
+        await apiUpdatePaymentMethod(editingPm.id, pm);
+        toast.success("Payment method updated");
+      } else {
+        await apiAddPaymentMethod(pm);
+        toast.success("Payment method added");
+      }
+      setAddPmOpen(false);
+      setEditingPm(null);
+      resetPmForm();
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save");
+    }
+  }
+
+  async function handleDeletePaymentMethod(id: string) {
+    if (!requireEdit()) return;
+    await apiDeletePaymentMethod(id);
+    toast.success("Payment method removed");
+    await reload();
+  }
+
+  async function handleSetChargePaymentMethod(chargeId: string, pmId: string | undefined) {
+    if (!requireEdit()) return;
+    await apiUpdateCharge(chargeId, { payment_method_id: pmId || undefined });
+    setPayChargeMethodOpen(null);
+    toast.success("Payment method updated");
+    await reload();
+  }
+
+  async function handleSetSubPaymentMethod(subId: string, pmId: string | undefined) {
+    if (!requireEdit()) return;
+    await apiUpdateSubscription(subId, { payment_method_id: pmId || undefined });
+    setSubPayMethodOpen(null);
+    toast.success("Payment method updated");
+    await reload();
+  }
+
   // ─── Per-subscriber helpers ───────────────────────────────────────
   function subscriberCharges(subscriberId: string) { return data!.charges.filter((c) => c.subscriber_id === subscriberId); }
   function subscriberUnpaid(subscriberId: string) { return subscriberCharges(subscriberId).filter((c) => !c.paid).reduce((s, c) => s + Number(c.total_cny), 0); }
@@ -528,6 +631,7 @@ export default function SubscriptionPage() {
             <Tab active={activeTab === "subscriptions"} onClick={() => setActiveTab("subscriptions")}>Subscriptions</Tab>
             <Tab active={activeTab === "charges"} onClick={() => setActiveTab("charges")}>Charges</Tab>
             <Tab active={activeTab === "people"} onClick={() => setActiveTab("people")}>People</Tab>
+            <Tab active={activeTab === "payment-methods"} onClick={() => setActiveTab("payment-methods")}>Cards</Tab>
             <Tab active={activeTab === "charts"} onClick={() => setActiveTab("charts")}>Charts</Tab>
             <Tab active={activeTab === "settings"} onClick={() => setActiveTab("settings")}>Settings</Tab>
           </div>
@@ -644,8 +748,27 @@ export default function SubscriptionPage() {
                               <span className="text-muted-foreground">{"\u2192"}</span>
                               <span>{service?.name ?? "?"}</span>
                             </div>
-                            <div className="text-xs text-muted-foreground tabular-nums">
-                              {service?.monthly_cost} {service?.currency}/mo {"\u00b7"} since {sub.start_date ?? sub.created_at?.slice(0, 10) ?? "—"}
+                            <div className="flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
+                              <span>{service?.monthly_cost} {service?.currency}/mo {"\u00b7"} since {sub.start_date ?? sub.created_at?.slice(0, 10) ?? "—"}</span>
+                              {"\u00b7"}
+                              {canEdit && subPayMethodOpen === sub.id ? (
+                                <select
+                                  value={sub.payment_method_id ?? ""}
+                                  onChange={(e) => handleSetSubPaymentMethod(sub.id, e.target.value || undefined)}
+                                  className="h-6 rounded border border-input bg-background px-1.5 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                  autoFocus
+                                  onBlur={() => setSubPayMethodOpen(null)}
+                                >
+                                  <option value="">No card</option>
+                                  {(data.payment_methods ?? []).map((pm) => (
+                                    <option key={pm.id} value={pm.id}>{pm.label || `${CARD_TYPE_LABELS[pm.card_type]} ****${pm.last4}`}</option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <button onClick={() => canEdit && setSubPayMethodOpen(sub.id)} className={`${canEdit ? "hover:bg-muted/50 rounded px-1 py-0.5 transition-colors cursor-pointer" : ""}`}>
+                                  <PaymentMethodBadge pm={(data.payment_methods ?? []).find((p) => p.id === sub.payment_method_id)} />
+                                </button>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -692,6 +815,7 @@ export default function SubscriptionPage() {
                         <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground">Rate</th>
                         <SortHeader column="total">Total</SortHeader>
                         <SortHeader column="paid">Status</SortHeader>
+                        <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground">Card</th>
                         {canEdit && <th className="h-9 px-3 w-16"></th>}
                       </tr>
                     </thead>
@@ -718,6 +842,32 @@ export default function SubscriptionPage() {
                                   <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
                                     {charge.paid ? "Paid" : "Unpaid"}
                                   </span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2.5">
+                                {canEdit ? (
+                                  payChargeMethodOpen === charge.id ? (
+                                    <div className="flex items-center gap-1">
+                                      <select
+                                        value={charge.payment_method_id ?? ""}
+                                        onChange={(e) => handleSetChargePaymentMethod(charge.id, e.target.value || undefined)}
+                                        className="h-7 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                                        autoFocus
+                                        onBlur={() => setPayChargeMethodOpen(null)}
+                                      >
+                                        <option value="">None</option>
+                                        {(data.payment_methods ?? []).map((pm) => (
+                                          <option key={pm.id} value={pm.id}>{pm.label || `${CARD_TYPE_LABELS[pm.card_type]} ****${pm.last4}`}</option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  ) : (
+                                    <button onClick={() => setPayChargeMethodOpen(charge.id)} className="hover:bg-muted/50 rounded px-1 py-0.5 transition-colors">
+                                      <PaymentMethodBadge pm={(data.payment_methods ?? []).find((p) => p.id === charge.payment_method_id)} />
+                                    </button>
+                                  )
+                                ) : (
+                                  <PaymentMethodBadge pm={(data.payment_methods ?? []).find((p) => p.id === charge.payment_method_id)} />
                                 )}
                               </td>
                               {canEdit && (
@@ -825,6 +975,91 @@ export default function SubscriptionPage() {
                   </div>
                 );
               })
+            )}
+          </div>
+        )}
+
+        {/* ═══ Payment Methods tab ═════════════════════════════════════ */}
+        {activeTab === "payment-methods" && (
+          <div className="space-y-4">
+            {canEdit && (
+              <div className="flex justify-end">
+                <Button size="sm" className="h-8" onClick={() => { resetPmForm(); setEditingPm(null); setAddPmOpen(true); }}>
+                  <Plus className="mr-1.5 h-3.5 w-3.5" /> Add card
+                </Button>
+              </div>
+            )}
+            {(data.payment_methods ?? []).length === 0 ? (
+              <div className="flex flex-col items-center py-16 text-center">
+                <CreditCard className="h-8 w-8 text-muted-foreground/30 mb-3" />
+                <p className="text-sm text-muted-foreground">No payment methods yet.</p>
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {(data.payment_methods ?? []).map((pm) => (
+                  <motion.div key={pm.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="rounded-lg border bg-card p-4 space-y-3 relative">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2.5">
+                        <CardIcon type={pm.card_type} className="h-5 w-5" />
+                        <div>
+                          <div className="text-sm font-medium tabular-nums">**** **** **** {pm.last4}</div>
+                          <div className="text-xs text-muted-foreground">{CARD_TYPE_LABELS[pm.card_type] ?? "Card"}</div>
+                        </div>
+                      </div>
+                      {pm.is_default && (
+                        <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                          <Star className="h-2.5 w-2.5" /> Default
+                        </span>
+                      )}
+                    </div>
+                    <div className="space-y-1 text-xs text-muted-foreground">
+                      <div className="flex justify-between"><span>Cardholder</span><span className="font-medium text-foreground">{pm.cardholder_name}</span></div>
+                      {pm.label && <div className="flex justify-between"><span>Label</span><span className="font-medium text-foreground">{pm.label}</span></div>}
+                      <div className="flex justify-between"><span>Expires</span><span className="font-medium text-foreground tabular-nums">{String(pm.expiry_month).padStart(2, "0")}/{pm.expiry_year}</span></div>
+                    </div>
+                    {canEdit && (
+                      <div className="flex gap-1 pt-1 border-t">
+                        <button
+                          onClick={() => {
+                            setEditingPm(pm);
+                            setPmForm({
+                              label: pm.label,
+                              cardholderName: pm.cardholder_name,
+                              cardNumber: `**** **** **** ${pm.last4}`,
+                              expiryMonth: pm.expiry_month,
+                              expiryYear: pm.expiry_year,
+                              isDefault: pm.is_default,
+                            });
+                            setAddPmOpen(true);
+                          }}
+                          className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"
+                        >
+                          <Edit2 className="h-3 w-3 text-muted-foreground" />
+                        </button>
+                        {!pm.is_default && (
+                          <Tooltip>
+                            <TooltipTrigger render={
+                              <button
+                                onClick={async () => { if (!requireEdit()) return; await apiUpdatePaymentMethod(pm.id, { is_default: true }); toast.success("Set as default"); await reload(); }}
+                                className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"
+                              />
+                            }>
+                              <Star className="h-3 w-3 text-muted-foreground" />
+                            </TooltipTrigger>
+                            <TooltipContent>Set as default</TooltipContent>
+                          </Tooltip>
+                        )}
+                        <button
+                          onClick={() => setConfirmDelete({ type: "payment_method", id: pm.id, name: `${CARD_TYPE_LABELS[pm.card_type]} ****${pm.last4}` })}
+                          className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"
+                        >
+                          <Trash2 className="h-3 w-3 text-muted-foreground" />
+                        </button>
+                      </div>
+                    )}
+                  </motion.div>
+                ))}
+              </div>
             )}
           </div>
         )}
@@ -942,6 +1177,75 @@ export default function SubscriptionPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Add/Edit payment method dialog */}
+      <Dialog open={addPmOpen} onOpenChange={(open) => { setAddPmOpen(open); if (!open) { setEditingPm(null); resetPmForm(); } }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>{editingPm ? "Edit Payment Method" : "Add Payment Method"}</DialogTitle></DialogHeader>
+          <div className="grid gap-4 pt-2">
+            <div className="grid gap-1.5">
+              <Label className="text-xs text-muted-foreground">Card number</Label>
+              <div className="relative">
+                <Input
+                  className="h-9 pr-10 tabular-nums"
+                  placeholder="4242 4242 4242 4242"
+                  value={pmForm.cardNumber}
+                  onChange={(e) => {
+                    const formatted = formatCardInput(e.target.value);
+                    setPmForm({ ...pmForm, cardNumber: formatted });
+                  }}
+                  maxLength={19}
+                />
+                <div className="absolute right-3 top-2.5">
+                  <CardIcon type={detectCardType(pmForm.cardNumber)} className="h-4 w-4" />
+                </div>
+              </div>
+              {pmForm.cardNumber.replace(/\D/g, "").length >= 2 && (
+                <span className="text-[10px] text-muted-foreground">Detected: {CARD_TYPE_LABELS[detectCardType(pmForm.cardNumber)]}</span>
+              )}
+            </div>
+            <div className="grid gap-1.5">
+              <Label className="text-xs text-muted-foreground">Cardholder name</Label>
+              <Input className="h-9" placeholder="John Doe" value={pmForm.cardholderName} onChange={(e) => setPmForm({ ...pmForm, cardholderName: e.target.value })} />
+            </div>
+            <div className="grid gap-1.5">
+              <Label className="text-xs text-muted-foreground">Label / nickname (optional)</Label>
+              <Input className="h-9" placeholder="e.g. Personal Visa" value={pmForm.label} onChange={(e) => setPmForm({ ...pmForm, label: e.target.value })} />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-1.5">
+                <Label className="text-xs text-muted-foreground">Expiry month</Label>
+                <select
+                  value={pmForm.expiryMonth}
+                  onChange={(e) => setPmForm({ ...pmForm, expiryMonth: Number(e.target.value) })}
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                    <option key={m} value={m}>{String(m).padStart(2, "0")}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="grid gap-1.5">
+                <Label className="text-xs text-muted-foreground">Expiry year</Label>
+                <select
+                  value={pmForm.expiryYear}
+                  onChange={(e) => setPmForm({ ...pmForm, expiryYear: Number(e.target.value) })}
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  {Array.from({ length: 12 }, (_, i) => new Date().getFullYear() + i).map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={pmForm.isDefault} onChange={(e) => setPmForm({ ...pmForm, isDefault: e.target.checked })} className="h-4 w-4 rounded border-input" />
+              <span className="text-sm">Set as default payment method</span>
+            </label>
+            <Button size="sm" onClick={handleSavePaymentMethod}>{editingPm ? "Save changes" : "Add card"}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <ConfirmDialog
         open={!!confirmDelete}
         onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
@@ -953,6 +1257,7 @@ export default function SubscriptionPage() {
           if (confirmDelete.type === "subscriber") handleRemoveSubscriber(confirmDelete.id);
           if (confirmDelete.type === "service") handleRemoveService(confirmDelete.id);
           if (confirmDelete.type === "subscription") handleDeleteSubscription(confirmDelete.id);
+          if (confirmDelete.type === "payment_method") handleDeletePaymentMethod(confirmDelete.id);
         }}
       />
 
