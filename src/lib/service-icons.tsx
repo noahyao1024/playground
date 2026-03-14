@@ -1,6 +1,8 @@
 import {
   Bot, Play, Music, Tv, Cloud, MousePointer, Code,
   FileText, Globe, Shield, Mail, Database, Cpu, Wifi,
+  Sparkles, Compass, Image, Zap, MessageCircle, Brain,
+  Apple, Search, Rocket, BookOpen, Video, Headphones,
   type LucideIcon,
 } from "lucide-react";
 
@@ -11,19 +13,38 @@ interface ServiceIconInfo {
 }
 
 const SERVICE_MAP: [string[], LucideIcon, string, string][] = [
-  [["chatgpt", "openai", "gpt"], Bot, "oklch(0.65 0.25 290)", "oklch(0.55 0.28 310)"],
-  [["youtube"], Play, "oklch(0.63 0.25 25)", "oklch(0.55 0.28 15)"],
-  [["spotify"], Music, "oklch(0.72 0.2 155)", "oklch(0.62 0.22 145)"],
-  [["netflix"], Tv, "oklch(0.6 0.26 20)", "oklch(0.5 0.28 30)"],
-  [["icloud", "cloud", "drive"], Cloud, "oklch(0.7 0.15 240)", "oklch(0.6 0.2 250)"],
-  [["cursor"], MousePointer, "oklch(0.6 0.22 280)", "oklch(0.5 0.25 295)"],
-  [["github", "copilot"], Code, "oklch(0.55 0.05 270)", "oklch(0.4 0.08 280)"],
-  [["notion"], FileText, "oklch(0.55 0.08 60)", "oklch(0.45 0.1 50)"],
-  [["vpn", "nord", "express", "surf"], Shield, "oklch(0.65 0.2 210)", "oklch(0.55 0.22 220)"],
-  [["mail", "email", "outlook", "gmail"], Mail, "oklch(0.65 0.18 230)", "oklch(0.55 0.2 240)"],
-  [["supabase", "database", "mongo", "postgres"], Database, "oklch(0.7 0.18 160)", "oklch(0.6 0.2 150)"],
-  [["vercel", "server", "aws", "hosting"], Cpu, "oklch(0.5 0.05 260)", "oklch(0.4 0.08 270)"],
-  [["wifi", "internet", "broadband"], Wifi, "oklch(0.65 0.2 200)", "oklch(0.55 0.22 210)"],
+  // ─── AI Services ───────────────────────────────────────────────────
+  [["chatgpt", "openai", "gpt"], Bot, "#10a37f", "#1a7f64"],
+  [["claude", "anthropic"], MessageCircle, "#d97706", "#b45309"],
+  [["gemini", "google ai", "bard"], Sparkles, "#4285f4", "#1a73e8"],
+  [["copilot", "github copilot"], Zap, "#6e40c9", "#553098"],
+  [["cursor"], MousePointer, "#7c3aed", "#5b21b6"],
+  [["midjourney", "mj"], Image, "#fff", "#c2c2c2"],
+  [["perplexity"], Compass, "#20b2aa", "#178f89"],
+  [["poe"], Brain, "#6366f1", "#4f46e5"],
+
+  // ─── Streaming & Media ────────────────────────────────────────────
+  [["youtube", "youtube premium"], Play, "#ff0000", "#cc0000"],
+  [["spotify"], Music, "#1db954", "#169c46"],
+  [["netflix"], Tv, "#e50914", "#b8070f"],
+  [["apple music"], Headphones, "#fc3c44", "#d63139"],
+  [["apple", "icloud", "apple one"], Apple, "#555", "#333"],
+  [["bilibili"], Video, "#00a1d6", "#0088b5"],
+
+  // ─── Dev & Cloud ──────────────────────────────────────────────────
+  [["github"], Code, "#333", "#111"],
+  [["notion"], FileText, "#333", "#111"],
+  [["supabase"], Database, "#3ecf8e", "#2ea96d"],
+  [["vercel"], Cpu, "#333", "#111"],
+  [["aws", "amazon"], Cloud, "#ff9900", "#cc7a00"],
+  [["google", "gcp", "workspace"], Search, "#4285f4", "#1a73e8"],
+  [["microsoft", "azure", "office", "365"], Rocket, "#00a4ef", "#0088cc"],
+
+  // ─── Productivity ─────────────────────────────────────────────────
+  [["vpn", "nord", "express", "surf"], Shield, "#4687ff", "#3366cc"],
+  [["mail", "email", "outlook", "gmail"], Mail, "#ea4335", "#cc3a2e"],
+  [["wifi", "internet", "broadband"], Wifi, "#2196f3", "#1976d2"],
+  [["read", "kindle", "book"], BookOpen, "#ff9900", "#cc7a00"],
 ];
 
 export function getServiceIcon(name: string): ServiceIconInfo {
@@ -33,7 +54,7 @@ export function getServiceIcon(name: string): ServiceIconInfo {
       return { Icon, from, to };
     }
   }
-  return { Icon: Globe, from: "oklch(0.6 0.12 250)", to: "oklch(0.5 0.15 260)" };
+  return { Icon: Globe, from: "#6366f1", to: "#4f46e5" };
 }
 
 export interface PersonColor {

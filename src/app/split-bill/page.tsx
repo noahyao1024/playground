@@ -755,7 +755,7 @@ export default function SubscriptionPage() {
                           return (
                             <div className="rounded-md border bg-muted/50 px-3 py-2.5 text-sm">
                               <span className="text-muted-foreground">{service.monthly_cost} {service.currency} x {chargeForm.exchangeRate} = </span>
-                              <span className="font-semibold tabular-nums">{"\u00a5 "}{total.toFixed(2)}</span>
+                              <span className="text-lg font-bold tabular-nums">{"\u00a5 "}{total.toFixed(2)}</span>
                             </div>
                           );
                         })()}
@@ -814,14 +814,14 @@ export default function SubscriptionPage() {
                     const subscriber = data.subscribers.find((s) => s.id === sub.subscriber_id);
                     const service = data.services.find((s) => s.id === sub.service_id);
                     return (
-                      <div key={sub.id} className={`flex items-center justify-between px-4 py-3 transition-colors hover:bg-muted/30 ${!sub.active ? "opacity-50" : ""}`}>
+                      <div key={sub.id} className={`flex items-center justify-between px-5 py-4 transition-colors hover:bg-muted/30 ${!sub.active ? "opacity-50" : ""}`}>
                         <div className="flex items-center gap-3 min-w-0">
-                          <Avatar name={subscriber?.name ?? "?"} />
+                          <ServiceIcon name={service?.name ?? ""} />
                           <div className="min-w-0">
                             <div className="flex items-center gap-2 text-sm">
-                              <span className="font-medium">{subscriber?.name ?? "?"}</span>
+                              <span className="font-medium">{service?.name ?? "?"}</span>
                               <span className="text-muted-foreground">{"\u2192"}</span>
-                              <span>{service?.name ?? "?"}</span>
+                              <span className="text-muted-foreground">{subscriber?.name ?? "?"}</span>
                             </div>
                             <div className="flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
                               <span>{service?.monthly_cost} {service?.currency}/mo {"\u00b7"} since {sub.start_date ?? sub.created_at?.slice(0, 10) ?? "—"}</span>
@@ -901,13 +901,13 @@ export default function SubscriptionPage() {
                           const service = data.services.find((s) => s.id === charge.service_id);
                           return (
                             <motion.tr key={charge.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
-                              <td className="px-3 py-2.5"><div className="flex items-center gap-2"><Avatar name={subscriber?.name ?? "?"} /><span className="font-medium text-sm">{subscriber?.name ?? "?"}</span></div></td>
-                              <td className="px-3 py-2.5 text-sm">{service?.name ?? "?"}</td>
+                              <td className="px-3 py-2.5"><div className="flex items-center gap-2"><PersonAvatar name={subscriber?.name ?? "?"} index={data.subscribers.findIndex((s) => s.id === charge.subscriber_id)} /><span className="font-medium text-sm">{subscriber?.name ?? "?"}</span></div></td>
+                              <td className="px-3 py-2.5"><div className="flex items-center gap-2"><ServiceIcon name={service?.name ?? ""} /><span className="text-sm">{service?.name ?? "?"}</span></div></td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.period_start}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.created_at?.slice(0, 10) ?? "—"}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.monthly_cost} {charge.currency}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.exchange_rate}</td>
-                              <td className="px-3 py-2.5 font-medium tabular-nums">{"\u00a5 "}{Number(charge.total_cny).toFixed(2)}</td>
+                              <td className="px-3 py-2.5 text-base font-bold tabular-nums">{"\u00a5 "}{Number(charge.total_cny).toFixed(2)}</td>
                               <td className="px-3 py-2.5">
                                 {canEdit ? (
                                   <button onClick={() => handleTogglePaid(charge)} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
@@ -998,25 +998,30 @@ export default function SubscriptionPage() {
                 const unpaid = subscriberUnpaid(subscriber.id);
                 const paid = charges.filter((c) => c.paid).reduce((s, c) => s + Number(c.total_cny), 0);
                 return (
-                  <div key={subscriber.id} className="rounded-lg border bg-card">
-                    <div className="flex items-center justify-between px-4 py-3 border-b">
-                      <div className="flex items-center gap-2.5">
-                        <Avatar name={subscriber.name} size="md" />
+                  <div key={subscriber.id} className="rounded-2xl border bg-card">
+                    <div className="flex items-center justify-between px-5 py-4 border-b">
+                      <div className="flex items-center gap-3">
+                        <PersonAvatar name={subscriber.name} index={data.subscribers.indexOf(subscriber)} size="default" />
                         <div>
-                          <span className="font-medium text-sm">{subscriber.name}</span>
+                          <span className="font-medium">{subscriber.name}</span>
                           {subs.length > 0 && (
-                            <div className="flex gap-1 mt-0.5">
+                            <div className="flex gap-1.5 mt-1">
                               {subs.map((s) => {
                                 const svc = data.services.find((sv) => sv.id === s.service_id);
-                                return <span key={s.id} className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{svc?.name}</span>;
+                                return (
+                                  <span key={s.id} className="inline-flex items-center gap-1 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                                    <ServiceIcon name={svc?.name ?? ""} size="sm" />
+                                    {svc?.name}
+                                  </span>
+                                );
                               })}
                             </div>
                           )}
                         </div>
                       </div>
-                      <div className="flex gap-3 text-xs tabular-nums">
-                        {unpaid > 0 && <span className="text-amber-600 dark:text-amber-400">{"\u00a5 "}{unpaid.toFixed(2)} unpaid</span>}
-                        {paid > 0 && <span className="text-emerald-600 dark:text-emerald-400">{"\u00a5 "}{paid.toFixed(2)} paid</span>}
+                      <div className="flex gap-4 tabular-nums">
+                        {unpaid > 0 && <span className="text-sm font-bold text-amber-600 dark:text-amber-400">{"\u00a5 "}{unpaid.toFixed(2)} <span className="text-xs font-normal">unpaid</span></span>}
+                        {paid > 0 && <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">{"\u00a5 "}{paid.toFixed(2)} <span className="text-xs font-normal">paid</span></span>}
                       </div>
                     </div>
                     {charges.length > 0 && (
@@ -1024,14 +1029,15 @@ export default function SubscriptionPage() {
                         {charges.map((charge) => {
                           const service = data.services.find((s) => s.id === charge.service_id);
                           return (
-                            <div key={charge.id} className="flex items-center justify-between px-4 py-2.5 text-sm hover:bg-muted/30 transition-colors">
-                              <div className="flex items-center gap-2">
+                            <div key={charge.id} className="flex items-center justify-between px-5 py-3 text-sm hover:bg-muted/30 transition-colors">
+                              <div className="flex items-center gap-2.5">
+                                <ServiceIcon name={service?.name ?? ""} />
                                 <span>{service?.name}</span>
                                 <span className="text-xs text-muted-foreground">{charge.period_start}</span>
                                 {charge.note && <span className="text-xs text-muted-foreground">{"\u00b7"} {charge.note}</span>}
                               </div>
                               <div className="flex items-center gap-3">
-                                <span className="font-medium tabular-nums">{"\u00a5 "}{Number(charge.total_cny).toFixed(2)}</span>
+                                <span className="text-base font-bold tabular-nums">{"\u00a5 "}{Number(charge.total_cny).toFixed(2)}</span>
                                 {canEdit ? (
                                   <button onClick={() => handleTogglePaid(charge)} className={`text-xs font-medium px-2 py-0.5 rounded-md transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
                                     {charge.paid ? "Paid" : "Unpaid"}
@@ -1164,8 +1170,8 @@ export default function SubscriptionPage() {
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Subscribers</p>
               <div className="flex flex-wrap gap-1.5">
                 {data.subscribers.map((s) => (
-                  <div key={s.id} className="flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-sm">
-                    <Avatar name={s.name} />
+                  <div key={s.id} className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-sm">
+                    <PersonAvatar name={s.name} index={data.subscribers.indexOf(s)} />
                     {editingSubscriberId === s.id ? (
                       <div className="flex items-center gap-1">
                         <Input className="h-6 w-24 text-xs" value={editingSubscriberName} onChange={(e) => setEditingSubscriberName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") handleRenameSubscriber(s.id); if (e.key === "Escape") setEditingSubscriberId(null); }} autoFocus />
@@ -1194,10 +1200,11 @@ export default function SubscriptionPage() {
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Services</p>
               <div className="divide-y -mx-4">
                 {data.services.map((service) => (
-                  <div key={service.id} className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/30 transition-colors">
-                    <div>
+                  <div key={service.id} className="flex items-center justify-between px-4 py-3 hover:bg-muted/30 transition-colors">
+                    <div className="flex items-center gap-2.5">
+                      <ServiceIcon name={service.name} />
                       <span className="text-sm font-medium">{service.name}</span>
-                      <span className="ml-2 text-xs text-muted-foreground tabular-nums">{service.monthly_cost} {service.currency}/mo</span>
+                      <Badge variant="secondary" className="text-xs tabular-nums">{service.monthly_cost} {service.currency}/mo</Badge>
                     </div>
                     {canEdit && (
                       <div className="flex gap-1">
