@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { signIn } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { motion } from "framer-motion";
@@ -34,9 +35,28 @@ export default function SignInPage() {
           Continue with Google
         </Button>
 
-        <p className="text-[11px] text-muted-foreground/40 text-center">
-          Google OAuth 2.0
-        </p>
+        <div className="space-y-2 text-center">
+          <p className="text-[11px] text-muted-foreground/50">
+            Google OAuth 2.0
+          </p>
+          <p className="text-[11px] leading-5 text-muted-foreground/70">
+            By continuing, you agree to the{" "}
+            <Link
+              href="/terms"
+              className="underline underline-offset-4 transition-opacity hover:opacity-70"
+            >
+              Terms of Service
+            </Link>{" "}
+            and{" "}
+            <Link
+              href="/privacy"
+              className="underline underline-offset-4 transition-opacity hover:opacity-70"
+            >
+              Privacy Policy
+            </Link>
+            .
+          </p>
+        </div>
       </motion.div>
     </div>
   );

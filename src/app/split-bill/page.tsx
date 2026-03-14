@@ -215,13 +215,15 @@ export default function SubscriptionPage() {
   const [confirmDelete, setConfirmDelete] = useState<{ type: string; id: string; name: string } | null>(null);
   const [editingChargeId, setEditingChargeId] = useState<string | null>(null);
   const [editingChargeNote, setEditingChargeNote] = useState("");
+  const [editingSubNoteId, setEditingSubNoteId] = useState<string | null>(null);
+  const [editingSubNote, setEditingSubNote] = useState("");
   const [billMonth, setBillMonth] = useState(getCurrentMonth());
   const [billing, setBilling] = useState(false);
   const [recalculating, setRecalculating] = useState(false);
   const [editingSubscriberId, setEditingSubscriberId] = useState<string | null>(null);
   const [editingSubscriberName, setEditingSubscriberName] = useState("");
 
-  const [subForm, setSubForm] = useState({ subscriberId: "", serviceId: "", startDate: new Date().toISOString().slice(0, 10) });
+  const [subForm, setSubForm] = useState({ subscriberId: "", serviceId: "", startDate: new Date().toISOString().slice(0, 10), note: "" });
   const [chargeForm, setChargeForm] = useState({ subscriberId: "", serviceId: "", date: new Date().toISOString().slice(0, 10), exchangeRate: 7.25, note: "" });
   const [billExchangeRate, setBillExchangeRate] = useState(7.25);
   const [liveRates, setLiveRates] = useState<Record<string, number> | null>(null);
@@ -353,13 +355,19 @@ export default function SubscriptionPage() {
   // ─── Subscription actions ─────────────────────────────────────────
   async function handleAddSubscription() {
     if (!requireEdit()) return;
-    const { subscriberId, serviceId, startDate } = subForm;
+    const { subscriberId, serviceId, startDate, note } = subForm;
     if (!subscriberId || !serviceId) { toast.error("Please select both a subscriber and a service"); return; }
     const exists = data!.subscriptions.find((s) => s.subscriber_id === subscriberId && s.service_id === serviceId);
     if (exists) { toast.error("This subscription already exists"); return; }
     try {
-      await apiAddSubscription({ subscriber_id: subscriberId, service_id: serviceId, start_date: startDate, active: true });
-      setSubForm({ subscriberId: "", serviceId: "", startDate: new Date().toISOString().slice(0, 10) });
+      await apiAddSubscription({
+        subscriber_id: subscriberId,
+        service_id: serviceId,
+        start_date: startDate,
+        active: true,
+        note: note.trim() || null,
+      });
+      setSubForm({ subscriberId: "", serviceId: "", startDate: new Date().toISOString().slice(0, 10), note: "" });
       setAddSubOpen(false);
       toast.success("Subscription added");
       await reload();
@@ -388,6 +396,15 @@ export default function SubscriptionPage() {
     if (!requireEdit()) return;
     await apiDeleteSubscription(id);
     toast.success("Removed");
+    await reload();
+  }
+
+  async function handleSaveSubscriptionNote(id: string) {
+    if (!requireEdit()) return;
+    await apiUpdateSubscription(id, { note: editingSubNote.trim() || null });
+    setEditingSubNoteId(null);
+    setEditingSubNote("");
+    toast.success("Note updated");
     await reload();
   }
 
@@ -644,6 +661,15 @@ export default function SubscriptionPage() {
                   <Label className="text-xs text-muted-foreground">Start date</Label>
                   <Input type="date" className="h-9" value={subForm.startDate} onChange={(e) => setSubForm({ ...subForm, startDate: e.target.value })} />
                 </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs text-muted-foreground">Note</Label>
+                  <textarea
+                    className="min-h-20 rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground/70 focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring"
+                    value={subForm.note}
+                    onChange={(e) => setSubForm({ ...subForm, note: e.target.value })}
+                    placeholder="Optional note for this subscription"
+                  />
+                </div>
                 <Button size="sm" onClick={handleAddSubscription}>Add subscription</Button>
               </div>
             </DialogContent>
@@ -848,6 +874,45 @@ export default function SubscriptionPage() {
                                 </button>
                               )}
                             </div>
+                            {editingSubNoteId === sub.id ? (
+                              <div className="mt-2 flex items-center gap-1.5">
+                                <Input
+                                  className="h-8 text-xs"
+                                  value={editingSubNote}
+                                  onChange={(e) => setEditingSubNote(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter") handleSaveSubscriptionNote(sub.id);
+                                    if (e.key === "Escape") {
+                                      setEditingSubNoteId(null);
+                                      setEditingSubNote("");
+                                    }
+                                  }}
+                                  placeholder="Add a note"
+                                  autoFocus
+                                />
+                                <button onClick={() => handleSaveSubscriptionNote(sub.id)} className="h-8 w-8 flex items-center justify-center rounded-md hover:bg-muted transition-colors">
+                                  <Check className="h-3 w-3" />
+                                </button>
+                                <button onClick={() => { setEditingSubNoteId(null); setEditingSubNote(""); }} className="h-8 w-8 flex items-center justify-center rounded-md hover:bg-muted transition-colors">
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                                <span className="truncate">{sub.note?.trim() || "No notes"}</span>
+                                {canEdit && (
+                                  <button
+                                    onClick={() => {
+                                      setEditingSubNoteId(sub.id);
+                                      setEditingSubNote(sub.note ?? "");
+                                    }}
+                                    className="h-6 w-6 flex items-center justify-center rounded-md hover:bg-muted transition-colors"
+                                  >
+                                    <Edit2 className="h-3 w-3 text-muted-foreground" />
+                                  </button>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                         {canEdit && (

@@ -38,6 +38,7 @@ export interface Subscription {
   start_date: string; // YYYY-MM-DD
   exchange_rate?: number; // legacy, now set at charge time
   active: boolean;
+  note?: string | null;
   payment_method_id?: string;
   created_at?: string;
 }
