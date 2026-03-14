@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
   const { action, table, data, id, updates } = await req.json();
 
   try {
-    const validTables = ["services", "subscribers", "subscriptions", "charges"];
+    const validTables = ["services", "subscribers", "subscriptions", "charges", "payment_methods"];
     if (!validTables.includes(table)) {
       return NextResponse.json({ error: "Invalid table" }, { status: 400 });
     }
@@ -28,6 +28,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(result);
       }
       case "update": {
+        if (id === "__all__") {
+          // Bulk update all rows (used for clearing is_default on payment_methods)
+          const { error } = await supabase.from(table).update(updates).neq("id", "");
+          if (error) throw error;
+          return NextResponse.json({ ok: true });
+        }
         const { error } = await supabase.from(table).update(updates).eq("id", id);
         if (error) throw error;
         return NextResponse.json({ ok: true });
