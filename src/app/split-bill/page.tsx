@@ -41,9 +41,15 @@ import { ALLOWED_EMAILS } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Avatar as ShadAvatar, AvatarFallback } from "@/components/ui/avatar";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MonthPicker } from "@/components/month-picker";
+import { getServiceIcon, getPersonColor } from "@/lib/service-icons";
 import {
   Plus, Trash2, Edit2, Check, X, Users, DollarSign, Settings,
   Search, Download, CheckCheck, TrendingUp, Clock,
@@ -75,6 +81,27 @@ function LoadingSkeleton() {
 function Avatar({ name, size = "sm" }: { name: string; size?: "sm" | "md" }) {
   const s = size === "md" ? "h-8 w-8 text-xs" : "h-6 w-6 text-[10px]";
   return <div className={`flex ${s} items-center justify-center rounded-full bg-muted font-medium text-muted-foreground`}>{getInitial(name)}</div>;
+}
+
+function PersonAvatar({ name, index = 0, size = "sm" }: { name: string; index?: number; size?: "sm" | "default" }) {
+  const colors = getPersonColor(index);
+  const s = size === "default" ? "h-8 w-8 text-xs" : "h-6 w-6 text-[10px]";
+  return (
+    <div className={`flex ${s} shrink-0 items-center justify-center rounded-full font-semibold text-white`} style={{ background: `linear-gradient(135deg, ${colors.from}, ${colors.to})` }}>
+      {getInitial(name)}
+    </div>
+  );
+}
+
+function ServiceIcon({ name, size = "sm" }: { name: string; size?: "sm" | "md" }) {
+  const { Icon, from, to } = getServiceIcon(name);
+  const s = size === "md" ? "h-8 w-8" : "h-6 w-6";
+  const iconS = size === "md" ? "h-4 w-4" : "h-3 w-3";
+  return (
+    <div className={`${s} flex shrink-0 items-center justify-center rounded-lg text-white`} style={{ background: `linear-gradient(135deg, ${from}, ${to})` }}>
+      <Icon className={iconS} />
+    </div>
+  );
 }
 
 function ConfirmDialog({ open, onOpenChange, title, description, onConfirm }: {
@@ -130,13 +157,7 @@ function exportToCSV(charges: ChargeRecord[], services: Service[], subscribers: 
   toast.success("CSV exported");
 }
 
-function Tab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button onClick={onClick} className={`px-3 py-1.5 text-sm rounded-md transition-colors ${active ? "bg-foreground text-background font-medium" : "text-muted-foreground hover:text-foreground hover:bg-muted"}`}>
-      {children}
-    </button>
-  );
-}
+// Tab component removed — using shadcn Tabs instead
 
 const CARD_TYPE_LABELS: Record<string, string> = {
   visa: "Visa", mastercard: "MC", amex: "Amex", discover: "Discover",
@@ -196,6 +217,7 @@ export default function SubscriptionPage() {
   const [editingChargeNote, setEditingChargeNote] = useState("");
   const [billMonth, setBillMonth] = useState(getCurrentMonth());
   const [billing, setBilling] = useState(false);
+  const [recalculating, setRecalculating] = useState(false);
   const [editingSubscriberId, setEditingSubscriberId] = useState<string | null>(null);
   const [editingSubscriberName, setEditingSubscriberName] = useState("");
 
@@ -377,7 +399,7 @@ export default function SubscriptionPage() {
       const res = await fetch("/api/bill-now", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ month: billMonth, exchangeRate: billExchangeRate }),
+        body: JSON.stringify({ month: billMonth, exchangeRates: liveRates ?? { USD: billExchangeRate } }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
@@ -392,6 +414,30 @@ export default function SubscriptionPage() {
     } finally {
       setBilling(false);
     }
+  }
+
+  // ─── Clear / Recalc charges ─────────────────────────────────────
+  async function handleClearCharges() {
+    if (!requireEdit()) return;
+    try {
+      const res = await fetch("/api/clear-charges", { method: "POST" });
+      if (!res.ok) { const err = await res.json().catch(() => ({ error: res.statusText })); throw new Error(err.error || res.statusText); }
+      toast.success("All charges cleared");
+      await reload();
+    } catch (err: unknown) { toast.error(`Clear failed: ${err instanceof Error ? err.message : String(err)}`); }
+  }
+
+  async function handleRecalcCharges() {
+    if (!requireEdit()) return;
+    setRecalculating(true);
+    try {
+      const res = await fetch("/api/recalc-charges", { method: "POST" });
+      if (!res.ok) { const err = await res.json().catch(() => ({ error: res.statusText })); throw new Error(err.error || res.statusText); }
+      const result = await res.json();
+      toast.success(result.updated > 0 ? `Recalculated ${result.updated} charge(s)` : "All charges already correct");
+      await reload();
+    } catch (err: unknown) { toast.error(`Recalc failed: ${err instanceof Error ? err.message : String(err)}`); }
+    finally { setRecalculating(false); }
   }
 
   // ─── Subscriber actions ───────────────────────────────────────────
@@ -578,25 +624,21 @@ export default function SubscriptionPage() {
               <div className="grid gap-4 pt-2">
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Subscriber</Label>
-                  <select
-                    value={subForm.subscriberId}
-                    onChange={(e) => setSubForm({ ...subForm, subscriberId: e.target.value })}
-                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
-                    <option value="">Select person</option>
-                    {data.subscribers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
+                  <Select value={subForm.subscriberId} onValueChange={(val) => setSubForm({ ...subForm, subscriberId: val as string })}>
+                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Select person" /></SelectTrigger>
+                    <SelectContent>
+                      {data.subscribers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Service</Label>
-                  <select
-                    value={subForm.serviceId}
-                    onChange={(e) => setSubForm({ ...subForm, serviceId: e.target.value })}
-                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
-                    <option value="">Select service</option>
-                    {data.services.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</option>)}
-                  </select>
+                  <Select value={subForm.serviceId} onValueChange={(val) => setSubForm({ ...subForm, serviceId: val as string })}>
+                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Select service" /></SelectTrigger>
+                    <SelectContent>
+                      {data.services.map((s) => <SelectItem key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</SelectItem>)}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Start date</Label>
@@ -610,31 +652,51 @@ export default function SubscriptionPage() {
       </motion.div>
 
       {/* Stats */}
-      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.05 }} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.05 }} className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
         {[
-          { label: "Paid", value: `\u00a5${summary.totalPaid.toFixed(2)}`, icon: Check, color: "text-emerald-600 dark:text-emerald-400" },
-          { label: "Unpaid", value: `\u00a5${summary.totalUnpaid.toFixed(2)}`, icon: Clock, color: "text-amber-600 dark:text-amber-400" },
-          { label: "Active subscriptions", value: String(summary.activeSubs), icon: Receipt, color: "text-foreground" },
-          { label: liveRates ? "Live rate" : "Avg rate", value: liveRates ? Object.entries(liveRates).map(([cur, rate]) => `${cur} ${rate}`).join(" / ") : Object.keys(summary.avgRates).length > 0 ? Object.entries(summary.avgRates).map(([cur, rate]) => `${cur} ${rate.toFixed(2)}`).join(" / ") : "\u2014", icon: TrendingUp, color: "text-foreground" },
+          { label: "Paid", value: `¥ ${summary.totalPaid.toFixed(2)}`, icon: Check, iconBg: "bg-emerald-500/15", iconColor: "text-emerald-600 dark:text-emerald-400", color: "text-emerald-600 dark:text-emerald-400", glowClass: "glass-card-emerald", rateEntries: null as [string, number][] | null },
+          { label: "Unpaid", value: `¥ ${summary.totalUnpaid.toFixed(2)}`, icon: Clock, iconBg: "bg-amber-500/15", iconColor: "text-amber-600 dark:text-amber-400", color: "text-amber-600 dark:text-amber-400", glowClass: "glass-card-amber", rateEntries: null as [string, number][] | null },
+          { label: "Active", value: String(summary.activeSubs), icon: Receipt, iconBg: "bg-blue-500/15", iconColor: "text-blue-600 dark:text-blue-400", color: "text-blue-600 dark:text-blue-400", glowClass: "glass-card-blue", rateEntries: null as [string, number][] | null },
+          { label: liveRates ? "Live rate" : "Avg rate", value: null as string | null, icon: TrendingUp, iconBg: "bg-purple-500/15", iconColor: "text-purple-600 dark:text-purple-400", color: "text-purple-600 dark:text-purple-400", glowClass: "glass-card-purple", rateEntries: liveRates ? Object.entries(liveRates).map(([cur, rate]) => [cur, rate] as [string, number]) : Object.keys(summary.avgRates).length > 0 ? Object.entries(summary.avgRates).map(([cur, rate]) => [cur, Number(rate.toFixed(4))] as [string, number]) : null },
         ].map((stat) => (
-          <div key={stat.label} className="rounded-lg border bg-card p-4">
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1"><stat.icon className="h-3.5 w-3.5" />{stat.label}</div>
-            <div className={`text-xl font-semibold tabular-nums ${stat.color}`}>{stat.value}</div>
+          <div key={stat.label} className={`glass-card rounded-2xl p-6 ${stat.glowClass}`}>
+            <div className="flex items-center gap-2.5 text-sm text-muted-foreground mb-3">
+              <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${stat.iconBg}`}>
+                <stat.icon className={`h-4 w-4 ${stat.iconColor}`} />
+              </div>
+              {stat.label}
+            </div>
+            {stat.rateEntries ? (
+              <div className="flex flex-col gap-1">
+                {stat.rateEntries.map(([cur, rate]) => (
+                  <div key={cur} className={`flex items-baseline gap-2 ${stat.color}`}>
+                    <span className="text-xs font-medium text-muted-foreground">{cur}</span>
+                    <span className="text-lg font-bold tabular-nums tracking-tight">{rate}</span>
+                  </div>
+                ))}
+              </div>
+            ) : stat.value != null ? (
+              <div className={`text-2xl font-bold tabular-nums tracking-tight ${stat.color}`}>{stat.value}</div>
+            ) : (
+              <div className={`text-2xl font-bold tabular-nums tracking-tight ${stat.color}`}>{"\u2014"}</div>
+            )}
           </div>
         ))}
       </motion.div>
 
       {/* Tabs */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}>
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
-          <div className="flex gap-1 rounded-lg bg-muted/50 p-1">
-            <Tab active={activeTab === "subscriptions"} onClick={() => setActiveTab("subscriptions")}>Subscriptions</Tab>
-            <Tab active={activeTab === "charges"} onClick={() => setActiveTab("charges")}>Charges</Tab>
-            <Tab active={activeTab === "people"} onClick={() => setActiveTab("people")}>People</Tab>
-            <Tab active={activeTab === "payment-methods"} onClick={() => setActiveTab("payment-methods")}>Cards</Tab>
-            <Tab active={activeTab === "charts"} onClick={() => setActiveTab("charts")}>Charts</Tab>
-            <Tab active={activeTab === "settings"} onClick={() => setActiveTab("settings")}>Settings</Tab>
-          </div>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
+          <Tabs value={activeTab} onValueChange={(val) => setActiveTab(val as string)}>
+            <TabsList>
+              <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
+              <TabsTrigger value="charges">Charges</TabsTrigger>
+              <TabsTrigger value="people">People</TabsTrigger>
+              <TabsTrigger value="payment-methods">Cards</TabsTrigger>
+              <TabsTrigger value="charts">Charts</TabsTrigger>
+              <TabsTrigger value="settings">Settings</TabsTrigger>
+            </TabsList>
+          </Tabs>
           {activeTab === "charges" && (
             <div className="flex gap-2 flex-wrap">
               <div className="relative">
@@ -652,21 +714,25 @@ export default function SubscriptionPage() {
                       <div className="grid gap-4 pt-2">
                         <div className="grid gap-1.5">
                           <Label className="text-xs text-muted-foreground">Subscriber</Label>
-                          <select value={chargeForm.subscriberId} onChange={(e) => setChargeForm({ ...chargeForm, subscriberId: e.target.value })} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
-                            <option value="">Select person</option>
-                            {data.subscribers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                          </select>
+                          <Select value={chargeForm.subscriberId} onValueChange={(val) => setChargeForm({ ...chargeForm, subscriberId: val as string })}>
+                            <SelectTrigger className="w-full h-9"><SelectValue placeholder="Select person" /></SelectTrigger>
+                            <SelectContent>
+                              {data.subscribers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                            </SelectContent>
+                          </Select>
                         </div>
                         <div className="grid gap-1.5">
                           <Label className="text-xs text-muted-foreground">Service</Label>
-                          <select value={chargeForm.serviceId} onChange={(e) => {
-                            const svc = data.services.find((s) => s.id === e.target.value);
+                          <Select value={chargeForm.serviceId} onValueChange={(val) => {
+                            const svc = data.services.find((s) => s.id === val);
                             const rate = svc && liveRates?.[svc.currency] ? liveRates[svc.currency] : chargeForm.exchangeRate;
-                            setChargeForm({ ...chargeForm, serviceId: e.target.value, exchangeRate: rate });
-                          }} className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
-                            <option value="">Select service</option>
-                            {data.services.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</option>)}
-                          </select>
+                            setChargeForm({ ...chargeForm, serviceId: val as string, exchangeRate: rate });
+                          }}>
+                            <SelectTrigger className="w-full h-9"><SelectValue placeholder="Select service" /></SelectTrigger>
+                            <SelectContent>
+                              {data.services.map((s) => <SelectItem key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</SelectItem>)}
+                            </SelectContent>
+                          </Select>
                         </div>
                         <div className="grid gap-1.5">
                           <Label className="text-xs text-muted-foreground">Date</Label>
@@ -689,7 +755,7 @@ export default function SubscriptionPage() {
                           return (
                             <div className="rounded-md border bg-muted/50 px-3 py-2.5 text-sm">
                               <span className="text-muted-foreground">{service.monthly_cost} {service.currency} x {chargeForm.exchangeRate} = </span>
-                              <span className="font-semibold tabular-nums">{"\u00a5"}{total.toFixed(2)}</span>
+                              <span className="font-semibold tabular-nums">{"\u00a5 "}{total.toFixed(2)}</span>
                             </div>
                           );
                         })()}
@@ -710,20 +776,29 @@ export default function SubscriptionPage() {
           <div className="space-y-4">
             {/* Bill now */}
             {canEdit && (
-              <div className="flex items-center gap-2 rounded-lg border bg-card p-3 flex-wrap">
+              <div className="relative z-10 flex items-center gap-2 rounded-2xl border bg-card p-4 flex-wrap">
                 <Zap className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">Generate charges for</span>
                 <MonthPicker value={billMonth} onChange={setBillMonth} />
-                <span className="text-sm text-muted-foreground">at rate</span>
-                <Input type="number" step="0.01" className="h-8 w-20 text-sm" value={billExchangeRate} onChange={(e) => setBillExchangeRate(Number(e.target.value))} />
                 {liveRates && (
-                  <span className="text-xs text-muted-foreground">
-                    Live: {Object.entries(liveRates).map(([c, r]) => `${c} ${r}`).join(" / ")}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {Object.entries(liveRates).map(([cur, rate]) => (
+                      <Badge key={cur} variant="secondary" className="tabular-nums text-xs">{cur} {rate}</Badge>
+                    ))}
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400">LIVE</span>
+                  </div>
                 )}
-                <Button size="sm" className="h-8" onClick={handleBillNow} disabled={billing}>
-                  {billing ? "Billing..." : "Bill now"}
-                </Button>
+                <div className="flex items-center gap-1.5 ml-auto">
+                  <Button size="sm" className="h-8" onClick={handleBillNow} disabled={billing}>
+                    {billing ? "Billing..." : "Bill now"}
+                  </Button>
+                  <Button variant="outline" size="sm" className="h-8" onClick={handleRecalcCharges} disabled={recalculating}>
+                    {recalculating ? "Recalcing..." : "Recalc rates"}
+                  </Button>
+                  <Button variant="outline" size="sm" className="h-8 text-destructive hover:bg-destructive/10" onClick={() => setConfirmDelete({ type: "all-charges", id: "", name: "all charges" })}>
+                    Clear
+                  </Button>
+                </div>
               </div>
             )}
 
@@ -832,7 +907,7 @@ export default function SubscriptionPage() {
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.created_at?.slice(0, 10) ?? "—"}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.monthly_cost} {charge.currency}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.exchange_rate}</td>
-                              <td className="px-3 py-2.5 font-medium tabular-nums">{"\u00a5"}{Number(charge.total_cny).toFixed(2)}</td>
+                              <td className="px-3 py-2.5 font-medium tabular-nums">{"\u00a5 "}{Number(charge.total_cny).toFixed(2)}</td>
                               <td className="px-3 py-2.5">
                                 {canEdit ? (
                                   <button onClick={() => handleTogglePaid(charge)} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
@@ -940,8 +1015,8 @@ export default function SubscriptionPage() {
                         </div>
                       </div>
                       <div className="flex gap-3 text-xs tabular-nums">
-                        {unpaid > 0 && <span className="text-amber-600 dark:text-amber-400">{"\u00a5"}{unpaid.toFixed(2)} unpaid</span>}
-                        {paid > 0 && <span className="text-emerald-600 dark:text-emerald-400">{"\u00a5"}{paid.toFixed(2)} paid</span>}
+                        {unpaid > 0 && <span className="text-amber-600 dark:text-amber-400">{"\u00a5 "}{unpaid.toFixed(2)} unpaid</span>}
+                        {paid > 0 && <span className="text-emerald-600 dark:text-emerald-400">{"\u00a5 "}{paid.toFixed(2)} paid</span>}
                       </div>
                     </div>
                     {charges.length > 0 && (
@@ -956,7 +1031,7 @@ export default function SubscriptionPage() {
                                 {charge.note && <span className="text-xs text-muted-foreground">{"\u00b7"} {charge.note}</span>}
                               </div>
                               <div className="flex items-center gap-3">
-                                <span className="font-medium tabular-nums">{"\u00a5"}{Number(charge.total_cny).toFixed(2)}</span>
+                                <span className="font-medium tabular-nums">{"\u00a5 "}{Number(charge.total_cny).toFixed(2)}</span>
                                 {canEdit ? (
                                   <button onClick={() => handleTogglePaid(charge)} className={`text-xs font-medium px-2 py-0.5 rounded-md transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
                                     {charge.paid ? "Paid" : "Unpaid"}
@@ -1161,14 +1236,13 @@ export default function SubscriptionPage() {
                 </div>
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Currency</Label>
-                  <select
-                    value={editingService.currency}
-                    onChange={(e) => setEditingService({ ...editingService, currency: e.target.value as Currency })}
-                    className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  >
-                    <option value="USD">USD</option>
-                    <option value="SGD">SGD</option>
-                  </select>
+                  <Select value={editingService.currency} onValueChange={(val) => setEditingService({ ...editingService, currency: val as Currency })}>
+                    <SelectTrigger className="w-full h-9"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="USD">USD</SelectItem>
+                      <SelectItem value="SGD">SGD</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
               <Button size="sm" onClick={handleSaveService}>Save</Button>
@@ -1214,27 +1288,25 @@ export default function SubscriptionPage() {
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-1.5">
                 <Label className="text-xs text-muted-foreground">Expiry month</Label>
-                <select
-                  value={pmForm.expiryMonth}
-                  onChange={(e) => setPmForm({ ...pmForm, expiryMonth: Number(e.target.value) })}
-                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-                    <option key={m} value={m}>{String(m).padStart(2, "0")}</option>
-                  ))}
-                </select>
+                <Select value={String(pmForm.expiryMonth)} onValueChange={(val) => setPmForm({ ...pmForm, expiryMonth: Number(val) })}>
+                  <SelectTrigger className="w-full h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                      <SelectItem key={m} value={String(m)}>{String(m).padStart(2, "0")}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="grid gap-1.5">
                 <Label className="text-xs text-muted-foreground">Expiry year</Label>
-                <select
-                  value={pmForm.expiryYear}
-                  onChange={(e) => setPmForm({ ...pmForm, expiryYear: Number(e.target.value) })}
-                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                >
-                  {Array.from({ length: 12 }, (_, i) => new Date().getFullYear() + i).map((y) => (
-                    <option key={y} value={y}>{y}</option>
-                  ))}
-                </select>
+                <Select value={String(pmForm.expiryYear)} onValueChange={(val) => setPmForm({ ...pmForm, expiryYear: Number(val) })}>
+                  <SelectTrigger className="w-full h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 12 }, (_, i) => new Date().getFullYear() + i).map((y) => (
+                      <SelectItem key={y} value={String(y)}>{y}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <label className="flex items-center gap-2 cursor-pointer">
@@ -1258,6 +1330,7 @@ export default function SubscriptionPage() {
           if (confirmDelete.type === "service") handleRemoveService(confirmDelete.id);
           if (confirmDelete.type === "subscription") handleDeleteSubscription(confirmDelete.id);
           if (confirmDelete.type === "payment_method") handleDeletePaymentMethod(confirmDelete.id);
+          if (confirmDelete.type === "all-charges") handleClearCharges();
         }}
       />
 
