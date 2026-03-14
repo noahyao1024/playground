@@ -94,11 +94,11 @@ function PersonAvatar({ name, index = 0, size = "sm" }: { name: string; index?: 
 }
 
 function ServiceIcon({ name, size = "sm" }: { name: string; size?: "sm" | "md" }) {
-  const { Icon, from, to } = getServiceIcon(name);
+  const { Icon, bg, color } = getServiceIcon(name);
   const s = size === "md" ? "h-8 w-8" : "h-6 w-6";
-  const iconS = size === "md" ? "h-4 w-4" : "h-3 w-3";
+  const iconS = size === "md" ? "h-4 w-4" : "h-3.5 w-3.5";
   return (
-    <div className={`${s} flex shrink-0 items-center justify-center rounded-lg text-white`} style={{ background: `linear-gradient(135deg, ${from}, ${to})` }}>
+    <div className={`${s} flex shrink-0 items-center justify-center rounded-lg`} style={{ backgroundColor: bg, color: color || "white" }}>
       <Icon className={iconS} />
     </div>
   );
@@ -654,10 +654,10 @@ export default function SubscriptionPage() {
       {/* Stats */}
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.05 }} className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
         {[
-          { label: "Paid", value: `¥ ${summary.totalPaid.toFixed(2)}`, icon: Check, iconBg: "bg-emerald-500/15", iconColor: "text-emerald-600 dark:text-emerald-400", color: "text-emerald-600 dark:text-emerald-400", glowClass: "glass-card-emerald", rateEntries: null as [string, number][] | null },
-          { label: "Unpaid", value: `¥ ${summary.totalUnpaid.toFixed(2)}`, icon: Clock, iconBg: "bg-amber-500/15", iconColor: "text-amber-600 dark:text-amber-400", color: "text-amber-600 dark:text-amber-400", glowClass: "glass-card-amber", rateEntries: null as [string, number][] | null },
-          { label: "Active", value: String(summary.activeSubs), icon: Receipt, iconBg: "bg-blue-500/15", iconColor: "text-blue-600 dark:text-blue-400", color: "text-blue-600 dark:text-blue-400", glowClass: "glass-card-blue", rateEntries: null as [string, number][] | null },
-          { label: liveRates ? "Live rate" : "Avg rate", value: null as string | null, icon: TrendingUp, iconBg: "bg-purple-500/15", iconColor: "text-purple-600 dark:text-purple-400", color: "text-purple-600 dark:text-purple-400", glowClass: "glass-card-purple", rateEntries: liveRates ? Object.entries(liveRates).map(([cur, rate]) => [cur, rate] as [string, number]) : Object.keys(summary.avgRates).length > 0 ? Object.entries(summary.avgRates).map(([cur, rate]) => [cur, Number(rate.toFixed(4))] as [string, number]) : null },
+          { label: "Paid", value: summary.totalPaid.toFixed(2), prefix: "¥", icon: Check, iconBg: "bg-emerald-500/15", iconColor: "text-emerald-600 dark:text-emerald-400", color: "text-emerald-600 dark:text-emerald-400", glowClass: "glass-card-emerald", rateEntries: null as [string, number][] | null },
+          { label: "Unpaid", value: summary.totalUnpaid.toFixed(2), prefix: "¥", icon: Clock, iconBg: "bg-amber-500/15", iconColor: "text-amber-600 dark:text-amber-400", color: "text-amber-600 dark:text-amber-400", glowClass: "glass-card-amber", rateEntries: null as [string, number][] | null },
+          { label: "Active", value: String(summary.activeSubs), prefix: null as string | null, icon: Receipt, iconBg: "bg-blue-500/15", iconColor: "text-blue-600 dark:text-blue-400", color: "text-blue-600 dark:text-blue-400", glowClass: "glass-card-blue", rateEntries: null as [string, number][] | null },
+          { label: liveRates ? "Live rate" : "Avg rate", value: null as string | null, prefix: null as string | null, icon: TrendingUp, iconBg: "bg-purple-500/15", iconColor: "text-purple-600 dark:text-purple-400", color: "text-purple-600 dark:text-purple-400", glowClass: "glass-card-purple", rateEntries: liveRates ? Object.entries(liveRates).map(([cur, rate]) => [cur, rate] as [string, number]) : Object.keys(summary.avgRates).length > 0 ? Object.entries(summary.avgRates).map(([cur, rate]) => [cur, Number(rate.toFixed(4))] as [string, number]) : null },
         ].map((stat) => (
           <div key={stat.label} className={`glass-card rounded-2xl p-6 ${stat.glowClass}`}>
             <div className="flex items-center gap-2.5 text-sm text-muted-foreground mb-3">
@@ -676,9 +676,12 @@ export default function SubscriptionPage() {
                 ))}
               </div>
             ) : stat.value != null ? (
-              <div className={`text-2xl font-bold tabular-nums tracking-tight ${stat.color}`}>{stat.value}</div>
+              <div className={`font-bold tabular-nums tracking-tight ${stat.color}`}>
+                {stat.prefix && <span className="text-lg opacity-60">{stat.prefix} </span>}
+                <span className="text-3xl">{stat.value}</span>
+              </div>
             ) : (
-              <div className={`text-2xl font-bold tabular-nums tracking-tight ${stat.color}`}>{"\u2014"}</div>
+              <div className={`text-3xl font-bold tabular-nums tracking-tight ${stat.color}`}>{"\u2014"}</div>
             )}
           </div>
         ))}
@@ -907,7 +910,7 @@ export default function SubscriptionPage() {
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.created_at?.slice(0, 10) ?? "—"}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.monthly_cost} {charge.currency}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.exchange_rate}</td>
-                              <td className="px-3 py-2.5 text-base font-bold tabular-nums">{"\u00a5 "}{Number(charge.total_cny).toFixed(2)}</td>
+                              <td className="px-3 py-2.5 tabular-nums"><span className="text-xs text-muted-foreground">¥ </span><span className="text-base font-extrabold">{Number(charge.total_cny).toFixed(2)}</span></td>
                               <td className="px-3 py-2.5">
                                 {canEdit ? (
                                   <button onClick={() => handleTogglePaid(charge)} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
@@ -1019,9 +1022,9 @@ export default function SubscriptionPage() {
                           )}
                         </div>
                       </div>
-                      <div className="flex gap-4 tabular-nums">
-                        {unpaid > 0 && <span className="text-sm font-bold text-amber-600 dark:text-amber-400">{"\u00a5 "}{unpaid.toFixed(2)} <span className="text-xs font-normal">unpaid</span></span>}
-                        {paid > 0 && <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400">{"\u00a5 "}{paid.toFixed(2)} <span className="text-xs font-normal">paid</span></span>}
+                      <div className="flex gap-5 tabular-nums">
+                        {unpaid > 0 && <div className="text-right text-amber-600 dark:text-amber-400"><div className="text-lg font-extrabold"><span className="text-xs font-medium opacity-60">¥ </span>{unpaid.toFixed(2)}</div><div className="text-[10px] font-normal opacity-70">unpaid</div></div>}
+                        {paid > 0 && <div className="text-right text-emerald-600 dark:text-emerald-400"><div className="text-lg font-extrabold"><span className="text-xs font-medium opacity-60">¥ </span>{paid.toFixed(2)}</div><div className="text-[10px] font-normal opacity-70">paid</div></div>}
                       </div>
                     </div>
                     {charges.length > 0 && (
@@ -1037,7 +1040,7 @@ export default function SubscriptionPage() {
                                 {charge.note && <span className="text-xs text-muted-foreground">{"\u00b7"} {charge.note}</span>}
                               </div>
                               <div className="flex items-center gap-3">
-                                <span className="text-base font-bold tabular-nums">{"\u00a5 "}{Number(charge.total_cny).toFixed(2)}</span>
+                                <span className="tabular-nums"><span className="text-xs text-muted-foreground">¥ </span><span className="text-base font-extrabold">{Number(charge.total_cny).toFixed(2)}</span></span>
                                 {canEdit ? (
                                   <button onClick={() => handleTogglePaid(charge)} className={`text-xs font-medium px-2 py-0.5 rounded-md transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
                                     {charge.paid ? "Paid" : "Unpaid"}
