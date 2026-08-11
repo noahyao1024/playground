@@ -1,0 +1,22 @@
+name: Supabase Keep-Alive
+
+# Supabase pauses Free Plan projects after 7 days without database activity.
+# This pings a real table through PostgREST (not just a health endpoint) so
+# it counts as genuine "user database activity" and resets that timer.
+# Docs: https://supabase.com/docs/guides/platform/free-project-pausing
+
+on:
+  schedule:
+    - cron: '17 3 * * *' # daily, off-the-hour to avoid GitHub Actions cron congestion
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query Supabase to reset inactivity timer
+        run: |
+          curl --fail -sS \
+            "${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}/rest/v1/payment_methods?select=id&limit=1" \
+            -H "apikey: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}"
