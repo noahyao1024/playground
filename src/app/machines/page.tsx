@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useState, useCallback, useSyncExternalStore } from "react";
 import { getMachines, saveMachines, genId, type Machine } from "@/lib/store";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -38,19 +38,103 @@ const EMPTY_MACHINE: Omit<Machine, "id" | "createdAt" | "updatedAt" | "timeline"
   notes: "",
 };
 
+// localStorage can't be read while the page renders on the server, and
+// useSyncExternalStore needs a snapshot whose identity is stable across renders —
+// so the parsed list is cached here and the cache is dropped on every write.
+const NO_MACHINES: Machine[] = [];
+const machineListeners = new Set<() => void>();
+let machinesCache: Machine[] | null = null;
+
+function machinesChanged() {
+  machinesCache = null;
+  for (const notify of machineListeners) notify();
+}
+
+function subscribeToMachines(notify: () => void) {
+  if (machineListeners.size === 0) window.addEventListener("storage", machinesChanged);
+  machineListeners.add(notify);
+  return () => {
+    machineListeners.delete(notify);
+    if (machineListeners.size === 0) window.removeEventListener("storage", machinesChanged);
+  };
+}
+
+function machinesSnapshot(): Machine[] {
+  if (machinesCache === null) machinesCache = getMachines();
+  return machinesCache;
+}
+
+// The server has no localStorage, so it renders the empty list every time.
+function machinesServerSnapshot(): Machine[] {
+  return NO_MACHINES;
+}
+
+type MachineFormValues = typeof EMPTY_MACHINE;
+
+// Defined at module scope on purpose: declaring it inside MachinesPage makes a new
+// component type on every render, and React then tears the form down and rebuilds
+// it — losing focus mid-typing.
+function MachineForm({ form, setForm, onSubmit, submitLabel }: {
+  form: MachineFormValues;
+  setForm: (form: MachineFormValues) => void;
+  onSubmit: () => void;
+  submitLabel: string;
+}) {
+  return (
+  <div className="grid gap-4 py-4">
+    <div className="grid gap-2">
+      <Label>Hostname</Label>
+      <Input value={form.hostname} onChange={(e) => setForm({ ...form, hostname: e.target.value })} placeholder="e.g. srv-prod-01" />
+    </div>
+    <div className="grid grid-cols-2 gap-4">
+      <div className="grid gap-2">
+        <Label>IP Address</Label>
+        <Input value={form.ip} onChange={(e) => setForm({ ...form, ip: e.target.value })} placeholder="e.g. 10.0.1.5" />
+      </div>
+      <div className="grid gap-2">
+        <Label>OS</Label>
+        <Input value={form.os} onChange={(e) => setForm({ ...form, os: e.target.value })} placeholder="e.g. Ubuntu 22.04" />
+      </div>
+    </div>
+    <div className="grid gap-2">
+      <Label>Specs</Label>
+      <Input value={form.specs} onChange={(e) => setForm({ ...form, specs: e.target.value })} placeholder="e.g. 64GB RAM, 1TB SSD, 16 cores" />
+    </div>
+    <div className="grid grid-cols-2 gap-4">
+      <div className="grid gap-2">
+        <Label>Location</Label>
+        <Input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="e.g. SG DC-1" />
+      </div>
+      <div className="grid gap-2">
+        <Label>Status</Label>
+        <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v as Machine["status"] })}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {STATUS_OPTIONS.map((s) => (
+              <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    </div>
+    <div className="grid gap-2">
+      <Label>Notes</Label>
+      <Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Additional notes" />
+    </div>
+    <Button onClick={onSubmit}>{submitLabel}</Button>
+  </div>
+  );
+}
+
 export default function MachinesPage() {
-  const [machines, setMachines] = useState<Machine[]>([]);
+  const machines = useSyncExternalStore(subscribeToMachines, machinesSnapshot, machinesServerSnapshot);
   const [addOpen, setAddOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [form, setForm] = useState(EMPTY_MACHINE);
 
-  useEffect(() => {
-    setMachines(getMachines());
-  }, []);
-
   const save = useCallback((updated: Machine[]) => {
-    setMachines(updated);
     saveMachines(updated);
+    machinesChanged();
   }, []);
 
   function addMachine() {
@@ -106,51 +190,6 @@ export default function MachinesPage() {
     setEditId(machine.id);
   }
 
-  const MachineForm = ({ onSubmit, submitLabel }: { onSubmit: () => void; submitLabel: string }) => (
-    <div className="grid gap-4 py-4">
-      <div className="grid gap-2">
-        <Label>Hostname</Label>
-        <Input value={form.hostname} onChange={(e) => setForm({ ...form, hostname: e.target.value })} placeholder="e.g. srv-prod-01" />
-      </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="grid gap-2">
-          <Label>IP Address</Label>
-          <Input value={form.ip} onChange={(e) => setForm({ ...form, ip: e.target.value })} placeholder="e.g. 10.0.1.5" />
-        </div>
-        <div className="grid gap-2">
-          <Label>OS</Label>
-          <Input value={form.os} onChange={(e) => setForm({ ...form, os: e.target.value })} placeholder="e.g. Ubuntu 22.04" />
-        </div>
-      </div>
-      <div className="grid gap-2">
-        <Label>Specs</Label>
-        <Input value={form.specs} onChange={(e) => setForm({ ...form, specs: e.target.value })} placeholder="e.g. 64GB RAM, 1TB SSD, 16 cores" />
-      </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="grid gap-2">
-          <Label>Location</Label>
-          <Input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="e.g. SG DC-1" />
-        </div>
-        <div className="grid gap-2">
-          <Label>Status</Label>
-          <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v as Machine["status"] })}>
-            <SelectTrigger><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {STATUS_OPTIONS.map((s) => (
-                <SelectItem key={s} value={s}>{STATUS_LABELS[s]}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-      <div className="grid gap-2">
-        <Label>Notes</Label>
-        <Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Additional notes" />
-      </div>
-      <Button onClick={onSubmit}>{submitLabel}</Button>
-    </div>
-  );
-
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -168,7 +207,7 @@ export default function MachinesPage() {
             <DialogHeader>
               <DialogTitle>Add Machine</DialogTitle>
             </DialogHeader>
-            <MachineForm onSubmit={addMachine} submitLabel="Add Machine" />
+            <MachineForm form={form} setForm={setForm} onSubmit={addMachine} submitLabel="Add Machine" />
           </DialogContent>
         </Dialog>
       </div>
@@ -179,7 +218,7 @@ export default function MachinesPage() {
           <DialogHeader>
             <DialogTitle>Edit Machine</DialogTitle>
           </DialogHeader>
-          <MachineForm onSubmit={updateMachine} submitLabel="Update Machine" />
+          <MachineForm form={form} setForm={setForm} onSubmit={updateMachine} submitLabel="Update Machine" />
         </DialogContent>
       </Dialog>
 
