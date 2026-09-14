@@ -42,6 +42,8 @@ export interface Subscription {
   note?: string | null;
   payment_method_id?: string;
   created_at?: string;
+  /** Null until the row is edited; set by a trigger on every update. */
+  updated_at?: string | null;
 }
 
 export interface ChargeRecord {
@@ -59,10 +61,15 @@ export interface ChargeRecord {
   exchange_rate: number;
   total_cny: number;
   paid: boolean;
-  paid_date?: string;
+  /** Date in Singapore, stamped by the database when `paid` flips to true. */
+  paid_date?: string | null;
+  /** Exact moment payment was marked; the database sets it, not the client. */
+  paid_at?: string | null;
   payment_method_id?: string;
   note?: string;
   created_at?: string;
+  /** Null until the row is edited; set by a trigger on every update. */
+  updated_at?: string | null;
 }
 
 export type CardType = "visa" | "mastercard" | "amex" | "discover" | "unionpay" | "jcb" | "diners" | "unknown";
