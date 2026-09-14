@@ -242,6 +242,8 @@ export default function SubscriptionPage() {
   const [chargeForm, setChargeForm] = useState({ subscriberId: "", serviceId: "", date: todayInSG(), exchangeRate: 7.25, note: "", label: "", amount: 0, currency: "SGD" as Currency });
   const [billExchangeRate, setBillExchangeRate] = useState(7.25);
   const [liveRates, setLiveRates] = useState<Record<string, number> | null>(null);
+  // How far the settlement rate sits above mid-market, so the adjustment is visible.
+  const [fxMarkup, setFxMarkup] = useState<number | null>(null);
 
   // Payment methods
   const [walletOpen, setWalletOpen] = useState<string | null>(null);
@@ -278,9 +280,11 @@ export default function SubscriptionPage() {
   useEffect(() => {
     fetch("/api/exchange-rate")
       .then((r) => r.json())
-      .then((rates) => {
-        if (rates && !rates.error) {
+      .then((payload) => {
+        const rates = payload?.rates;
+        if (rates && !payload.error) {
           setLiveRates(rates);
+          setFxMarkup(typeof payload.markup === "number" ? payload.markup : null);
           if (rates.USD) {
             setBillExchangeRate(rates.USD);
             setChargeForm((f) => ({ ...f, exchangeRate: rates.USD }));
@@ -971,6 +975,11 @@ export default function SubscriptionPage() {
                       <Badge key={cur} variant="secondary" className="tabular-nums text-xs">{cur} {rate}</Badge>
                     ))}
                     <span className="text-[10px] text-emerald-600 dark:text-emerald-400">LIVE</span>
+                    {fxMarkup !== null && fxMarkup !== 1 && (
+                      <span className="text-[10px] text-muted-foreground" title="Settlement rate = mid-market x this, covering the CNH/CNY gap, card spread and transfer fees">
+                        {"\u00d7"}{fxMarkup}
+                      </span>
+                    )}
                   </div>
                 )}
                 <div className="flex items-center gap-1.5 ml-auto">
