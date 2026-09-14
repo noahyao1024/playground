@@ -72,6 +72,21 @@ export interface ChargeRecord {
   updated_at?: string | null;
 }
 
+export type WalletKind = "topup" | "charge" | "adjustment";
+
+/** One line of a person's ledger. Append-only: a mistake is corrected by posting
+ *  another entry, never by changing this one. */
+export interface WalletEntry {
+  id: string;
+  subscriber_id: string;
+  /** Positive credits the person, negative debits them. */
+  amount_cny: number;
+  kind: WalletKind;
+  charge_id?: string | null;
+  note?: string | null;
+  created_at?: string;
+}
+
 export type CardType = "visa" | "mastercard" | "amex" | "discover" | "unionpay" | "jcb" | "diners" | "unknown";
 
 export interface PaymentMethod {
@@ -110,6 +125,7 @@ export interface SubscriptionData {
   subscribers: Subscriber[];
   subscriptions: Subscription[];
   charges: ChargeRecord[];
+  wallet_entries: WalletEntry[];
   payment_methods: PaymentMethod[];
 }
 
@@ -118,7 +134,7 @@ export interface SubscriptionData {
 const LS_KEY = "subscriptionData";
 
 function readLocal(): SubscriptionData {
-  if (typeof window === "undefined") return { services: [], subscribers: [], subscriptions: [], charges: [], payment_methods: [] };
+  if (typeof window === "undefined") return { services: [], subscribers: [], subscriptions: [], charges: [], payment_methods: [], wallet_entries: [] };
   try {
     const raw = localStorage.getItem(LS_KEY);
     const data = raw ? JSON.parse(raw) : {};
@@ -128,9 +144,10 @@ function readLocal(): SubscriptionData {
       subscriptions: data.subscriptions ?? [],
       charges: data.charges ?? [],
       payment_methods: data.payment_methods ?? [],
+      wallet_entries: data.wallet_entries ?? [],
     };
   } catch {
-    return { services: [], subscribers: [], subscriptions: [], charges: [], payment_methods: [] };
+    return { services: [], subscribers: [], subscriptions: [], charges: [], payment_methods: [], wallet_entries: [] };
   }
 }
 
@@ -150,12 +167,13 @@ function localId(): string {
 export async function fetchSubscriptionData(): Promise<SubscriptionData> {
   if (!supabase) return readLocal();
 
-  const [{ data: services }, { data: subscribers }, { data: subscriptions }, { data: charges }, { data: payment_methods }] = await Promise.all([
+  const [{ data: services }, { data: subscribers }, { data: subscriptions }, { data: charges }, { data: payment_methods }, { data: wallet_entries }] = await Promise.all([
     supabase.from("services").select("*").order("name"),
     supabase.from("subscribers").select("*").order("name"),
     supabase.from("subscriptions").select("*").order("created_at"),
     supabase.from("charges").select("*").order("created_at"),
     supabase.from("payment_methods").select("*").order("created_at"),
+    supabase.from("wallet_entries").select("*").order("created_at", { ascending: false }),
   ]);
   return {
     services: (services ?? []) as Service[],
@@ -163,6 +181,7 @@ export async function fetchSubscriptionData(): Promise<SubscriptionData> {
     subscriptions: (subscriptions ?? []) as Subscription[],
     charges: (charges ?? []) as ChargeRecord[],
     payment_methods: (payment_methods ?? []) as PaymentMethod[],
+    wallet_entries: (wallet_entries ?? []) as WalletEntry[],
   };
 }
 
@@ -263,6 +282,26 @@ export async function deleteSubscription(id: string) {
     return;
   }
   await serverWrite("delete", "subscriptions", { id });
+}
+
+// ─── Wallet ──────────────────────────────────────────────────────────
+
+export async function addWalletEntry(entry: Omit<WalletEntry, "id" | "created_at">) {
+  if (!supabase) {
+    const data = readLocal();
+    const created: WalletEntry = { id: localId(), ...entry };
+    data.wallet_entries.push(created);
+    writeLocal(data);
+    return created;
+  }
+  return await serverWrite("insert", "wallet_entries", { data: entry }) as WalletEntry;
+}
+
+/** Everything a person has been credited and debited, netted. Never stored. */
+export function walletBalance(entries: WalletEntry[], subscriberId: string): number {
+  return entries
+    .filter((e) => e.subscriber_id === subscriberId)
+    .reduce((sum, e) => sum + Number(e.amount_cny), 0);
 }
 
 // ─── Charges ─────────────────────────────────────────────────────────
