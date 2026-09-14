@@ -57,6 +57,9 @@ const PAGE_SIZE = 20;
 // Columns where the first click should show the newest rows, not the oldest.
 const DATE_COLUMNS = new Set(["date", "month"]);
 
+// Chosen in the service dropdown to bill something that has no service behind it.
+const ONE_OFF = "__one_off__";
+
 /** Nominal billing day for a charge: the subscription's start day projected onto the
  *  charge's billing month, clamped when that month is too short (a Jan 31 start bills
  *  on Feb 28). Charges only store the month, so without a subscription to read the day
@@ -143,13 +146,17 @@ function KeyboardHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
   );
 }
 
+/** What a charge is for: its service's name, or the label it carries when it has none. */
+function chargeName(charge: ChargeRecord, services: Service[]): string {
+  return services.find((s) => s.id === charge.service_id)?.name ?? charge.label ?? "?";
+}
+
 function exportToCSV(charges: ChargeRecord[], services: Service[], subscribers: { id: string; name: string }[], subscriptions: Subscription[]) {
   const headers = ["Subscriber", "Service", "Billing Date", "Month", "Monthly Cost", "Currency", "Exchange Rate", "Total CNY", "Paid", "Paid Date", "Note"];
   const rows = charges.map((c) => {
     const sub = subscribers.find((s) => s.id === c.subscriber_id);
-    const svc = services.find((s) => s.id === c.service_id);
     const sc = subscriptions.find((s) => s.subscriber_id === c.subscriber_id && s.service_id === c.service_id);
-    return [sub?.name ?? "", svc?.name ?? "", billingDate(c.period_start, sc?.start_date), c.period_start, c.monthly_cost, c.currency, c.exchange_rate, Number(c.total_cny).toFixed(2), c.paid ? "Yes" : "No", c.paid_date ?? "", c.note ?? ""];
+    return [sub?.name ?? "", chargeName(c, services), billingDate(c.period_start, sc?.start_date), c.period_start, c.monthly_cost, c.currency, c.exchange_rate, Number(c.total_cny).toFixed(2), c.paid ? "Yes" : "No", c.paid_date ?? "", c.note ?? ""];
   });
   const csv = [headers, ...rows].map((r) => r.map((v) => `"${v}"`).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
@@ -228,7 +235,7 @@ export default function SubscriptionPage() {
   const [editingSubscriberName, setEditingSubscriberName] = useState("");
 
   const [subForm, setSubForm] = useState({ subscriberId: "", serviceId: "", startDate: new Date().toISOString().slice(0, 10), note: "" });
-  const [chargeForm, setChargeForm] = useState({ subscriberId: "", serviceId: "", date: new Date().toISOString().slice(0, 10), exchangeRate: 7.25, note: "" });
+  const [chargeForm, setChargeForm] = useState({ subscriberId: "", serviceId: "", date: new Date().toISOString().slice(0, 10), exchangeRate: 7.25, note: "", label: "", amount: 0, currency: "SGD" as Currency });
   const [billExchangeRate, setBillExchangeRate] = useState(7.25);
   const [liveRates, setLiveRates] = useState<Record<string, number> | null>(null);
 
@@ -321,9 +328,8 @@ export default function SubscriptionPage() {
       const q = searchQuery.toLowerCase();
       charges = charges.filter((c) => {
         const sub = data.subscribers.find((s) => s.id === c.subscriber_id);
-        const svc = data.services.find((s) => s.id === c.service_id);
         const sc = data.subscriptions.find((s) => s.subscriber_id === c.subscriber_id && s.service_id === c.service_id);
-        return (sub?.name ?? "").toLowerCase().includes(q) || (svc?.name ?? "").toLowerCase().includes(q) || billingDate(c.period_start, sc?.start_date).includes(q) || (c.note ?? "").toLowerCase().includes(q);
+        return (sub?.name ?? "").toLowerCase().includes(q) || chargeName(c, data.services).toLowerCase().includes(q) || billingDate(c.period_start, sc?.start_date).includes(q) || (c.note ?? "").toLowerCase().includes(q);
       });
     }
     if (sortColumn) {
@@ -331,7 +337,7 @@ export default function SubscriptionPage() {
         let va: string | number = 0, vb: string | number = 0;
         switch (sortColumn) {
           case "subscriber": { va = data.subscribers.find((s) => s.id === a.subscriber_id)?.name ?? ""; vb = data.subscribers.find((s) => s.id === b.subscriber_id)?.name ?? ""; break; }
-          case "service": { va = data.services.find((s) => s.id === a.service_id)?.name ?? ""; vb = data.services.find((s) => s.id === b.service_id)?.name ?? ""; break; }
+          case "service": { va = chargeName(a, data.services); vb = chargeName(b, data.services); break; }
           case "month": va = a.period_start; vb = b.period_start; break;
           case "date": va = a.created_at ?? ""; vb = b.created_at ?? ""; break;
           case "total": va = Number(a.total_cny); vb = Number(b.total_cny); break;
@@ -522,21 +528,29 @@ export default function SubscriptionPage() {
   // ─── Charge actions ──────────────────────────────────────────────
   async function handleAddCharge() {
     if (!requireEdit()) return;
-    const { subscriberId, serviceId, date, exchangeRate, note } = chargeForm;
+    const { subscriberId, serviceId, date, exchangeRate, note, label, amount, currency } = chargeForm;
     if (!subscriberId || !serviceId || !date) { toast.error("Fill in all required fields"); return; }
-    const service = data!.services.find((s) => s.id === serviceId);
-    if (!service) return;
+
+    const oneOff = serviceId === ONE_OFF;
+    const service = oneOff ? null : data!.services.find((s) => s.id === serviceId);
+    if (!oneOff && !service) return;
+    if (oneOff && (!label.trim() || !amount)) { toast.error("A one-off charge needs a name and an amount"); return; }
+
+    const cost = oneOff ? amount : Number(service!.monthly_cost);
+    const cur = oneOff ? currency : service!.currency;
     const month = date.slice(0, 7); // YYYY-MM
-    const totalCny = Number((Number(service.monthly_cost) * exchangeRate).toFixed(2));
+    const totalCny = Number((cost * exchangeRate).toFixed(2));
     try {
       await apiAddCharge({
-        subscriber_id: subscriberId, service_id: serviceId,
+        subscriber_id: subscriberId,
+        service_id: oneOff ? null : serviceId,
+        label: oneOff ? label.trim() : null,
         period_start: month, period_end: month,
-        months: 1, monthly_cost: Number(service.monthly_cost),
-        currency: service.currency, exchange_rate: exchangeRate,
+        months: 1, monthly_cost: cost,
+        currency: cur, exchange_rate: exchangeRate,
         total_cny: totalCny, paid: false, note: note || "Manual",
       });
-      setChargeForm({ subscriberId: "", serviceId: "", date: new Date().toISOString().slice(0, 10), exchangeRate: 7.25, note: "" });
+      setChargeForm({ subscriberId: "", serviceId: "", date: new Date().toISOString().slice(0, 10), exchangeRate: 7.25, note: "", label: "", amount: 0, currency: "SGD" });
       setAddChargeOpen(false);
       toast.success("Charge added");
       await reload();
@@ -811,15 +825,47 @@ export default function SubscriptionPage() {
                           <Label className="text-xs text-muted-foreground">Service</Label>
                           <Select value={chargeForm.serviceId} onValueChange={(val) => {
                             const svc = data.services.find((s) => s.id === val);
-                            const rate = svc && liveRates?.[svc.currency] ? liveRates[svc.currency] : chargeForm.exchangeRate;
+                            const cur = val === ONE_OFF ? chargeForm.currency : svc?.currency;
+                            const rate = cur && liveRates?.[cur] ? liveRates[cur] : chargeForm.exchangeRate;
                             setChargeForm({ ...chargeForm, serviceId: val as string, exchangeRate: rate });
                           }}>
                             <SelectTrigger className="w-full h-9"><SelectValue placeholder="Select service" /></SelectTrigger>
                             <SelectContent>
+                              <SelectItem value={ONE_OFF}>{"\u2014"} One-off, not a service {"\u2014"}</SelectItem>
                               {data.services.map((s) => <SelectItem key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</SelectItem>)}
                             </SelectContent>
                           </Select>
                         </div>
+
+                        {chargeForm.serviceId === ONE_OFF && (
+                          <div className="grid gap-3 rounded-md border border-dashed px-3 py-3">
+                            <div className="grid gap-1.5">
+                              <Label className="text-xs text-muted-foreground">What for</Label>
+                              <Input className="h-9" value={chargeForm.label} onChange={(e) => setChargeForm({ ...chargeForm, label: e.target.value })} placeholder="e.g. ChatGPT credits top-up" autoFocus />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="grid gap-1.5">
+                                <Label className="text-xs text-muted-foreground">Amount</Label>
+                                <Input type="number" step="0.01" className="h-9" value={chargeForm.amount || ""} onChange={(e) => setChargeForm({ ...chargeForm, amount: Number(e.target.value) })} placeholder="0.00" />
+                              </div>
+                              <div className="grid gap-1.5">
+                                <Label className="text-xs text-muted-foreground">Currency</Label>
+                                <Select value={chargeForm.currency} onValueChange={(val) => {
+                                  const cur = val as Currency;
+                                  const rate = liveRates?.[cur] ?? chargeForm.exchangeRate;
+                                  setChargeForm({ ...chargeForm, currency: cur, exchangeRate: rate });
+                                }}>
+                                  <SelectTrigger className="w-full h-9"><SelectValue /></SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="SGD">SGD</SelectItem>
+                                    <SelectItem value="USD">USD</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </div>
+                            <p className="text-xs text-muted-foreground">Recorded on its own. No service is created, and nothing recurs.</p>
+                          </div>
+                        )}
                         <div className="grid gap-1.5">
                           <Label className="text-xs text-muted-foreground">Date</Label>
                           <Input type="date" className="h-9" value={chargeForm.date} onChange={(e) => setChargeForm({ ...chargeForm, date: e.target.value })} />
@@ -835,12 +881,16 @@ export default function SubscriptionPage() {
                           </div>
                         </div>
                         {chargeForm.subscriberId && chargeForm.serviceId && (() => {
+                          const oneOff = chargeForm.serviceId === ONE_OFF;
                           const service = data.services.find((s) => s.id === chargeForm.serviceId);
-                          if (!service) return null;
-                          const total = Number(service.monthly_cost) * chargeForm.exchangeRate;
+                          if (!oneOff && !service) return null;
+                          const cost = oneOff ? chargeForm.amount : Number(service!.monthly_cost);
+                          const cur = oneOff ? chargeForm.currency : service!.currency;
+                          if (!cost) return null;
+                          const total = cost * chargeForm.exchangeRate;
                           return (
                             <div className="rounded-md border bg-muted/50 px-3 py-2.5 text-sm">
-                              <span className="text-muted-foreground">{service.monthly_cost} {service.currency} x {chargeForm.exchangeRate} = </span>
+                              <span className="text-muted-foreground">{cost} {cur} x {chargeForm.exchangeRate} = </span>
                               <span className="text-lg font-bold tabular-nums">{"\u00a5 "}{total.toFixed(2)}</span>
                             </div>
                           );
@@ -1023,11 +1073,11 @@ export default function SubscriptionPage() {
                       <AnimatePresence>
                         {paginatedCharges.map((charge) => {
                           const subscriber = data.subscribers.find((s) => s.id === charge.subscriber_id);
-                          const service = data.services.find((s) => s.id === charge.service_id);
+                          const name = chargeName(charge, data.services);
                           return (
                             <motion.tr key={charge.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
                               <td className="px-3 py-2.5"><div className="flex items-center gap-2"><PersonAvatar name={subscriber?.name ?? "?"} index={data.subscribers.findIndex((s) => s.id === charge.subscriber_id)} /><span className="font-medium text-sm">{subscriber?.name ?? "?"}</span></div></td>
-                              <td className="px-3 py-2.5"><div className="flex items-center gap-2"><ServiceIcon name={service?.name ?? ""} /><span className="text-sm">{service?.name ?? "?"}</span></div></td>
+                              <td className="px-3 py-2.5"><div className="flex items-center gap-2"><ServiceIcon name={name} /><span className="text-sm">{name}</span></div></td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{chargeBillingDate(charge)}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.created_at?.slice(0, 10) ?? "—"}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.monthly_cost} {charge.currency}</td>
@@ -1081,7 +1131,7 @@ export default function SubscriptionPage() {
                                     ) : (
                                       <>
                                         <button onClick={() => { setEditingChargeId(charge.id); setEditingChargeNote(charge.note ?? ""); }} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Edit2 className="h-3 w-3 text-muted-foreground" /></button>
-                                        <button onClick={() => setConfirmDelete({ type: "charge", id: charge.id, name: `${subscriber?.name} - ${service?.name}` })} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Trash2 className="h-3 w-3 text-muted-foreground" /></button>
+                                        <button onClick={() => setConfirmDelete({ type: "charge", id: charge.id, name: `${subscriber?.name} - ${name}` })} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Trash2 className="h-3 w-3 text-muted-foreground" /></button>
                                       </>
                                     )}
                                   </div>
@@ -1152,12 +1202,12 @@ export default function SubscriptionPage() {
                     {charges.length > 0 && (
                       <div className="divide-y">
                         {charges.map((charge) => {
-                          const service = data.services.find((s) => s.id === charge.service_id);
+                          const name = chargeName(charge, data.services);
                           return (
                             <div key={charge.id} className="flex items-center justify-between px-5 py-3 text-sm hover:bg-muted/30 transition-colors">
                               <div className="flex items-center gap-2.5">
-                                <ServiceIcon name={service?.name ?? ""} />
-                                <span>{service?.name}</span>
+                                <ServiceIcon name={name} />
+                                <span>{name}</span>
                                 <span className="text-xs text-muted-foreground">{chargeBillingDate(charge)}</span>
                                 {charge.note && <span className="text-xs text-muted-foreground">{"\u00b7"} {charge.note}</span>}
                               </div>
