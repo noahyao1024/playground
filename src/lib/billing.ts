@@ -53,10 +53,26 @@ export async function fetchExchangeRates(baseUrl?: string, month?: string): Prom
   }
 }
 
+/** Rates for one billing month. A catch-up run spans several months, and each has
+ *  to be priced at its own — one shared rate is how February through June all went
+ *  out at 5.2744 while the market moved 3.5% underneath them. Memoised, so a run
+ *  fetches each month once however many subscriptions it touches. */
+export function monthlyRates(baseUrl?: string, override?: Record<string, number>) {
+  const seen = new Map<string, Record<string, number>>();
+  return async (month: string): Promise<Record<string, number>> => {
+    if (override) return override;
+    const hit = seen.get(month);
+    if (hit) return hit;
+    const fetched = await fetchExchangeRates(baseUrl, month);
+    seen.set(month, fetched);
+    return fetched;
+  };
+}
+
 export async function generateChargesForMonth(
   supabase: SupabaseClient,
   month: string,
-  exchangeRates: Record<string, number> = { USD: 6.79, SGD: 5.35 }
+  ratesFor: (month: string) => Promise<Record<string, number>>
 ): Promise<{ generated: number; details: Array<{ subscriber: string; service: string; total_cny: number }> }> {
   const [
     { data: subscriptions },
@@ -100,7 +116,8 @@ export async function generateChargesForMonth(
 
       if (!shouldBillMonth(startDate, m)) continue;
 
-      const rate = exchangeRates[service.currency] ?? exchangeRates.USD ?? 7.25;
+      const monthRates = await ratesFor(m);
+      const rate = monthRates[service.currency] ?? monthRates.USD ?? 6.79;
       const totalCny = Number((monthlyCost * rate).toFixed(2));
       const note = "Auto-generated";
 
