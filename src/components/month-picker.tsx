@@ -19,9 +19,14 @@ export function MonthPicker({ value, onChange, placeholder = "Select month" }: M
   const parsedMonth = value ? parseInt(value.split("-")[1]) - 1 : -1;
   const [viewYear, setViewYear] = useState(parsedYear);
 
-  useEffect(() => {
-    if (value) setViewYear(parseInt(value.split("-")[0]));
-  }, [value]);
+  // viewYear follows the selection, but the arrows also move it on their own, so it
+  // can't simply be derived from value. Adjust it during render when value changes
+  // rather than from an effect, which would paint the stale year first.
+  const [syncedValue, setSyncedValue] = useState(value);
+  if (value !== syncedValue) {
+    setSyncedValue(value);
+    if (value) setViewYear(parsedYear);
+  }
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
