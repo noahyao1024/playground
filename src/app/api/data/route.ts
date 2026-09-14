@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
   const { action, table, data, id, updates } = await req.json();
 
   try {
-    const validTables = ["services", "subscribers", "subscriptions", "charges", "payment_methods"];
+    const validTables = ["services", "subscribers", "subscriptions", "charges", "payment_methods", "wallet_entries"];
     if (!validTables.includes(table)) {
       return NextResponse.json({ error: "Invalid table" }, { status: 400 });
     }

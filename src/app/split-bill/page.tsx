@@ -19,6 +19,8 @@ import {
   addCharge as apiAddCharge,
   updateCharge as apiUpdateCharge,
   deleteCharge as apiDeleteCharge,
+  addWalletEntry as apiAddWalletEntry,
+  walletBalance,
   addPaymentMethod as apiAddPaymentMethod,
   updatePaymentMethod as apiUpdatePaymentMethod,
   deletePaymentMethod as apiDeletePaymentMethod,
@@ -29,6 +31,7 @@ import {
   type Subscription,
   type ChargeRecord,
   type PaymentMethod,
+  type WalletKind,
   type Currency,
 } from "@/lib/store";
 
@@ -241,6 +244,8 @@ export default function SubscriptionPage() {
   const [liveRates, setLiveRates] = useState<Record<string, number> | null>(null);
 
   // Payment methods
+  const [walletOpen, setWalletOpen] = useState<string | null>(null);
+  const [walletForm, setWalletForm] = useState({ amount: 0, kind: "topup" as WalletKind, note: "" });
   const [addPmOpen, setAddPmOpen] = useState(false);
   const [editingPm, setEditingPm] = useState<PaymentMethod | null>(null);
   const [pmForm, setPmForm] = useState({ label: "", cardholderName: "", cardNumber: "", expiryMonth: new Date().getMonth() + 1, expiryYear: new Date().getFullYear() + 1, isDefault: false });
@@ -260,7 +265,7 @@ export default function SubscriptionPage() {
       setData(d);
     } catch (err) {
       console.error("Failed to load data:", err);
-      setData({ services: [], subscribers: [], subscriptions: [], charges: [], payment_methods: [] });
+      setData({ services: [], subscribers: [], subscriptions: [], charges: [], payment_methods: [], wallet_entries: [] });
     } finally {
       setLoading(false);
     }
@@ -688,6 +693,29 @@ export default function SubscriptionPage() {
   function chargeBillingDate(charge: ChargeRecord) {
     const sub = data!.subscriptions.find((s) => s.subscriber_id === charge.subscriber_id && s.service_id === charge.service_id);
     return billingDate(charge.period_start, sub?.start_date);
+  }
+
+  /** A person's ledger, newest first. */
+  function walletEntriesFor(subscriberId: string) {
+    return data!.wallet_entries.filter((e) => e.subscriber_id === subscriberId);
+  }
+
+  async function handleAddWalletEntry(subscriberId: string) {
+    if (!requireEdit()) return;
+    const { amount, kind, note } = walletForm;
+    if (!amount) { toast.error("Enter an amount"); return; }
+    // A top-up credits, anything else debits — the sign is implied by the kind so
+    // there is no way to post a top-up that takes money away.
+    const signed = kind === "topup" ? Math.abs(amount) : -Math.abs(amount);
+    try {
+      await apiAddWalletEntry({ subscriber_id: subscriberId, amount_cny: signed, kind, note: note.trim() || null });
+      setWalletForm({ amount: 0, kind: "topup", note: "" });
+      setWalletOpen(null);
+      toast.success("Entry posted");
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to post entry");
+    }
   }
 
   function subscriberCharges(subscriberId: string) {
@@ -1195,6 +1223,8 @@ export default function SubscriptionPage() {
                 const subs = data.subscriptions.filter((s) => s.subscriber_id === subscriber.id && s.active);
                 const unpaid = subscriberUnpaid(subscriber.id);
                 const paid = charges.filter((c) => c.paid).reduce((s, c) => s + Number(c.total_cny), 0);
+                const balance = walletBalance(data.wallet_entries, subscriber.id);
+                const ledger = walletEntriesFor(subscriber.id);
                 return (
                   <div key={subscriber.id} className="rounded-2xl border bg-card">
                     <div className="flex items-center justify-between px-5 py-4 border-b">
@@ -1220,8 +1250,35 @@ export default function SubscriptionPage() {
                       <div className="flex gap-5 tabular-nums">
                         {unpaid > 0 && <div className="text-right text-amber-600 dark:text-amber-400"><div className="text-lg font-extrabold"><span className="text-xs font-medium opacity-60">¥ </span>{unpaid.toFixed(2)}</div><div className="text-[10px] font-normal opacity-70">unpaid</div></div>}
                         {paid > 0 && <div className="text-right text-emerald-600 dark:text-emerald-400"><div className="text-lg font-extrabold"><span className="text-xs font-medium opacity-60">¥ </span>{paid.toFixed(2)}</div><div className="text-[10px] font-normal opacity-70">paid</div></div>}
+                        {canEdit && (
+                          <button
+                            onClick={() => { setWalletOpen(subscriber.id); setWalletForm({ amount: 0, kind: "topup", note: "" }); }}
+                            className={`text-right rounded-md px-2 py-1 transition-colors hover:bg-muted ${balance < 0 ? "text-amber-600 dark:text-amber-400" : "text-foreground"}`}
+                            title={ledger.length ? `${ledger.length} wallet ${ledger.length === 1 ? "entry" : "entries"}` : "No wallet entries yet"}
+                          >
+                            <div className="text-lg font-extrabold"><span className="text-xs font-medium opacity-60">¥ </span>{balance.toFixed(2)}</div>
+                            <div className="text-[10px] font-normal opacity-70">wallet</div>
+                          </button>
+                        )}
                       </div>
                     </div>
+                    {ledger.length > 0 && (
+                      <div className="divide-y border-b bg-muted/20">
+                        {ledger.map((e) => (
+                          <div key={e.id} className="flex items-center justify-between px-5 py-2 text-xs">
+                            <div className="flex items-center gap-2 text-muted-foreground">
+                              <span className="rounded bg-muted px-1.5 py-0.5 font-medium">{e.kind}</span>
+                              <span>{stampInSG(e.created_at) ?? "—"}</span>
+                              {e.note && <span>{"\u00b7"} {e.note}</span>}
+                            </div>
+                            <span className={`tabular-nums font-semibold ${Number(e.amount_cny) < 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+                              {Number(e.amount_cny) > 0 ? "+" : ""}{Number(e.amount_cny).toFixed(2)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
                     {charges.length > 0 && (
                       <div className="divide-y">
                         {charges.map((charge) => {
@@ -1544,6 +1601,52 @@ export default function SubscriptionPage() {
               <span className="text-sm">Set as default payment method</span>
             </label>
             <Button size="sm" onClick={handleSavePaymentMethod}>{editingPm ? "Save changes" : "Add card"}</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Wallet entry */}
+      <Dialog open={!!walletOpen} onOpenChange={(open) => { if (!open) setWalletOpen(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Wallet {"\u2014"} {data.subscribers.find((s) => s.id === walletOpen)?.name ?? ""}</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-4 pt-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-1.5">
+                <Label className="text-xs text-muted-foreground">Kind</Label>
+                <Select value={walletForm.kind} onValueChange={(v) => setWalletForm({ ...walletForm, kind: v as WalletKind })}>
+                  <SelectTrigger className="w-full h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="topup">Top-up (adds)</SelectItem>
+                    <SelectItem value="charge">Charge (deducts)</SelectItem>
+                    <SelectItem value="adjustment">Adjustment (deducts)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="grid gap-1.5">
+                <Label className="text-xs text-muted-foreground">Amount (CNY)</Label>
+                <Input type="number" step="0.01" className="h-9" value={walletForm.amount || ""} placeholder="0.00"
+                  onChange={(e) => setWalletForm({ ...walletForm, amount: Number(e.target.value) })} autoFocus />
+              </div>
+            </div>
+            <div className="grid gap-1.5">
+              <Label className="text-xs text-muted-foreground">Note</Label>
+              <Input className="h-9" value={walletForm.note} placeholder="Why this entry exists"
+                onChange={(e) => setWalletForm({ ...walletForm, note: e.target.value })} />
+            </div>
+            {!!walletForm.amount && walletOpen && (() => {
+              const signed = walletForm.kind === "topup" ? Math.abs(walletForm.amount) : -Math.abs(walletForm.amount);
+              const before = walletBalance(data.wallet_entries, walletOpen);
+              return (
+                <div className="rounded-md border bg-muted/50 px-3 py-2.5 text-sm tabular-nums">
+                  <span className="text-muted-foreground">{"\u00a5 "}{before.toFixed(2)} {signed > 0 ? "+" : "\u2212"} {Math.abs(signed).toFixed(2)} = </span>
+                  <span className="text-lg font-bold">{"\u00a5 "}{(before + signed).toFixed(2)}</span>
+                </div>
+              );
+            })()}
+            <p className="text-xs text-muted-foreground">Entries can{"\u2019"}t be edited or removed. To correct one, post another.</p>
+            <Button size="sm" onClick={() => walletOpen && handleAddWalletEntry(walletOpen)}>Post entry</Button>
           </div>
         </DialogContent>
       </Dialog>
