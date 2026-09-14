@@ -21,6 +21,7 @@ import {
   deleteCharge as apiDeleteCharge,
   addWalletEntry as apiAddWalletEntry,
   settleCharge as apiSettleCharge,
+  settlePerson as apiSettlePerson,
   unsettleCharge as apiUnsettleCharge,
   walletBalance,
   addPaymentMethod as apiAddPaymentMethod,
@@ -248,6 +249,7 @@ export default function SubscriptionPage() {
 
   // Payment methods
   const [settleFor, setSettleFor] = useState<ChargeRecord | null>(null);
+  const [settleAllFor, setSettleAllFor] = useState<string | null>(null);
   const [settleWallet, setSettleWallet] = useState("");
   const [settleNote, setSettleNote] = useState("");
   const [settling, setSettling] = useState(false);
@@ -588,6 +590,28 @@ export default function SubscriptionPage() {
     // Default to the person the charge belongs to; any wallet may pay it.
     setSettleWallet(charge.subscriber_id);
     setSettleNote("");
+  }
+
+  function openSettleAll(subscriberId: string) {
+    if (!requireEdit()) return;
+    setSettleAllFor(subscriberId);
+    setSettleWallet(subscriberId);
+    setSettleNote("");
+  }
+
+  async function handleSettleAll() {
+    if (!settleAllFor || !settleWallet) return;
+    setSettling(true);
+    try {
+      const r = await apiSettlePerson(settleAllFor, settleWallet, settleNote.trim() || undefined);
+      toast.success(`Settled ${r.settled} charge(s), ${"\u00a5"}${r.total.toFixed(2)}. ${"\u00a5"}${r.balance.toFixed(2)} left`);
+      setSettleAllFor(null);
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Could not settle");
+    } finally {
+      setSettling(false);
+    }
   }
 
   async function handleSettle() {
@@ -1293,7 +1317,16 @@ export default function SubscriptionPage() {
                         </div>
                       </div>
                       <div className="flex gap-5 tabular-nums">
-                        {unpaid > 0 && <div className="text-right text-amber-600 dark:text-amber-400"><div className="text-lg font-extrabold"><span className="text-xs font-medium opacity-60">¥ </span>{unpaid.toFixed(2)}</div><div className="text-[10px] font-normal opacity-70">unpaid</div></div>}
+                        {unpaid > 0 && (
+                          <div className="text-right text-amber-600 dark:text-amber-400">
+                            <div className="text-lg font-extrabold"><span className="text-xs font-medium opacity-60">¥ </span>{unpaid.toFixed(2)}</div>
+                            {canEdit ? (
+                              <button onClick={() => openSettleAll(subscriber.id)} className="text-[10px] font-normal underline underline-offset-2 opacity-70 hover:opacity-100 transition-opacity">settle all</button>
+                            ) : (
+                              <div className="text-[10px] font-normal opacity-70">unpaid</div>
+                            )}
+                          </div>
+                        )}
                         {paid > 0 && <div className="text-right text-emerald-600 dark:text-emerald-400"><div className="text-lg font-extrabold"><span className="text-xs font-medium opacity-60">¥ </span>{paid.toFixed(2)}</div><div className="text-[10px] font-normal opacity-70">paid</div></div>}
                         {canEdit && (
                           <button
@@ -1647,6 +1680,58 @@ export default function SubscriptionPage() {
             </label>
             <Button size="sm" onClick={handleSavePaymentMethod}>{editingPm ? "Save changes" : "Add card"}</Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Settle everything one person owes */}
+      <Dialog open={!!settleAllFor} onOpenChange={(open) => { if (!open) setSettleAllFor(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Settle everything owed</DialogTitle></DialogHeader>
+          {settleAllFor && (() => {
+            const owing = data.charges.filter((c) => c.subscriber_id === settleAllFor && !c.paid);
+            const owed = owing.reduce((sum, c) => sum + Number(c.total_cny), 0);
+            const balance = walletBalance(data.wallet_entries, settleWallet);
+            const short = balance < owed;
+            const who = data.subscribers.find((p) => p.id === settleAllFor)?.name ?? "";
+            return (
+              <div className="grid gap-4 pt-2">
+                <div className="rounded-md border bg-muted/50 px-3 py-2.5 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">{who} {"\u00b7"} {owing.length} charge{owing.length === 1 ? "" : "s"}</span>
+                    <span className="tabular-nums text-lg font-bold">{"\u00a5 "}{owed.toFixed(2)}</span>
+                  </div>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs text-muted-foreground">Pay from</Label>
+                  <Select value={settleWallet} onValueChange={(v) => setSettleWallet(v as string)}>
+                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Whose wallet" /></SelectTrigger>
+                    <SelectContent>
+                      {data.subscribers.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name} {"\u00b7"} {"\u00a5"}{walletBalance(data.wallet_entries, p.id).toFixed(2)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs text-muted-foreground">Note</Label>
+                  <Input className="h-9" value={settleNote} placeholder="Optional" onChange={(e) => setSettleNote(e.target.value)} />
+                </div>
+                <div className={`rounded-md border px-3 py-2.5 text-sm tabular-nums ${short ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400" : "bg-muted/50"}`}>
+                  {short ? (
+                    <>Short by {"\u00a5"}{(owed - balance).toFixed(2)}. Nothing is settled unless the whole amount is covered.</>
+                  ) : (
+                    <><span className="text-muted-foreground">{"\u00a5 "}{balance.toFixed(2)} {"\u2212"} {owed.toFixed(2)} = </span><span className="text-lg font-bold">{"\u00a5 "}{(balance - owed).toFixed(2)}</span></>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">One ledger entry per charge, so each stays tied to what it paid for.</p>
+                <Button size="sm" onClick={handleSettleAll} disabled={!settleWallet || short || settling}>
+                  {settling ? "Settling..." : `Settle all ${owing.length}`}
+                </Button>
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 

@@ -314,6 +314,19 @@ export async function settleCharge(chargeId: string, walletOwnerId: string, note
   return body.balance as number;
 }
 
+/** Clear everything one person owes, from one wallet, in one transaction. All or
+ *  nothing: a wallet that cannot cover the whole total settles none of it. */
+export async function settlePerson(subscriberId: string, walletOwnerId: string, note?: string) {
+  const res = await fetch("/api/settle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "settlePerson", chargeId: subscriberId, walletOwnerId, note }),
+  });
+  const body = await res.json().catch(() => ({ error: res.statusText }));
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body as { settled: number; total: number; balance: number };
+}
+
 /** Undo a settlement by posting the opposite entry; the original stays. */
 export async function unsettleCharge(chargeId: string, note?: string) {
   const res = await fetch("/api/settle", {
