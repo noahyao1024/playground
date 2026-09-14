@@ -750,10 +750,19 @@ export default function SubscriptionPage() {
   /** What the status badge should say on hover: when it was marked, and whether
    *  the row has been edited since it was created. Older rows predate paid_at and
    *  only have the date. */
+  /** Who actually paid a charge, when it was not the person who owes it. Read from
+   *  the ledger entry that settled it. */
+  function paidBy(charge: ChargeRecord) {
+    const entry = data!.wallet_entries.find((e) => e.charge_id === charge.id && e.kind === "charge");
+    if (!entry || entry.subscriber_id === charge.subscriber_id) return null;
+    return data!.subscribers.find((p) => p.id === entry.subscriber_id)?.name ?? null;
+  }
+
   function chargeHistory(charge: ChargeRecord) {
     const lines: string[] = [];
     if (charge.paid) {
-      lines.push(`Marked paid ${stampInSG(charge.paid_at) ?? charge.paid_date ?? "at an unrecorded time"}`);
+      const by = paidBy(charge);
+      lines.push(`Marked paid ${stampInSG(charge.paid_at) ?? charge.paid_date ?? "at an unrecorded time"}${by ? ` \u2014 paid by ${by}` : ""}`);
     }
     if (charge.updated_at) lines.push(`Edited ${stampInSG(charge.updated_at)}`);
     return lines.join("\n");
@@ -1211,6 +1220,10 @@ export default function SubscriptionPage() {
                                     <span title={chargeHistory(charge) || undefined} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
                                       {charge.paid ? "Paid" : "Unpaid"}
                                     </span>
+                                    {(() => {
+                                      const by = paidBy(charge);
+                                      return by ? <span className="text-[10px] text-muted-foreground">by {by}</span> : null;
+                                    })()}
                                     {charge.paid ? (
                                       <button onClick={() => handleUnsettle(charge)} className="text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors">reverse</button>
                                     ) : (
@@ -1366,10 +1379,25 @@ export default function SubscriptionPage() {
                       <div className="divide-y border-b bg-muted/20">
                         {ledger.map((e) => (
                           <div key={e.id} className="flex items-center justify-between px-5 py-2 text-xs">
-                            <div className="flex items-center gap-2 text-muted-foreground">
-                              <span className="rounded bg-muted px-1.5 py-0.5 font-medium">{e.kind}</span>
-                              <span>{stampInSG(e.created_at) ?? "—"}</span>
-                              {e.note && <span>{"\u00b7"} {e.note}</span>}
+                            <div className="flex items-center gap-2 text-muted-foreground min-w-0">
+                              <span className="rounded bg-muted px-1.5 py-0.5 font-medium shrink-0">{e.kind}</span>
+                              <span className="shrink-0">{stampInSG(e.created_at) ?? "—"}</span>
+                              {(() => {
+                                // An entry that settled a charge should say which one, and
+                                // whose it was when someone paid on another person's behalf.
+                                const ch = e.charge_id ? data.charges.find((c) => c.id === e.charge_id) : undefined;
+                                if (!ch) return null;
+                                const owedBy = data.subscribers.find((x) => x.id === ch.subscriber_id);
+                                return (
+                                  <span className="truncate">
+                                    {"\u00b7"} {chargeName(ch, data.services)} {ch.period_start}
+                                    {owedBy && owedBy.id !== subscriber.id && (
+                                      <span className="ml-1 text-amber-600 dark:text-amber-400">for {owedBy.name}</span>
+                                    )}
+                                  </span>
+                                );
+                              })()}
+                              {e.note && <span className="truncate">{"\u00b7"} {e.note}</span>}
                             </div>
                             <span className={`tabular-nums font-semibold ${Number(e.amount_cny) < 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}>
                               {Number(e.amount_cny) > 0 ? "+" : ""}{Number(e.amount_cny).toFixed(2)}
