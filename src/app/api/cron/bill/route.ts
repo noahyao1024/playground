@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { monthInSG } from "@/lib/dates";
-import { getServerSupabase, generateChargesForMonth, fetchExchangeRates } from "@/lib/billing";
+import { getServerSupabase, generateChargesForMonth, monthlyRates } from "@/lib/billing";
 
 export async function GET(req: NextRequest) {
   // Verify the request is from Vercel Cron
@@ -25,11 +25,12 @@ export async function GET(req: NextRequest) {
   // Fetch live exchange rates
   const proto = req.headers.get("x-forwarded-proto") ?? "https";
   const host = req.headers.get("host") ?? "localhost:3000";
-  const exchangeRates = await fetchExchangeRates(`${proto}://${host}`);
+  // A catch-up run spans several months; each is priced at its own rate.
+  const ratesFor = monthlyRates(`${proto}://${host}`);
 
   try {
-    const result = await generateChargesForMonth(supabase, month, exchangeRates);
-    return NextResponse.json({ message: `Generated ${result.generated} charge(s)`, month, exchangeRates, ...result });
+    const result = await generateChargesForMonth(supabase, month, ratesFor);
+    return NextResponse.json({ message: `Generated ${result.generated} charge(s)`, month, ...result });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null && "message" in err ? (err as { message: string }).message : JSON.stringify(err);
     return NextResponse.json({ error: msg }, { status: 500 });

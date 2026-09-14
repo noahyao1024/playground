@@ -234,7 +234,6 @@ export default function SubscriptionPage() {
   const [editingSubNote, setEditingSubNote] = useState("");
   const [billMonth, setBillMonth] = useState(getCurrentMonth());
   const [billing, setBilling] = useState(false);
-  const [recalculating, setRecalculating] = useState(false);
   const [editingSubscriberId, setEditingSubscriberId] = useState<string | null>(null);
   const [editingSubscriberName, setEditingSubscriberName] = useState("");
 
@@ -452,7 +451,7 @@ export default function SubscriptionPage() {
     }
   }
 
-  // ─── Clear / Recalc charges ─────────────────────────────────────
+  // ─── Clear charges ───────────────────────────────────────────────
   async function handleClearCharges() {
     if (!requireEdit()) return;
     try {
@@ -461,19 +460,6 @@ export default function SubscriptionPage() {
       toast.success("All charges cleared");
       await reload();
     } catch (err: unknown) { toast.error(`Clear failed: ${err instanceof Error ? err.message : String(err)}`); }
-  }
-
-  async function handleRecalcCharges() {
-    if (!requireEdit()) return;
-    setRecalculating(true);
-    try {
-      const res = await fetch("/api/recalc-charges", { method: "POST" });
-      if (!res.ok) { const err = await res.json().catch(() => ({ error: res.statusText })); throw new Error(err.error || res.statusText); }
-      const result = await res.json();
-      toast.success(result.updated > 0 ? `Recalculated ${result.updated} charge(s)` : "All charges already correct");
-      await reload();
-    } catch (err: unknown) { toast.error(`Recalc failed: ${err instanceof Error ? err.message : String(err)}`); }
-    finally { setRecalculating(false); }
   }
 
   // ─── Subscriber actions ───────────────────────────────────────────
@@ -536,6 +522,26 @@ export default function SubscriptionPage() {
   }
 
   // ─── Charge actions ──────────────────────────────────────────────
+  /** Price a backdated charge at the rate that held then, the same way the monthly
+   *  run does. Without this, adding March's charge in September quietly applies
+   *  September's rate. */
+  async function handleChargeDateChange(date: string) {
+    setChargeForm((f) => ({ ...f, date }));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+    const cur = chargeForm.serviceId === ONE_OFF
+      ? chargeForm.currency
+      : data!.services.find((s) => s.id === chargeForm.serviceId)?.currency;
+    if (!cur) return;
+    try {
+      const res = await fetch(`/api/exchange-rate?date=${date}`);
+      const payload = await res.json();
+      const rate = payload?.rates?.[cur];
+      if (rate) setChargeForm((f) => ({ ...f, exchangeRate: rate }));
+    } catch {
+      // Keep whatever rate is in the form; the user can still type one.
+    }
+  }
+
   async function handleAddCharge() {
     if (!requireEdit()) return;
     const { subscriberId, serviceId, date, exchangeRate, note, label, amount, currency } = chargeForm;
@@ -921,7 +927,7 @@ export default function SubscriptionPage() {
                         )}
                         <div className="grid gap-1.5">
                           <Label className="text-xs text-muted-foreground">Date</Label>
-                          <Input type="date" className="h-9" value={chargeForm.date} onChange={(e) => setChargeForm({ ...chargeForm, date: e.target.value })} />
+                          <Input type="date" className="h-9" value={chargeForm.date} onChange={(e) => handleChargeDateChange(e.target.value)} />
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                           <div className="grid gap-1.5">
@@ -985,9 +991,6 @@ export default function SubscriptionPage() {
                 <div className="flex items-center gap-1.5 ml-auto">
                   <Button size="sm" className="h-8" onClick={handleBillNow} disabled={billing}>
                     {billing ? "Billing..." : "Bill now"}
-                  </Button>
-                  <Button variant="outline" size="sm" className="h-8" onClick={handleRecalcCharges} disabled={recalculating}>
-                    {recalculating ? "Recalcing..." : "Recalc rates"}
                   </Button>
                   <Button variant="outline" size="sm" className="h-8 text-destructive hover:bg-destructive/10" onClick={() => setConfirmDelete({ type: "all-charges", id: "", name: "all charges" })}>
                     Clear

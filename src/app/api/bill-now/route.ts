@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, isAllowedEmail } from "@/lib/auth";
 import { monthInSG } from "@/lib/dates";
-import { getServerSupabase, generateChargesForMonth, fetchExchangeRates } from "@/lib/billing";
+import { getServerSupabase, generateChargesForMonth, monthlyRates } from "@/lib/billing";
 
 export async function POST(req: NextRequest) {
   // Check auth + whitelist
@@ -35,16 +35,15 @@ export async function POST(req: NextRequest) {
     month = monthInSG();
   }
 
-  // Fetch live rates if not provided
-  if (!exchangeRates) {
-    const proto = req.headers.get("x-forwarded-proto") ?? "https";
-    const host = req.headers.get("host") ?? "localhost:3000";
-    exchangeRates = await fetchExchangeRates(`${proto}://${host}`);
-  }
+  const proto = req.headers.get("x-forwarded-proto") ?? "https";
+  const host = req.headers.get("host") ?? "localhost:3000";
+  // A run can span months it never billed; each gets its own rate. Rates supplied
+  // in the body override that for every month, which is what an explicit rate means.
+  const ratesFor = monthlyRates(`${proto}://${host}`, exchangeRates);
 
   try {
-    const result = await generateChargesForMonth(supabase, month, exchangeRates);
-    return NextResponse.json({ message: `Generated ${result.generated} charge(s)`, month, exchangeRates, ...result });
+    const result = await generateChargesForMonth(supabase, month, ratesFor);
+    return NextResponse.json({ message: `Generated ${result.generated} charge(s)`, month, ...result });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null && "message" in err ? (err as { message: string }).message : JSON.stringify(err);
     return NextResponse.json({ error: msg }, { status: 500 });
