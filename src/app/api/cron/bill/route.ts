@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { monthInSG } from "@/lib/dates";
 import { getServerSupabase, generateChargesForMonth, fetchExchangeRates } from "@/lib/billing";
 
 export async function GET(req: NextRequest) {
@@ -17,8 +18,9 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
   }
 
-  const now = new Date();
-  const month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  // Vercel functions run in UTC; between 16:00 and midnight there it is already
+  // tomorrow in Singapore, which for the 1st of a month is a different month.
+  const month = monthInSG();
 
   // Fetch live exchange rates
   const proto = req.headers.get("x-forwarded-proto") ?? "https";

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, isAllowedEmail } from "@/lib/auth";
+import { monthInSG } from "@/lib/dates";
 import { getServerSupabase, generateChargesForMonth, fetchExchangeRates } from "@/lib/billing";
 
 export async function POST(req: NextRequest) {
@@ -27,13 +28,11 @@ export async function POST(req: NextRequest) {
       exchangeRates = { USD: Number(body.exchangeRate) };
     }
   } catch {
-    const now = new Date();
-    month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    month = monthInSG();
   }
 
   if (!month || !/^\d{4}-\d{2}$/.test(month)) {
-    const now = new Date();
-    month = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    month = monthInSG();
   }
 
   // Fetch live rates if not provided

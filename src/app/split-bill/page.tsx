@@ -33,6 +33,7 @@ import {
 } from "@/lib/store";
 
 import { ALLOWED_EMAILS } from "@/lib/auth";
+import { todayInSG } from "@/lib/dates";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -163,7 +164,7 @@ function exportToCSV(charges: ChargeRecord[], services: Service[], subscribers: 
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `subscriptions-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `subscriptions-${todayInSG()}.csv`;
   a.click();
   URL.revokeObjectURL(url);
   toast.success("CSV exported");
@@ -234,8 +235,8 @@ export default function SubscriptionPage() {
   const [editingSubscriberId, setEditingSubscriberId] = useState<string | null>(null);
   const [editingSubscriberName, setEditingSubscriberName] = useState("");
 
-  const [subForm, setSubForm] = useState({ subscriberId: "", serviceId: "", startDate: new Date().toISOString().slice(0, 10), note: "" });
-  const [chargeForm, setChargeForm] = useState({ subscriberId: "", serviceId: "", date: new Date().toISOString().slice(0, 10), exchangeRate: 7.25, note: "", label: "", amount: 0, currency: "SGD" as Currency });
+  const [subForm, setSubForm] = useState({ subscriberId: "", serviceId: "", startDate: todayInSG(), note: "" });
+  const [chargeForm, setChargeForm] = useState({ subscriberId: "", serviceId: "", date: todayInSG(), exchangeRate: 7.25, note: "", label: "", amount: 0, currency: "SGD" as Currency });
   const [billExchangeRate, setBillExchangeRate] = useState(7.25);
   const [liveRates, setLiveRates] = useState<Record<string, number> | null>(null);
 
@@ -384,7 +385,7 @@ export default function SubscriptionPage() {
         active: true,
         note: note.trim() || null,
       });
-      setSubForm({ subscriberId: "", serviceId: "", startDate: new Date().toISOString().slice(0, 10), note: "" });
+      setSubForm({ subscriberId: "", serviceId: "", startDate: todayInSG(), note: "" });
       setAddSubOpen(false);
       toast.success("Subscription added");
       await reload();
@@ -550,7 +551,7 @@ export default function SubscriptionPage() {
         currency: cur, exchange_rate: exchangeRate,
         total_cny: totalCny, paid: false, note: note || "Manual",
       });
-      setChargeForm({ subscriberId: "", serviceId: "", date: new Date().toISOString().slice(0, 10), exchangeRate: 7.25, note: "", label: "", amount: 0, currency: "SGD" });
+      setChargeForm({ subscriberId: "", serviceId: "", date: todayInSG(), exchangeRate: 7.25, note: "", label: "", amount: 0, currency: "SGD" });
       setAddChargeOpen(false);
       toast.success("Charge added");
       await reload();
@@ -562,7 +563,7 @@ export default function SubscriptionPage() {
 
   async function handleTogglePaid(charge: ChargeRecord) {
     if (!requireEdit()) return;
-    await apiUpdateCharge(charge.id, { paid: !charge.paid, paid_date: !charge.paid ? new Date().toISOString().slice(0, 10) : undefined });
+    await apiUpdateCharge(charge.id, { paid: !charge.paid, paid_date: !charge.paid ? todayInSG() : undefined });
     toast.success(charge.paid ? "Marked unpaid" : "Marked paid"); await reload();
   }
   async function handleRemoveCharge(id: string) { if (!requireEdit()) return; await apiDeleteCharge(id); toast.success("Removed"); await reload(); }
@@ -570,7 +571,7 @@ export default function SubscriptionPage() {
     if (!requireEdit()) return;
     const unpaid = filteredCharges.filter((c) => !c.paid);
     if (unpaid.length === 0) { toast.info("No unpaid charges"); return; }
-    await Promise.all(unpaid.map((c) => apiUpdateCharge(c.id, { paid: true, paid_date: new Date().toISOString().slice(0, 10) })));
+    await Promise.all(unpaid.map((c) => apiUpdateCharge(c.id, { paid: true, paid_date: todayInSG() })));
     toast.success(`Marked ${unpaid.length} as paid`); await reload();
   }
   async function handleSaveChargeNote(chargeId: string) {
