@@ -42,6 +42,15 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(result);
       }
       case "update": {
+        // Payment state belongs to the ledger. Letting it be set here would move
+        // money without an entry behind it, which is what /api/settle exists to
+        // prevent — and what the removed Paid toggle used to do.
+        if (table === "charges" && updates && ["paid", "paid_at", "paid_date"].some((k) => k in updates)) {
+          return NextResponse.json(
+            { error: "Payment state is set by settling against a wallet. Use /api/settle." },
+            { status: 400 },
+          );
+        }
         if (id === "__all__") {
           // Bulk update all rows (used for clearing is_default on payment_methods)
           const { error } = await supabase.from(table).update(updates).neq("id", "");
