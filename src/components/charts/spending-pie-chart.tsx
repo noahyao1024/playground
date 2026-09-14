@@ -17,7 +17,8 @@ export function SpendingPieChart({ charges, services }: SpendingPieChartProps) {
   const dataMap = new Map<string, number>();
   for (const charge of charges) {
     const service = services.find((s) => s.id === charge.service_id);
-    const name = service?.name ?? "Unknown";
+    // A one-off charge has no service; it carries its own label.
+    const name = service?.name ?? charge.label ?? "Unknown";
     dataMap.set(name, (dataMap.get(name) ?? 0) + Number(charge.total_cny));
   }
 

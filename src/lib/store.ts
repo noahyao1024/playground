@@ -46,7 +46,10 @@ export interface Subscription {
 export interface ChargeRecord {
   id: string;
   subscriber_id: string;
-  service_id: string;
+  /** Absent on a one-off charge, which carries its own `label` instead. */
+  service_id?: string | null;
+  /** Name of a one-off charge; only set when there is no service_id. */
+  label?: string | null;
   period_start: string;
   period_end: string;
   months: number;
