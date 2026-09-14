@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
   }
 
+  // For settlePerson, chargeId carries the subscriber whose charges are being cleared.
   const { action, chargeId, walletOwnerId, note } = await req.json();
   if (!chargeId) return NextResponse.json({ error: "chargeId is required" }, { status: 400 });
 
@@ -27,6 +28,21 @@ export async function POST(req: NextRequest) {
     // The function raises on an empty wallet, so its message is the useful one.
     if (error) return NextResponse.json({ error: error.message }, { status: 409 });
     return NextResponse.json({ ok: true, balance: Number(data) });
+  }
+
+  if (action === "settlePerson") {
+    if (!walletOwnerId) return NextResponse.json({ error: "walletOwnerId is required" }, { status: 400 });
+    const { data, error } = await supabase.rpc("settle_person", {
+      p_subscriber: chargeId, p_wallet_owner: walletOwnerId, p_note: note ?? null,
+    });
+    if (error) return NextResponse.json({ error: error.message }, { status: 409 });
+    const row = Array.isArray(data) ? data[0] : data;
+    return NextResponse.json({
+      ok: true,
+      settled: Number(row?.settled ?? 0),
+      total: Number(row?.total ?? 0),
+      balance: Number(row?.balance_left ?? 0),
+    });
   }
 
   if (action === "unsettle") {
