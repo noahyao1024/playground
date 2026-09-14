@@ -39,7 +39,8 @@ export async function POST(req: NextRequest) {
   if (!exchangeRates) {
     const proto = req.headers.get("x-forwarded-proto") ?? "https";
     const host = req.headers.get("host") ?? "localhost:3000";
-    exchangeRates = await fetchExchangeRates(`${proto}://${host}`);
+    // Price the month being billed, not the day the button was pressed.
+    exchangeRates = await fetchExchangeRates(`${proto}://${host}`, month);
   }
 
   try {

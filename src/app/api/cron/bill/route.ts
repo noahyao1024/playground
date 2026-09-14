@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
   // Fetch live exchange rates
   const proto = req.headers.get("x-forwarded-proto") ?? "https";
   const host = req.headers.get("host") ?? "localhost:3000";
-  const exchangeRates = await fetchExchangeRates(`${proto}://${host}`);
+  const exchangeRates = await fetchExchangeRates(`${proto}://${host}`, month);
 
   try {
     const result = await generateChargesForMonth(supabase, month, exchangeRates);
