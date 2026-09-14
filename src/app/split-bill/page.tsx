@@ -564,7 +564,7 @@ export default function SubscriptionPage() {
         period_start: month, period_end: month,
         months: 1, monthly_cost: cost,
         currency: cur, exchange_rate: exchangeRate,
-        total_cny: totalCny, paid: false, note: note || "Manual",
+        total_cny: totalCny, paid: false, origin: "manual", note: note || "Manual",
       });
       setChargeForm({ subscriberId: "", serviceId: "", date: todayInSG(), exchangeRate: 7.25, note: "", label: "", amount: 0, currency: "SGD" });
       setAddChargeOpen(false);

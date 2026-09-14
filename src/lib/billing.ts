@@ -132,6 +132,7 @@ export async function generateChargesForMonth(
         exchange_rate: rate,
         total_cny: totalCny,
         paid: false,
+        origin: "auto",
         note,
       });
 

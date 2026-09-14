@@ -70,6 +70,9 @@ export interface ChargeRecord {
   created_at?: string;
   /** Null until the row is edited; set by a trigger on every update. */
   updated_at?: string | null;
+  /** Who created it: the monthly run, or a person. The note used to carry this
+   *  and stopped being reliable the moment someone typed over it. */
+  origin?: "auto" | "manual" | null;
 }
 
 export type WalletKind = "topup" | "charge" | "adjustment";
