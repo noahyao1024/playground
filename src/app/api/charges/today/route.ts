@@ -21,7 +21,8 @@ type CardRow = { id: string; label: string; card_type: string; last4: string };
 type Row = {
   id: string; subscriber_id: string; service_id: string | null;
   monthly_cost: number; currency: string; total_cny: number; paid: boolean;
-  paid_date: string | null; period_start: string; created_at: string; label: string | null;
+  paid_date: string | null; paid_at: string | null; updated_at: string | null;
+  period_start: string; created_at: string; label: string | null;
   payment_method_id: string | null;
   subscribers: { name: string } | null;
   services: { name: string } | null;
@@ -58,7 +59,7 @@ export async function GET(req: NextRequest) {
   const [{ data: rows, error }, { data: subs }, { data: cards }] = await Promise.all([
     supabase
       .from("charges")
-      .select("id, subscriber_id, service_id, payment_method_id, monthly_cost, currency, total_cny, paid, paid_date, period_start, created_at, label, subscribers(name), services(name)")
+      .select("id, subscriber_id, service_id, payment_method_id, monthly_cost, currency, total_cny, paid, paid_date, paid_at, updated_at, period_start, created_at, label, subscribers(name), services(name)")
       .eq("period_start", month)
       .order("created_at", { ascending: false }),
     supabase.from("subscriptions").select("subscriber_id, service_id, start_date, payment_method_id"),
@@ -92,6 +93,11 @@ export async function GET(req: NextRequest) {
       card: describeCard(c.payment_method_id ?? sub?.payment_method_id),
       paid: c.paid,
       paid_date: c.paid_date,
+      // Stamped by the database when paid flipped, so it carries a time and does
+      // not depend on whoever clicked.
+      paid_at: c.paid_at,
+      // Null means the row has not been edited since it was created.
+      updated_at: c.updated_at,
       billing_date: billingDate(c.period_start, sub?.start_date),
       recorded_at: c.created_at,
     };

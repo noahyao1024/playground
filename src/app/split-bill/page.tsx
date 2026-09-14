@@ -33,7 +33,7 @@ import {
 } from "@/lib/store";
 
 import { ALLOWED_EMAILS } from "@/lib/auth";
-import { todayInSG } from "@/lib/dates";
+import { SG_TZ, todayInSG } from "@/lib/dates";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -563,7 +563,7 @@ export default function SubscriptionPage() {
 
   async function handleTogglePaid(charge: ChargeRecord) {
     if (!requireEdit()) return;
-    await apiUpdateCharge(charge.id, { paid: !charge.paid, paid_date: !charge.paid ? todayInSG() : undefined });
+    await apiUpdateCharge(charge.id, { paid: !charge.paid });
     toast.success(charge.paid ? "Marked unpaid" : "Marked paid"); await reload();
   }
   async function handleRemoveCharge(id: string) { if (!requireEdit()) return; await apiDeleteCharge(id); toast.success("Removed"); await reload(); }
@@ -571,7 +571,7 @@ export default function SubscriptionPage() {
     if (!requireEdit()) return;
     const unpaid = filteredCharges.filter((c) => !c.paid);
     if (unpaid.length === 0) { toast.info("No unpaid charges"); return; }
-    await Promise.all(unpaid.map((c) => apiUpdateCharge(c.id, { paid: true, paid_date: todayInSG() })));
+    await Promise.all(unpaid.map((c) => apiUpdateCharge(c.id, { paid: true })));
     toast.success(`Marked ${unpaid.length} as paid`); await reload();
   }
   async function handleSaveChargeNote(chargeId: string) {
@@ -663,6 +663,26 @@ export default function SubscriptionPage() {
       data!.subscriptions.filter((x) => x.subscriber_id === id).length,
       data!.charges.filter((c) => c.subscriber_id === id).length,
     );
+  }
+
+  /** Local wall-clock rendering of a database timestamp, in Singapore. */
+  function stampInSG(iso?: string | null) {
+    if (!iso) return null;
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: SG_TZ, dateStyle: "short", timeStyle: "short", hour12: false,
+    }).format(new Date(iso));
+  }
+
+  /** What the status badge should say on hover: when it was marked, and whether
+   *  the row has been edited since it was created. Older rows predate paid_at and
+   *  only have the date. */
+  function chargeHistory(charge: ChargeRecord) {
+    const lines: string[] = [];
+    if (charge.paid) {
+      lines.push(`Marked paid ${stampInSG(charge.paid_at) ?? charge.paid_date ?? "at an unrecorded time"}`);
+    }
+    if (charge.updated_at) lines.push(`Edited ${stampInSG(charge.updated_at)}`);
+    return lines.join("\n");
   }
 
   function chargeBillingDate(charge: ChargeRecord) {
@@ -1086,12 +1106,14 @@ export default function SubscriptionPage() {
                               <td className="px-3 py-2.5 tabular-nums"><span className="text-xs text-muted-foreground">¥ </span><span className="text-base font-extrabold">{Number(charge.total_cny).toFixed(2)}</span></td>
                               <td className="px-3 py-2.5">
                                 {canEdit ? (
-                                  <button onClick={() => handleTogglePaid(charge)} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
+                                  <button onClick={() => handleTogglePaid(charge)} title={chargeHistory(charge) || undefined} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
                                     {charge.paid ? "Paid" : "Unpaid"}
+                                    {charge.updated_at && <span className="ml-1 opacity-50">{"\u00b7"}</span>}
                                   </button>
                                 ) : (
-                                  <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
+                                  <span title={chargeHistory(charge) || undefined} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
                                     {charge.paid ? "Paid" : "Unpaid"}
+                                    {charge.updated_at && <span className="ml-1 opacity-50">{"\u00b7"}</span>}
                                   </span>
                                 )}
                               </td>
@@ -1213,6 +1235,7 @@ export default function SubscriptionPage() {
                                 {charge.note && <span className="text-xs text-muted-foreground">{"\u00b7"} {charge.note}</span>}
                               </div>
                               <div className="flex items-center gap-3">
+                                <span className="text-xs text-muted-foreground tabular-nums">{charge.monthly_cost} {charge.currency}</span>
                                 <span className="tabular-nums"><span className="text-xs text-muted-foreground">¥ </span><span className="text-base font-extrabold">{Number(charge.total_cny).toFixed(2)}</span></span>
                                 {canEdit ? (
                                   <button onClick={() => handleTogglePaid(charge)} className={`text-xs font-medium px-2 py-0.5 rounded-md transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
