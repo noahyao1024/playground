@@ -1,12 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSupabase } from "@/lib/billing";
+import { SG_TZ, todayInSG } from "@/lib/dates";
 
-// Dates are Singapore's, not the server's UTC. The monthly billing run fires at
-// 00:00 UTC on the 1st, which is 08:00 here — read off a UTC clock it lands on the
-// wrong day.
-const TZ = "Asia/Singapore";
-
-const todayLocal = () => new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(new Date());
 
 /** The day a charge nominally falls on: the subscription's start day projected onto
  *  the billing month, clamped where the month is too short. Charges store only the
@@ -46,7 +41,7 @@ export async function GET(req: NextRequest) {
   // Default to the whole month, not to today. A debit reaching the card today was
   // almost certainly recorded when the billing run fired on the 1st, so a
   // same-day filter would answer "not recorded" for charges that plainly are.
-  const month = q.get("month") ?? (date ?? todayLocal()).slice(0, 7);
+  const month = q.get("month") ?? (date ?? todayInSG()).slice(0, 7);
 
   if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return NextResponse.json({ error: "date must be YYYY-MM-DD" }, { status: 400 });
@@ -113,7 +108,7 @@ export async function GET(req: NextRequest) {
     month,
     ...(date ? { date } : {}),
     ...(amount ? { amount: Number(amount) } : {}),
-    timezone: TZ,
+    timezone: SG_TZ,
     count: charges.length,
     total_cny: Number(charges.reduce((s, c) => s + c.total_cny, 0).toFixed(2)),
     charges,
