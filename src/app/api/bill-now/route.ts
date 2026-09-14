@@ -15,18 +15,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
   }
 
-  // Accept optional month and exchangeRates params
+  // Optional month, and an optional person to restrict the run to.
   let month: string;
-  let exchangeRates: Record<string, number> | undefined;
+  let subscriberId: string | undefined;
   try {
     const body = await req.json();
     month = body.month;
-    if (body.exchangeRates && typeof body.exchangeRates === "object") {
-      exchangeRates = body.exchangeRates;
-    } else if (body.exchangeRate) {
-      // Legacy: single rate treated as USD
-      exchangeRates = { USD: Number(body.exchangeRate) };
-    }
+    if (typeof body.subscriberId === "string" && body.subscriberId) subscriberId = body.subscriberId;
   } catch {
     month = monthInSG();
   }
@@ -39,10 +34,12 @@ export async function POST(req: NextRequest) {
   const host = req.headers.get("host") ?? "localhost:3000";
   // A run can span months it never billed; each gets its own rate. Rates supplied
   // in the body override that for every month, which is what an explicit rate means.
-  const ratesFor = monthlyRates(`${proto}://${host}`, exchangeRates);
+  // No rate override: a run can span months it never billed, and each must be
+  // priced at its own. Passing one figure for all of them is the bug this drops.
+  const ratesFor = monthlyRates(`${proto}://${host}`);
 
   try {
-    const result = await generateChargesForMonth(supabase, month, ratesFor);
+    const result = await generateChargesForMonth(supabase, month, ratesFor, subscriberId);
     return NextResponse.json({ message: `Generated ${result.generated} charge(s)`, month, ...result });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null && "message" in err ? (err as { message: string }).message : JSON.stringify(err);

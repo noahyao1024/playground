@@ -242,7 +242,6 @@ export default function SubscriptionPage() {
 
   const [subForm, setSubForm] = useState({ subscriberId: "", serviceId: "", startDate: todayInSG(), note: "" });
   const [chargeForm, setChargeForm] = useState({ subscriberId: "", serviceId: "", date: todayInSG(), exchangeRate: 7.25, note: "", label: "", amount: 0, currency: "SGD" as Currency });
-  const [billExchangeRate, setBillExchangeRate] = useState(7.25);
   const [liveRates, setLiveRates] = useState<Record<string, number> | null>(null);
   // How far the settlement rate sits above mid-market, so the adjustment is visible.
   const [fxMarkup, setFxMarkup] = useState<number | null>(null);
@@ -292,10 +291,9 @@ export default function SubscriptionPage() {
         if (rates && !payload.error) {
           setLiveRates(rates);
           setFxMarkup(typeof payload.markup === "number" ? payload.markup : null);
-          if (rates.USD) {
-            setBillExchangeRate(rates.USD);
-            setChargeForm((f) => ({ ...f, exchangeRate: rates.USD }));
-          }
+          // Only seeds the manual charge form; the billing run asks the server for
+          // the rate of whichever month it is generating.
+          if (rates.USD) setChargeForm((f) => ({ ...f, exchangeRate: rates.USD }));
         }
       })
       .catch(() => {});
@@ -435,21 +433,27 @@ export default function SubscriptionPage() {
   }
 
   // ─── Bill now ─────────────────────────────────────────────────────
-  async function handleBillNow() {
+  /** Omit `subscriberId` to bill everyone. No rate is sent: the server prices each
+   *  month it generates at that month's own rate, and one figure for all of them is
+   *  exactly the bug that caused five months to share 5.2744. */
+  async function handleBillNow(subscriberId?: string) {
     if (!requireEdit()) return;
     setBilling(true);
     try {
       const res = await fetch("/api/bill-now", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ month: billMonth, exchangeRates: liveRates ?? { USD: billExchangeRate } }),
+        body: JSON.stringify({ month: billMonth, ...(subscriberId ? { subscriberId } : {}) }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: res.statusText }));
         throw new Error(err.error || res.statusText);
       }
       const result = await res.json();
-      toast.success(result.generated > 0 ? `Generated ${result.generated} charge(s) for ${billMonth}` : `No new charges for ${billMonth}`);
+      const who = subscriberId ? data!.subscribers.find((p) => p.id === subscriberId)?.name ?? "" : "";
+      toast.success(result.generated > 0
+        ? `Generated ${result.generated} charge(s) for ${billMonth}${who ? ` \u2014 ${who}` : ""}`
+        : `No new charges for ${billMonth}${who ? ` \u2014 ${who}` : ""}`);
       await reload();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1037,7 +1041,7 @@ export default function SubscriptionPage() {
                     {Object.entries(liveRates).map(([cur, rate]) => (
                       <Badge key={cur} variant="secondary" className="tabular-nums text-xs">{cur} {rate}</Badge>
                     ))}
-                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400">LIVE</span>
+                    <span className="text-[10px] text-emerald-600 dark:text-emerald-400" title="Today's rate. Each month generated is priced at its own.">LIVE</span>
                     {fxMarkup !== null && fxMarkup !== 1 && (
                       <span className="text-[10px] text-muted-foreground" title="Settlement rate = mid-market x this, covering the CNH/CNY gap, card spread and transfer fees">
                         {"\u00d7"}{fxMarkup}
@@ -1046,7 +1050,7 @@ export default function SubscriptionPage() {
                   </div>
                 )}
                 <div className="flex items-center gap-1.5 ml-auto">
-                  <Button size="sm" className="h-8" onClick={handleBillNow} disabled={billing}>
+                  <Button size="sm" className="h-8" onClick={() => handleBillNow()} disabled={billing}>
                     {billing ? "Billing..." : "Bill now"}
                   </Button>
                   <Button variant="outline" size="sm" className="h-8 text-destructive hover:bg-destructive/10" onClick={() => setConfirmDelete({ type: "all-charges", id: "", name: "all charges" })}>
@@ -1306,7 +1310,19 @@ export default function SubscriptionPage() {
                       <div className="flex items-center gap-3">
                         <PersonAvatar name={subscriber.name} index={data.subscribers.indexOf(subscriber)} size="default" />
                         <div>
-                          <span className="font-medium">{subscriber.name}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{subscriber.name}</span>
+                            {canEdit && subs.length > 0 && (
+                              <button
+                                onClick={() => handleBillNow(subscriber.id)}
+                                disabled={billing}
+                                title={`Generate this person's charges up to ${billMonth}`}
+                                className="text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors disabled:opacity-40"
+                              >
+                                {billing ? "billing..." : `bill ${billMonth}`}
+                              </button>
+                            )}
+                          </div>
                           {subs.length > 0 && (
                             <div className="flex gap-1.5 mt-1">
                               {subs.map((s) => {
