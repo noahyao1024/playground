@@ -72,7 +72,9 @@ export function monthlyRates(baseUrl?: string, override?: Record<string, number>
 export async function generateChargesForMonth(
   supabase: SupabaseClient,
   month: string,
-  ratesFor: (month: string) => Promise<Record<string, number>>
+  ratesFor: (month: string) => Promise<Record<string, number>>,
+  /** Restrict to one person's subscriptions. Omit to bill everyone. */
+  subscriberId?: string,
 ): Promise<{ generated: number; details: Array<{ subscriber: string; service: string; total_cny: number }> }> {
   const [
     { data: subscriptions },
@@ -80,7 +82,9 @@ export async function generateChargesForMonth(
     { data: services },
     { data: subscribers },
   ] = await Promise.all([
-    supabase.from("subscriptions").select("*").eq("active", true),
+    subscriberId
+      ? supabase.from("subscriptions").select("*").eq("active", true).eq("subscriber_id", subscriberId)
+      : supabase.from("subscriptions").select("*").eq("active", true),
     supabase.from("charges").select("subscriber_id, service_id, period_start"),
     supabase.from("services").select("*"),
     supabase.from("subscribers").select("*"),
