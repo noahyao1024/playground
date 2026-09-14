@@ -20,6 +20,8 @@ import {
   updateCharge as apiUpdateCharge,
   deleteCharge as apiDeleteCharge,
   addWalletEntry as apiAddWalletEntry,
+  settleCharge as apiSettleCharge,
+  unsettleCharge as apiUnsettleCharge,
   walletBalance,
   addPaymentMethod as apiAddPaymentMethod,
   updatePaymentMethod as apiUpdatePaymentMethod,
@@ -49,7 +51,7 @@ import { MonthPicker } from "@/components/month-picker";
 import { getServiceIcon, getPersonColor } from "@/lib/service-icons";
 import {
   Plus, Trash2, Edit2, Check, X,
-  Search, Download, CheckCheck, TrendingUp, Clock,
+  Search, Download, TrendingUp, Clock,
   ArrowUpDown, ChevronLeft, ChevronRight, Keyboard,
   Zap, Pause, Play, Receipt, Lock, CreditCard, Star,
 } from "lucide-react";
@@ -245,6 +247,10 @@ export default function SubscriptionPage() {
   const [fxMarkup, setFxMarkup] = useState<number | null>(null);
 
   // Payment methods
+  const [settleFor, setSettleFor] = useState<ChargeRecord | null>(null);
+  const [settleWallet, setSettleWallet] = useState("");
+  const [settleNote, setSettleNote] = useState("");
+  const [settling, setSettling] = useState(false);
   const [walletOpen, setWalletOpen] = useState<string | null>(null);
   const [walletForm, setWalletForm] = useState({ amount: 0, kind: "topup" as WalletKind, note: "" });
   const [addPmOpen, setAddPmOpen] = useState(false);
@@ -576,19 +582,41 @@ export default function SubscriptionPage() {
     }
   }
 
-  async function handleTogglePaid(charge: ChargeRecord) {
+  function openSettle(charge: ChargeRecord) {
     if (!requireEdit()) return;
-    await apiUpdateCharge(charge.id, { paid: !charge.paid });
-    toast.success(charge.paid ? "Marked unpaid" : "Marked paid"); await reload();
+    setSettleFor(charge);
+    // Default to the person the charge belongs to; any wallet may pay it.
+    setSettleWallet(charge.subscriber_id);
+    setSettleNote("");
   }
+
+  async function handleSettle() {
+    if (!settleFor || !settleWallet) return;
+    setSettling(true);
+    try {
+      const left = await apiSettleCharge(settleFor.id, settleWallet, settleNote.trim() || undefined);
+      toast.success(`Settled. ${"\u00a5"}${left.toFixed(2)} left in that wallet`);
+      setSettleFor(null);
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Could not settle");
+    } finally {
+      setSettling(false);
+    }
+  }
+
+  async function handleUnsettle(charge: ChargeRecord) {
+    if (!requireEdit()) return;
+    try {
+      const left = await apiUnsettleCharge(charge.id);
+      toast.success(`Reversed. ${"\u00a5"}${left.toFixed(2)} back in that wallet`);
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Could not reverse");
+    }
+  }
+
   async function handleRemoveCharge(id: string) { if (!requireEdit()) return; await apiDeleteCharge(id); toast.success("Removed"); await reload(); }
-  async function handleBulkMarkPaid() {
-    if (!requireEdit()) return;
-    const unpaid = filteredCharges.filter((c) => !c.paid);
-    if (unpaid.length === 0) { toast.info("No unpaid charges"); return; }
-    await Promise.all(unpaid.map((c) => apiUpdateCharge(c.id, { paid: true })));
-    toast.success(`Marked ${unpaid.length} as paid`); await reload();
-  }
   async function handleSaveChargeNote(chargeId: string) {
     if (!requireEdit()) return;
     await apiUpdateCharge(chargeId, { note: editingChargeNote || undefined });
@@ -958,7 +986,6 @@ export default function SubscriptionPage() {
                       </div>
                     </DialogContent>
                   </Dialog>
-                  <Button variant="outline" size="sm" className="h-8" onClick={handleBulkMarkPaid}><CheckCheck className="mr-1 h-3.5 w-3.5" /> Bulk pay</Button>
                 </>
               )}
               <Button variant="outline" size="sm" className="h-8" onClick={() => exportToCSV(data.charges, data.services, data.subscribers, data.subscriptions)}><Download className="mr-1 h-3.5 w-3.5" /> CSV</Button>
@@ -1146,10 +1173,16 @@ export default function SubscriptionPage() {
                               <td className="px-3 py-2.5 tabular-nums"><span className="text-xs text-muted-foreground">¥ </span><span className="text-base font-extrabold">{Number(charge.total_cny).toFixed(2)}</span></td>
                               <td className="px-3 py-2.5">
                                 {canEdit ? (
-                                  <button onClick={() => handleTogglePaid(charge)} title={chargeHistory(charge) || undefined} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
-                                    {charge.paid ? "Paid" : "Unpaid"}
-                                    {charge.updated_at && <span className="ml-1 opacity-50">{"\u00b7"}</span>}
-                                  </button>
+                                  <div className="flex items-center gap-1.5">
+                                    <span title={chargeHistory(charge) || undefined} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
+                                      {charge.paid ? "Paid" : "Unpaid"}
+                                    </span>
+                                    {charge.paid ? (
+                                      <button onClick={() => handleUnsettle(charge)} className="text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors">reverse</button>
+                                    ) : (
+                                      <button onClick={() => openSettle(charge)} className="text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors">settle</button>
+                                    )}
+                                  </div>
                                 ) : (
                                   <span title={chargeHistory(charge) || undefined} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
                                     {charge.paid ? "Paid" : "Unpaid"}
@@ -1307,7 +1340,7 @@ export default function SubscriptionPage() {
                                 <span className="text-xs text-muted-foreground tabular-nums">{charge.monthly_cost} {charge.currency}</span>
                                 <span className="tabular-nums"><span className="text-xs text-muted-foreground">¥ </span><span className="text-base font-extrabold">{Number(charge.total_cny).toFixed(2)}</span></span>
                                 {canEdit ? (
-                                  <button onClick={() => handleTogglePaid(charge)} className={`text-xs font-medium px-2 py-0.5 rounded-md transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
+                                  <button onClick={() => charge.paid ? handleUnsettle(charge) : openSettle(charge)} className={`text-xs font-medium px-2 py-0.5 rounded-md transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
                                     {charge.paid ? "Paid" : "Unpaid"}
                                   </button>
                                 ) : (
@@ -1614,6 +1647,62 @@ export default function SubscriptionPage() {
             </label>
             <Button size="sm" onClick={handleSavePaymentMethod}>{editingPm ? "Save changes" : "Add card"}</Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Settle a charge from a wallet */}
+      <Dialog open={!!settleFor} onOpenChange={(open) => { if (!open) setSettleFor(null); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Settle charge</DialogTitle></DialogHeader>
+          {settleFor && (() => {
+            const owed = Number(settleFor.total_cny);
+            const balance = walletBalance(data.wallet_entries, settleWallet);
+            const short = balance < owed;
+            return (
+              <div className="grid gap-4 pt-2">
+                <div className="rounded-md border bg-muted/50 px-3 py-2.5 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">{chargeName(settleFor, data.services)} {"\u00b7"} {settleFor.period_start}</span>
+                    <span className="tabular-nums text-lg font-bold">{"\u00a5 "}{owed.toFixed(2)}</span>
+                  </div>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs text-muted-foreground">Pay from</Label>
+                  <Select value={settleWallet} onValueChange={(v) => setSettleWallet(v as string)}>
+                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Whose wallet" /></SelectTrigger>
+                    <SelectContent>
+                      {data.subscribers.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.name} {"\u00b7"} {"\u00a5"}{walletBalance(data.wallet_entries, p.id).toFixed(2)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Anyone can pay it{settleFor.subscriber_id !== settleWallet && settleWallet
+                      ? ` \u2014 this charge belongs to ${data.subscribers.find((p) => p.id === settleFor.subscriber_id)?.name ?? "someone else"}`
+                      : ""}.
+                  </p>
+                </div>
+                <div className="grid gap-1.5">
+                  <Label className="text-xs text-muted-foreground">Note</Label>
+                  <Input className="h-9" value={settleNote} placeholder="Optional" onChange={(e) => setSettleNote(e.target.value)} />
+                </div>
+                {settleWallet && (
+                  <div className={`rounded-md border px-3 py-2.5 text-sm tabular-nums ${short ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400" : "bg-muted/50"}`}>
+                    {short ? (
+                      <>Short by {"\u00a5"}{(owed - balance).toFixed(2)}. Top that wallet up first.</>
+                    ) : (
+                      <><span className="text-muted-foreground">{"\u00a5 "}{balance.toFixed(2)} {"\u2212"} {owed.toFixed(2)} = </span><span className="text-lg font-bold">{"\u00a5 "}{(balance - owed).toFixed(2)}</span></>
+                    )}
+                  </div>
+                )}
+                <Button size="sm" onClick={handleSettle} disabled={!settleWallet || short || settling}>
+                  {settling ? "Settling..." : "Settle"}
+                </Button>
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
 
