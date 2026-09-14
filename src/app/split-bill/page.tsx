@@ -61,6 +61,22 @@ import { PersonBarChart } from "@/components/charts/person-bar-chart";
 
 const PAGE_SIZE = 20;
 
+// Columns where the first click should show the newest rows, not the oldest.
+const DATE_COLUMNS = new Set(["date", "month"]);
+
+/** Nominal billing day for a charge: the subscription's start day projected onto the
+ *  charge's billing month, clamped when that month is too short (a Jan 31 start bills
+ *  on Feb 28). Charges only store the month, so without a subscription to read the day
+ *  from we fall back to the bare YYYY-MM. */
+function billingDate(periodStart: string, startDate?: string): string {
+  if (!startDate) return periodStart;
+  const [y, m] = periodStart.split("-").map(Number);
+  const day = Number(startDate.slice(8, 10));
+  if (!y || !m || !day) return periodStart;
+  const lastDay = new Date(y, m, 0).getDate();
+  return `${periodStart}-${String(Math.min(day, lastDay)).padStart(2, "0")}`;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────
 function getInitial(name: string) { return name[0]?.toUpperCase() ?? "?"; }
 
@@ -139,12 +155,13 @@ function KeyboardHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
   );
 }
 
-function exportToCSV(charges: ChargeRecord[], services: Service[], subscribers: { id: string; name: string }[]) {
-  const headers = ["Subscriber", "Service", "Month", "Monthly Cost", "Currency", "Exchange Rate", "Total CNY", "Paid", "Paid Date", "Note"];
+function exportToCSV(charges: ChargeRecord[], services: Service[], subscribers: { id: string; name: string }[], subscriptions: Subscription[]) {
+  const headers = ["Subscriber", "Service", "Billing Date", "Month", "Monthly Cost", "Currency", "Exchange Rate", "Total CNY", "Paid", "Paid Date", "Note"];
   const rows = charges.map((c) => {
     const sub = subscribers.find((s) => s.id === c.subscriber_id);
     const svc = services.find((s) => s.id === c.service_id);
-    return [sub?.name ?? "", svc?.name ?? "", c.period_start, c.monthly_cost, c.currency, c.exchange_rate, Number(c.total_cny).toFixed(2), c.paid ? "Yes" : "No", c.paid_date ?? "", c.note ?? ""];
+    const sc = subscriptions.find((s) => s.subscriber_id === c.subscriber_id && s.service_id === c.service_id);
+    return [sub?.name ?? "", svc?.name ?? "", billingDate(c.period_start, sc?.start_date), c.period_start, c.monthly_cost, c.currency, c.exchange_rate, Number(c.total_cny).toFixed(2), c.paid ? "Yes" : "No", c.paid_date ?? "", c.note ?? ""];
   });
   const csv = [headers, ...rows].map((r) => r.map((v) => `"${v}"`).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv" });
@@ -208,8 +225,8 @@ export default function SubscriptionPage() {
   const [editingSubRate, setEditingSubRate] = useState<{ id: string; rate: number } | null>(null);
   const [newSubscriberName, setNewSubscriberName] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [sortColumn, setSortColumn] = useState<string | null>(null);
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [sortColumn, setSortColumn] = useState<string | null>("date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [currentPage, setCurrentPage] = useState(1);
   const [keyboardHelpOpen, setKeyboardHelpOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<{ type: string; id: string; name: string } | null>(null);
@@ -316,7 +333,8 @@ export default function SubscriptionPage() {
       charges = charges.filter((c) => {
         const sub = data.subscribers.find((s) => s.id === c.subscriber_id);
         const svc = data.services.find((s) => s.id === c.service_id);
-        return (sub?.name ?? "").toLowerCase().includes(q) || (svc?.name ?? "").toLowerCase().includes(q) || c.period_start.includes(q) || (c.note ?? "").toLowerCase().includes(q);
+        const sc = data.subscriptions.find((s) => s.subscriber_id === c.subscriber_id && s.service_id === c.service_id);
+        return (sub?.name ?? "").toLowerCase().includes(q) || (svc?.name ?? "").toLowerCase().includes(q) || billingDate(c.period_start, sc?.start_date).includes(q) || (c.note ?? "").toLowerCase().includes(q);
       });
     }
     if (sortColumn) {
@@ -330,8 +348,14 @@ export default function SubscriptionPage() {
           case "total": va = Number(a.total_cny); vb = Number(b.total_cny); break;
           case "paid": va = a.paid ? 1 : 0; vb = b.paid ? 1 : 0; break;
         }
-        if (typeof va === "string") { const cmp = va.localeCompare(vb as string); return sortDir === "asc" ? cmp : -cmp; }
-        return sortDir === "asc" ? (va as number) - (vb as number) : (vb as number) - (va as number);
+        const cmp = typeof va === "string" ? va.localeCompare(vb as string) : (va as number) - (vb as number);
+        if (cmp !== 0) return sortDir === "asc" ? cmp : -cmp;
+        // A billing run inserts every charge in one transaction, so a whole batch
+        // shares created_at down to the microsecond. Break those ties on a fixed
+        // ascending key so the rows inside a batch don't shuffle between renders.
+        const subA = data.subscribers.find((s) => s.id === a.subscriber_id)?.name ?? "";
+        const subB = data.subscribers.find((s) => s.id === b.subscriber_id)?.name ?? "";
+        return b.period_start.localeCompare(a.period_start) || subA.localeCompare(subB) || a.id.localeCompare(b.id);
       });
     }
     return charges;
@@ -343,7 +367,7 @@ export default function SubscriptionPage() {
 
   function handleSort(col: string) {
     if (sortColumn === col) setSortDir(sortDir === "asc" ? "desc" : "asc");
-    else { setSortColumn(col); setSortDir("asc"); }
+    else { setSortColumn(col); setSortDir(DATE_COLUMNS.has(col) ? "desc" : "asc"); }
   }
 
   // ─── Loading ─────────────────────────────────────────────────────
@@ -586,7 +610,17 @@ export default function SubscriptionPage() {
   }
 
   // ─── Per-subscriber helpers ───────────────────────────────────────
-  function subscriberCharges(subscriberId: string) { return data!.charges.filter((c) => c.subscriber_id === subscriberId); }
+  function chargeBillingDate(charge: ChargeRecord) {
+    const sub = data!.subscriptions.find((s) => s.subscriber_id === charge.subscriber_id && s.service_id === charge.service_id);
+    return billingDate(charge.period_start, sub?.start_date);
+  }
+
+  function subscriberCharges(subscriberId: string) {
+    // filter() already copies, so sorting in place here is safe.
+    return data!.charges
+      .filter((c) => c.subscriber_id === subscriberId)
+      .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? "") || b.period_start.localeCompare(a.period_start) || a.id.localeCompare(b.id));
+  }
   function subscriberUnpaid(subscriberId: string) { return subscriberCharges(subscriberId).filter((c) => !c.paid).reduce((s, c) => s + Number(c.total_cny), 0); }
 
   function SortHeader({ column, children }: { column: string; children: React.ReactNode }) {
@@ -769,7 +803,7 @@ export default function SubscriptionPage() {
                   <Button variant="outline" size="sm" className="h-8" onClick={handleBulkMarkPaid}><CheckCheck className="mr-1 h-3.5 w-3.5" /> Bulk pay</Button>
                 </>
               )}
-              <Button variant="outline" size="sm" className="h-8" onClick={() => exportToCSV(data.charges, data.services, data.subscribers)}><Download className="mr-1 h-3.5 w-3.5" /> CSV</Button>
+              <Button variant="outline" size="sm" className="h-8" onClick={() => exportToCSV(data.charges, data.services, data.subscribers, data.subscriptions)}><Download className="mr-1 h-3.5 w-3.5" /> CSV</Button>
             </div>
           )}
         </div>
@@ -887,8 +921,8 @@ export default function SubscriptionPage() {
                       <tr>
                         <SortHeader column="subscriber">Person</SortHeader>
                         <SortHeader column="service">Service</SortHeader>
-                        <SortHeader column="month">Month</SortHeader>
-                        <SortHeader column="date">Bill Date</SortHeader>
+                        <SortHeader column="month">Billing date</SortHeader>
+                        <SortHeader column="date">Recorded</SortHeader>
                         <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground">Price</th>
                         <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground">Rate</th>
                         <SortHeader column="total">Total</SortHeader>
@@ -906,7 +940,7 @@ export default function SubscriptionPage() {
                             <motion.tr key={charge.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
                               <td className="px-3 py-2.5"><div className="flex items-center gap-2"><PersonAvatar name={subscriber?.name ?? "?"} index={data.subscribers.findIndex((s) => s.id === charge.subscriber_id)} /><span className="font-medium text-sm">{subscriber?.name ?? "?"}</span></div></td>
                               <td className="px-3 py-2.5"><div className="flex items-center gap-2"><ServiceIcon name={service?.name ?? ""} /><span className="text-sm">{service?.name ?? "?"}</span></div></td>
-                              <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.period_start}</td>
+                              <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{chargeBillingDate(charge)}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.created_at?.slice(0, 10) ?? "—"}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.monthly_cost} {charge.currency}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.exchange_rate}</td>
@@ -1036,7 +1070,7 @@ export default function SubscriptionPage() {
                               <div className="flex items-center gap-2.5">
                                 <ServiceIcon name={service?.name ?? ""} />
                                 <span>{service?.name}</span>
-                                <span className="text-xs text-muted-foreground">{charge.period_start}</span>
+                                <span className="text-xs text-muted-foreground">{chargeBillingDate(charge)}</span>
                                 {charge.note && <span className="text-xs text-muted-foreground">{"\u00b7"} {charge.note}</span>}
                               </div>
                               <div className="flex items-center gap-3">
