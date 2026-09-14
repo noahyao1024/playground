@@ -23,17 +23,12 @@ import {
   updatePaymentMethod as apiUpdatePaymentMethod,
   deletePaymentMethod as apiDeletePaymentMethod,
   detectCardType,
-  maskCardNumber,
-  billNowClient,
-  calcMonths,
-  calcTotalCNY,
   currentMonth as getCurrentMonth,
   type SubscriptionData,
   type Service,
   type Subscription,
   type ChargeRecord,
   type PaymentMethod,
-  type CardType,
   type Currency,
 } from "@/lib/store";
 
@@ -44,16 +39,14 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Avatar as ShadAvatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MonthPicker } from "@/components/month-picker";
 import { getServiceIcon, getPersonColor } from "@/lib/service-icons";
 import {
-  Plus, Trash2, Edit2, Check, X, Users, DollarSign, Settings,
+  Plus, Trash2, Edit2, Check, X,
   Search, Download, CheckCheck, TrendingUp, Clock,
-  ArrowUpDown, ChevronLeft, ChevronRight, BarChart3, Keyboard,
+  ArrowUpDown, ChevronLeft, ChevronRight, Keyboard,
   Zap, Pause, Play, Receipt, Lock, CreditCard, Star,
 } from "lucide-react";
 import { SpendingPieChart } from "@/components/charts/spending-pie-chart";
@@ -92,11 +85,6 @@ function LoadingSkeleton() {
       <Skeleton className="h-96" />
     </div>
   );
-}
-
-function Avatar({ name, size = "sm" }: { name: string; size?: "sm" | "md" }) {
-  const s = size === "md" ? "h-8 w-8 text-xs" : "h-6 w-6 text-[10px]";
-  return <div className={`flex ${s} items-center justify-center rounded-full bg-muted font-medium text-muted-foreground`}>{getInitial(name)}</div>;
 }
 
 function PersonAvatar({ name, index = 0, size = "sm" }: { name: string; index?: number; size?: "sm" | "default" }) {
@@ -209,7 +197,7 @@ function formatCardInput(value: string): string {
 // Main page
 // ═══════════════════════════════════════════════════════════════════════
 export default function SubscriptionPage() {
-  const { data: session, status } = useSession();
+  const { data: session } = useSession();
   const router = useRouter();
   const searchRef = useRef<HTMLInputElement>(null);
 
@@ -222,7 +210,6 @@ export default function SubscriptionPage() {
   const [addChargeOpen, setAddChargeOpen] = useState(false);
   const [editServiceOpen, setEditServiceOpen] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
-  const [editingSubRate, setEditingSubRate] = useState<{ id: string; rate: number } | null>(null);
   const [newSubscriberName, setNewSubscriberName] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [sortColumn, setSortColumn] = useState<string | null>("date");
@@ -397,14 +384,6 @@ export default function SubscriptionPage() {
     if (!requireEdit()) return;
     await apiUpdateSubscription(sub.id, { active: !sub.active });
     toast.success(sub.active ? "Paused" : "Activated");
-    await reload();
-  }
-
-  async function handleSaveSubRate(id: string, rate: number) {
-    if (!requireEdit()) return;
-    await apiUpdateSubscription(id, { exchange_rate: rate });
-    setEditingSubRate(null);
-    toast.success("Rate updated");
     await reload();
   }
 
