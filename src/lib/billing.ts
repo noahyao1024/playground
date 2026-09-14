@@ -28,15 +28,17 @@ function monthRange(startMonth: string, endMonth: string): string[] {
   return months;
 }
 
-/** Fetch live exchange rates from our API, with fallback defaults */
+/** Settlement rates — mid-market with the FX markup already applied. The endpoint
+ *  handles the markup and its own fallbacks; these constants only cover it being
+ *  unreachable entirely. */
 export async function fetchExchangeRates(baseUrl?: string): Promise<Record<string, number>> {
-  const defaults: Record<string, number> = { USD: 7.25, SGD: 5.39 };
+  const defaults: Record<string, number> = { USD: 6.79, SGD: 5.35 };
   try {
     const url = baseUrl ? `${baseUrl}/api/exchange-rate` : "/api/exchange-rate";
     const res = await fetch(url, { next: { revalidate: 600 } });
     if (!res.ok) return defaults;
     const data = await res.json();
-    return { ...defaults, ...data };
+    return Object.keys(data?.rates ?? {}).length > 0 ? { ...defaults, ...data.rates } : defaults;
   } catch {
     return defaults;
   }
@@ -45,7 +47,7 @@ export async function fetchExchangeRates(baseUrl?: string): Promise<Record<strin
 export async function generateChargesForMonth(
   supabase: SupabaseClient,
   month: string,
-  exchangeRates: Record<string, number> = { USD: 7.25, SGD: 5.39 }
+  exchangeRates: Record<string, number> = { USD: 6.79, SGD: 5.35 }
 ): Promise<{ generated: number; details: Array<{ subscriber: string; service: string; total_cny: number }> }> {
   const [
     { data: subscriptions },
