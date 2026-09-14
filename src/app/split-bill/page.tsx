@@ -1370,43 +1370,13 @@ export default function SubscriptionPage() {
                             title={ledger.length ? `${ledger.length} wallet ${ledger.length === 1 ? "entry" : "entries"}` : "No wallet entries yet"}
                           >
                             <div className="text-lg font-extrabold"><span className="text-xs font-medium opacity-60">¥ </span>{balance.toFixed(2)}</div>
-                            <div className="text-[10px] font-normal opacity-70">wallet</div>
+                            <div className="text-[10px] font-normal opacity-70 underline underline-offset-2">
+                              wallet{ledger.length ? ` (${ledger.length})` : ""}
+                            </div>
                           </button>
                         )}
                       </div>
                     </div>
-                    {ledger.length > 0 && (
-                      <div className="divide-y border-b bg-muted/20">
-                        {ledger.map((e) => (
-                          <div key={e.id} className="flex items-center justify-between px-5 py-2 text-xs">
-                            <div className="flex items-center gap-2 text-muted-foreground min-w-0">
-                              <span className="rounded bg-muted px-1.5 py-0.5 font-medium shrink-0">{e.kind}</span>
-                              <span className="shrink-0">{stampInSG(e.created_at) ?? "—"}</span>
-                              {(() => {
-                                // An entry that settled a charge should say which one, and
-                                // whose it was when someone paid on another person's behalf.
-                                const ch = e.charge_id ? data.charges.find((c) => c.id === e.charge_id) : undefined;
-                                if (!ch) return null;
-                                const owedBy = data.subscribers.find((x) => x.id === ch.subscriber_id);
-                                return (
-                                  <span className="truncate">
-                                    {"\u00b7"} {chargeName(ch, data.services)} {ch.period_start}
-                                    {owedBy && owedBy.id !== subscriber.id && (
-                                      <span className="ml-1 text-amber-600 dark:text-amber-400">for {owedBy.name}</span>
-                                    )}
-                                  </span>
-                                );
-                              })()}
-                              {e.note && <span className="truncate">{"\u00b7"} {e.note}</span>}
-                            </div>
-                            <span className={`tabular-nums font-semibold ${Number(e.amount_cny) < 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}>
-                              {Number(e.amount_cny) > 0 ? "+" : ""}{Number(e.amount_cny).toFixed(2)}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
                     {charges.length > 0 && (
                       <div className="divide-y">
                         {charges.map((charge) => {
@@ -1841,13 +1811,60 @@ export default function SubscriptionPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Wallet entry */}
+      {/* Wallet: balance, history, and posting an entry */}
       <Dialog open={!!walletOpen} onOpenChange={(open) => { if (!open) setWalletOpen(null); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Wallet {"\u2014"} {data.subscribers.find((s) => s.id === walletOpen)?.name ?? ""}</DialogTitle>
           </DialogHeader>
           <div className="grid gap-4 pt-2">
+            {walletOpen && (() => {
+              const bal = walletBalance(data.wallet_entries, walletOpen);
+              const rows = walletEntriesFor(walletOpen);
+              return (
+                <>
+                  <div className="flex items-baseline justify-between rounded-md border bg-muted/50 px-3 py-2.5">
+                    <span className="text-xs text-muted-foreground">Balance</span>
+                    <span className={`tabular-nums text-xl font-bold ${bal < 0 ? "text-amber-600 dark:text-amber-400" : ""}`}>
+                      {"\u00a5 "}{bal.toFixed(2)}
+                    </span>
+                  </div>
+                  {rows.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No entries yet.</p>
+                  ) : (
+                    <div className="max-h-64 overflow-y-auto rounded-md border divide-y">
+                      {rows.map((e) => {
+                        const ch = e.charge_id ? data.charges.find((c) => c.id === e.charge_id) : undefined;
+                        const owedBy = ch ? data.subscribers.find((x) => x.id === ch.subscriber_id) : undefined;
+                        return (
+                          <div key={e.id} className="flex items-start justify-between gap-3 px-3 py-2 text-xs">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span className="rounded bg-muted px-1.5 py-0.5 font-medium">{e.kind}</span>
+                                <span className="text-muted-foreground">{stampInSG(e.created_at) ?? "\u2014"}</span>
+                              </div>
+                              {ch && (
+                                <div className="mt-0.5 truncate text-muted-foreground">
+                                  {chargeName(ch, data.services)} {"\u00b7"} {ch.period_start}
+                                  {owedBy && owedBy.id !== walletOpen && (
+                                    <span className="ml-1 text-amber-600 dark:text-amber-400">for {owedBy.name}</span>
+                                  )}
+                                </div>
+                              )}
+                              {e.note && <div className="mt-0.5 truncate text-muted-foreground">{e.note}</div>}
+                            </div>
+                            <span className={`shrink-0 tabular-nums font-semibold ${Number(e.amount_cny) < 0 ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}>
+                              {Number(e.amount_cny) > 0 ? "+" : ""}{Number(e.amount_cny).toFixed(2)}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <div className="border-t" />
+                </>
+              );
+            })()}
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-1.5">
                 <Label className="text-xs text-muted-foreground">Kind</Label>
