@@ -482,7 +482,17 @@ export default function SubscriptionPage() {
       toast.error(err instanceof Error ? err.message : "Failed to rename");
     }
   }
-  async function handleRemoveSubscriber(id: string) { if (!requireEdit()) return; await apiDeleteSubscriber(id); toast.success("Removed"); await reload(); }
+  async function handleRemoveSubscriber(id: string) {
+    if (!requireEdit()) return;
+    try {
+      await apiDeleteSubscriber(id);
+      toast.success("Removed");
+      await reload();
+    } catch (err: unknown) {
+      // The server refuses to delete anything history still points at; show what it said.
+      toast.error(err instanceof Error ? err.message : "Failed to remove");
+    }
+  }
 
   // ─── Service actions ──────────────────────────────────────────────
   async function handleSaveService() {
@@ -498,7 +508,16 @@ export default function SubscriptionPage() {
     }
     setEditServiceOpen(false); setEditingService(null); await reload();
   }
-  async function handleRemoveService(id: string) { if (!requireEdit()) return; await apiDeleteService(id); toast.success("Removed"); await reload(); }
+  async function handleRemoveService(id: string) {
+    if (!requireEdit()) return;
+    try {
+      await apiDeleteService(id);
+      toast.success("Removed");
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to remove");
+    }
+  }
 
   // ─── Charge actions ──────────────────────────────────────────────
   async function handleAddCharge() {
@@ -606,6 +625,31 @@ export default function SubscriptionPage() {
   }
 
   // ─── Per-subscriber helpers ───────────────────────────────────────
+  // A service or person that history points at cannot be deleted — the database
+  // refuses it, and deleting one used to take its charges down with it. Report
+  // what holds it so the button can say why it is off.
+  function heldBy(subs: number, charges: number) {
+    if (subs + charges === 0) return null;
+    const parts: string[] = [];
+    if (subs) parts.push(`${subs} subscription${subs === 1 ? "" : "s"}`);
+    if (charges) parts.push(`${charges} charge${charges === 1 ? "" : "s"}`);
+    return parts.join(" and ");
+  }
+
+  function serviceInUse(id: string) {
+    return heldBy(
+      data!.subscriptions.filter((x) => x.service_id === id).length,
+      data!.charges.filter((c) => c.service_id === id).length,
+    );
+  }
+
+  function subscriberInUse(id: string) {
+    return heldBy(
+      data!.subscriptions.filter((x) => x.subscriber_id === id).length,
+      data!.charges.filter((c) => c.subscriber_id === id).length,
+    );
+  }
+
   function chargeBillingDate(charge: ChargeRecord) {
     const sub = data!.subscriptions.find((s) => s.subscriber_id === charge.subscriber_id && s.service_id === charge.service_id);
     return billingDate(charge.period_start, sub?.start_date);
@@ -1263,7 +1307,19 @@ export default function SubscriptionPage() {
                       <>
                         {s.name}
                         {canEdit && <button onClick={() => { setEditingSubscriberId(s.id); setEditingSubscriberName(s.name); }} className="ml-0.5 rounded p-0.5 hover:bg-muted transition-colors"><Edit2 className="h-3 w-3 text-muted-foreground" /></button>}
-                        {canEdit && <button onClick={() => setConfirmDelete({ type: "subscriber", id: s.id, name: s.name })} className="ml-0.5 rounded p-0.5 hover:bg-muted transition-colors"><X className="h-3 w-3 text-muted-foreground" /></button>}
+                        {canEdit && (() => {
+                          const held = subscriberInUse(s.id);
+                          return (
+                            <button
+                              onClick={() => !held && setConfirmDelete({ type: "subscriber", id: s.id, name: s.name })}
+                              disabled={!!held}
+                              title={held ? `Can't delete — still used by ${held}` : "Delete"}
+                              className={`ml-0.5 rounded p-0.5 transition-colors ${held ? "cursor-not-allowed opacity-30" : "hover:bg-muted"}`}
+                            >
+                              {held ? <Lock className="h-3 w-3 text-muted-foreground" /> : <X className="h-3 w-3 text-muted-foreground" />}
+                            </button>
+                          );
+                        })()}
                       </>
                     )}
                   </div>
@@ -1290,7 +1346,19 @@ export default function SubscriptionPage() {
                     {canEdit && (
                       <div className="flex gap-1">
                         <button onClick={() => { setEditingService({ ...service }); setEditServiceOpen(true); }} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Edit2 className="h-3 w-3 text-muted-foreground" /></button>
-                        <button onClick={() => setConfirmDelete({ type: "service", id: service.id, name: service.name })} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Trash2 className="h-3 w-3 text-muted-foreground" /></button>
+                        {(() => {
+                          const held = serviceInUse(service.id);
+                          return (
+                            <button
+                              onClick={() => !held && setConfirmDelete({ type: "service", id: service.id, name: service.name })}
+                              disabled={!!held}
+                              title={held ? `Can't delete — still used by ${held}` : "Delete"}
+                              className={`h-7 w-7 flex items-center justify-center rounded-md transition-colors ${held ? "cursor-not-allowed opacity-30" : "hover:bg-muted"}`}
+                            >
+                              {held ? <Lock className="h-3 w-3 text-muted-foreground" /> : <Trash2 className="h-3 w-3 text-muted-foreground" />}
+                            </button>
+                          );
+                        })()}
                       </div>
                     )}
                   </div>
