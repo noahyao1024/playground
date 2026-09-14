@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { monthInSG } from "./dates";
 
 // ─── Server write helper ────────────────────────────────────────────
 
@@ -425,8 +426,7 @@ export function calcTotalCNY(months: number, monthlyCost: number, exchangeRate: 
 }
 
 export function currentMonth(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  return monthInSG();
 }
 
 // ─── Machine (kept as localStorage) ──────────────────────────────────
