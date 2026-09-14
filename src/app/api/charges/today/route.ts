@@ -57,7 +57,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
   }
 
-  const [{ data: rows, error }, { data: subs }, { data: cards }] = await Promise.all([
+  const [{ data: rows, error }, { data: subs }, { data: cards }, { data: settlements }, { data: people }] = await Promise.all([
     supabase
       .from("charges")
       .select("id, subscriber_id, service_id, payment_method_id, monthly_cost, currency, total_cny, paid, paid_date, paid_at, updated_at, billing_date, period_start, created_at, label, subscribers(name), services(name)")
@@ -65,6 +65,8 @@ export async function GET(req: NextRequest) {
       .order("created_at", { ascending: false }),
     supabase.from("subscriptions").select("subscriber_id, service_id, start_date, payment_method_id"),
     supabase.from("payment_methods").select("id, label, card_type, last4"),
+    supabase.from("wallet_entries").select("subscriber_id, charge_id, kind").eq("kind", "charge"),
+    supabase.from("subscribers").select("id, name"),
   ]);
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -76,6 +78,11 @@ export async function GET(req: NextRequest) {
     (subs ?? []).map((s: SubRow) => [`${s.subscriber_id}::${s.service_id}`, s]),
   );
   const cardById = new Map((cards ?? []).map((c: CardRow) => [c.id, c]));
+  // Who settled each charge — not always the person who owes it.
+  const paidByCharge = new Map(
+    (settlements ?? []).map((e: { subscriber_id: string; charge_id: string | null }) => [e.charge_id, e.subscriber_id]),
+  );
+  const nameById = new Map((people ?? []).map((p: { id: string; name: string }) => [p.id, p.name]));
   const describeCard = (id: string | null | undefined) => {
     const card = id ? cardById.get(id) : undefined;
     return card ? `${card.label || card.card_type} ****${card.last4}` : null;
@@ -93,6 +100,11 @@ export async function GET(req: NextRequest) {
       // What to match a bank line against.
       card: describeCard(c.payment_method_id ?? sub?.payment_method_id),
       paid: c.paid,
+      // The wallet the money came out of, when it was not the charge's own person.
+      paid_by: (() => {
+        const payer = paidByCharge.get(c.id);
+        return payer && payer !== c.subscriber_id ? nameById.get(payer) ?? null : null;
+      })(),
       paid_date: c.paid_date,
       // Stamped by the database when paid flipped, so it carries a time and does
       // not depend on whoever clicked.
