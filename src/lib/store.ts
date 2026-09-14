@@ -73,6 +73,9 @@ export interface ChargeRecord {
   /** Who created it: the monthly run, or a person. The note used to carry this
    *  and stopped being reliable the moment someone typed over it. */
   origin?: "auto" | "manual" | null;
+  /** The day this charge is for. Null on rows written before it was stored, where
+   *  the display still derives one from the subscription when it can. */
+  billing_date?: string | null;
 }
 
 export type WalletKind = "topup" | "charge" | "adjustment";

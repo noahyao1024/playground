@@ -121,10 +121,18 @@ export async function generateChargesForMonth(
       const totalCny = Number((monthlyCost * rate).toFixed(2));
       const note = "Auto-generated";
 
+      // Store the day rather than leaving it to be re-derived: the subscription it
+      // would be derived from may be deleted later, and its charges outlive it.
+      const [by, bm] = m.split("-").map(Number);
+      const startDay = Number(startDate.slice(8, 10)) || 1;
+      const lastDay = new Date(by, bm, 0).getDate();
+      const billingDay = `${m}-${String(Math.min(startDay, lastDay)).padStart(2, "0")}`;
+
       newCharges.push({
         subscriber_id: sub.subscriber_id,
         service_id: sub.service_id,
         period_start: m,
+        billing_date: billingDay,
         period_end: m,
         months: 1,
         monthly_cost: monthlyCost,
