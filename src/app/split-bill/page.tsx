@@ -18,6 +18,7 @@ import {
   addCharge as apiAddCharge,
   updateCharge as apiUpdateCharge,
   deleteCharge as apiDeleteCharge,
+  restoreCharge as apiRestoreCharge,
   addWalletEntry as apiAddWalletEntry,
   settleCharge as apiSettleCharge,
   settlePerson as apiSettlePerson,
@@ -701,7 +702,23 @@ export default function SubscriptionPage() {
     }
   }
 
-  async function handleRemoveCharge(id: string) { if (!requireEdit()) return; await apiDeleteCharge(id); toast.success("Removed"); await reload(); }
+  async function handleRemoveCharge(id: string) {
+    if (!requireEdit()) return;
+    try {
+      await apiDeleteCharge(id);
+      await reload();
+      // The row is marked, not gone, so putting it back is a single update.
+      toast.success("Charge removed", {
+        action: { label: "Undo", onClick: async () => {
+          try { await apiRestoreCharge(id); await reload(); toast.success("Restored"); }
+          catch { toast.error("Could not restore"); }
+        } },
+        duration: 8000,
+      });
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Could not remove");
+    }
+  }
   async function handleSaveChargeNote(chargeId: string) {
     if (!requireEdit()) return;
     await apiUpdateCharge(chargeId, { note: editingChargeNote || undefined });
@@ -1396,8 +1413,8 @@ export default function SubscriptionPage() {
                                         <button onClick={() => setConfirmDelete({
                                           type: "charge", id: charge.id, name: `${subscriber?.name} - ${name}`,
                                           detail: charge.paid
-                                            ? `Delete this settled charge of ${"\u00a5"}${Number(charge.total_cny).toFixed(2)}? The wallet entry that paid it stays, so that balance will no longer match what it paid for. This cannot be undone.`
-                                            : `Delete this charge of ${"\u00a5"}${Number(charge.total_cny).toFixed(2)}? This cannot be undone.`,
+                                            ? `Remove this settled charge of ${"\u00a5"}${Number(charge.total_cny).toFixed(2)}? The wallet entry that paid it stays, so that balance will no longer match what it paid for. You can undo this.`
+                                            : `Remove this charge of ${"\u00a5"}${Number(charge.total_cny).toFixed(2)}? You can undo this.`,
                                         })} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Trash2 className="h-3 w-3 text-muted-foreground" /></button>
                                       </>
                                     )}
@@ -1722,7 +1739,7 @@ export default function SubscriptionPage() {
                       const settled = data.charges.filter((c) => c.paid).length;
                       setConfirmDelete({
                         type: "all-charges", id: "", name: "all charges",
-                        detail: `Delete all ${data.charges.length} charges, ${"\u00a5"}${total.toFixed(2)} in total, including ${settled} already settled? Wallet entries stay, so balances will no longer match what they paid for. This cannot be undone.`,
+                        detail: `Remove all ${data.charges.length} charges, ${"\u00a5"}${total.toFixed(2)} in total, including ${settled} already settled? They are marked rather than destroyed, and wallet entries stay — so balances will stop matching anything visible until they are restored.`,
                       });
                     }}
                   >

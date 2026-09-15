@@ -76,6 +76,9 @@ export interface ChargeRecord {
   /** The day this charge is for. Null on rows written before it was stored, where
    *  the display still derives one from the subscription when it can. */
   billing_date?: string | null;
+  /** Set instead of removing the row, so a delete can be taken back and any wallet
+   *  entry that settled it still resolves. */
+  deleted_at?: string | null;
 }
 
 export type WalletKind = "topup" | "charge" | "adjustment";
@@ -177,7 +180,7 @@ export async function fetchSubscriptionData(): Promise<SubscriptionData> {
     supabase.from("services").select("*").order("name"),
     supabase.from("subscribers").select("*").order("name"),
     supabase.from("subscriptions").select("*").order("created_at"),
-    supabase.from("charges").select("*").order("created_at"),
+    supabase.from("charges").select("*").is("deleted_at", null).order("created_at"),
     supabase.from("payment_methods").select("*").order("created_at"),
     supabase.from("wallet_entries").select("*").order("created_at", { ascending: false }),
   ]);
@@ -372,6 +375,8 @@ export async function updateCharge(id: string, updates: Partial<ChargeRecord>) {
   await serverWrite("update", "charges", { id, updates });
 }
 
+/** Marks a charge deleted rather than removing it, so the action can be taken back
+ *  and any wallet entry that settled it still resolves. `restoreCharge` undoes it. */
 export async function deleteCharge(id: string) {
   if (!supabase) {
     const data = readLocal();
@@ -379,7 +384,12 @@ export async function deleteCharge(id: string) {
     writeLocal(data);
     return;
   }
-  await serverWrite("delete", "charges", { id });
+  await serverWrite("update", "charges", { id, updates: { deleted_at: new Date().toISOString() } });
+}
+
+export async function restoreCharge(id: string) {
+  if (!supabase) return;
+  await serverWrite("update", "charges", { id, updates: { deleted_at: null } });
 }
 
 // ─── Payment Methods ──────────────────────────────────────────────────

@@ -13,11 +13,17 @@ export async function POST() {
     return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
   }
 
-  // Delete all charges
-  const { error, count } = await supabase.from("charges").delete().neq("id", "00000000-0000-0000-0000-000000000000");
+  // Marked, not removed. A hard delete here would orphan every wallet entry that
+  // settled one of these — the balance would still count the payment while the
+  // thing it paid for no longer existed.
+  const { data, error } = await supabase
+    .from("charges")
+    .update({ deleted_at: new Date().toISOString() })
+    .is("deleted_at", null)
+    .select("id");
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ message: "All charges cleared", count });
+  return NextResponse.json({ message: "All charges cleared", count: data?.length ?? 0 });
 }
