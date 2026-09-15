@@ -933,8 +933,11 @@ export default function SubscriptionPage() {
                 ))}
               </div>
             ) : stat.value != null ? (
-              <div className={`font-bold tabular-nums tracking-tight ${stat.color}`}>
-                {stat.prefix && <span className="text-lg opacity-60">{stat.prefix} </span>}
+              <div className={`flex items-baseline gap-1 font-bold tabular-nums tracking-tight ${stat.color}`}>
+                {/* Same treatment as Money elsewhere: the symbol scales with the
+                    digits and shares their baseline, rather than being a fixed
+                    size pushed against them. */}
+                {stat.prefix && <span className="text-[0.55em] opacity-60">{stat.prefix}</span>}
                 <span className="text-3xl">{stat.value}</span>
               </div>
             ) : (
