@@ -29,9 +29,12 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // The font variables have to sit on <html>: globals.css applies font-sans there,
+  // and a variable declared on <body> never reaches its own parent — which is why
+  // every page was rendering in the browser's default serif.
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className={`${geist.variable} ${geistMono.variable} antialiased`}>
+    <html lang="en" className={`${geist.variable} ${geistMono.variable}`} suppressHydrationWarning>
+      <body className="antialiased">
         <SessionProvider>
           <ThemeProvider>
             <TooltipProvider>
