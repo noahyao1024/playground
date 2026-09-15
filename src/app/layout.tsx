@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
+import { MotionProvider } from "@/components/motion-provider";
 import { SessionProvider } from "@/components/session-provider";
 import { Navbar } from "@/components/navbar";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -37,6 +38,7 @@ export default function RootLayout({
       <body className="antialiased">
         <SessionProvider>
           <ThemeProvider>
+            <MotionProvider>
             <TooltipProvider>
               <div className="flex min-h-screen flex-col">
                 <Navbar />
@@ -65,6 +67,7 @@ export default function RootLayout({
                 <Toaster richColors position="bottom-right" />
               </div>
             </TooltipProvider>
+            </MotionProvider>
           </ThemeProvider>
         </SessionProvider>
       </body>

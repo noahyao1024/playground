@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { toast } from "sonner";
 import {
   fetchSubscriptionData,
@@ -1317,12 +1317,11 @@ export default function SubscriptionPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      <AnimatePresence>
                         {paginatedCharges.map((charge) => {
                           const subscriber = data.subscribers.find((s) => s.id === charge.subscriber_id);
                           const name = chargeName(charge, data.services);
                           return (
-                            <motion.tr key={charge.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                            <tr key={charge.id} className="border-b transition-colors last:border-0 hover:bg-muted/30">
                               <td className="px-3 py-2.5"><div className="flex items-center gap-2"><PersonAvatar name={subscriber?.name ?? "?"} index={data.subscribers.findIndex((s) => s.id === charge.subscriber_id)} /><span className="font-medium text-sm">{subscriber?.name ?? "?"}</span></div></td>
                               <td className="px-3 py-2.5"><div className="flex items-center gap-2"><ServiceIcon name={name} /><span className="text-sm">{name}</span></div></td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{chargeBillingDate(charge)}</td>
@@ -1406,10 +1405,9 @@ export default function SubscriptionPage() {
                                   </div>
                                 </td>
                               )}
-                            </motion.tr>
+                            </tr>
                           );
                         })}
-                      </AnimatePresence>
                     </tbody>
                   </table>
                 </div>
