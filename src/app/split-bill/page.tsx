@@ -51,9 +51,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { MonthPicker } from "@/components/month-picker";
 import { getServiceIcon, getPersonColor } from "@/lib/service-icons";
 import {
-  Plus, Trash2, Edit2, Check, X,
+  Plus, Trash2, Edit2, Check, X, Users, Settings,
   Search, Download, TrendingUp, Clock,
-  ArrowUpDown, ChevronLeft, ChevronRight, Keyboard,
+  ArrowUpDown, ChevronLeft, ChevronRight, BarChart3, Keyboard,
   Zap, Pause, Play, Receipt, Lock, CreditCard, Star,
 } from "lucide-react";
 import { SpendingPieChart } from "@/components/charts/spending-pie-chart";
@@ -66,6 +66,18 @@ const DATE_COLUMNS = new Set(["date", "month"]);
 
 // Chosen in the service dropdown to bill something that has no service behind it.
 const ONE_OFF = "__one_off__";
+
+/** The sections, defined once. The top strip and the phone's bottom bar render the
+ *  same list, so they cannot drift apart. `short` is what fits under an icon at
+ *  62px, which is a sixth of a 375px screen. */
+const SECTIONS = [
+  { value: "charges", label: "Charges", short: "Charges", icon: Receipt },
+  { value: "people", label: "People", short: "People", icon: Users },
+  { value: "subscriptions", label: "Subscriptions", short: "Subs", icon: Zap },
+  { value: "payment-methods", label: "Cards", short: "Cards", icon: CreditCard },
+  { value: "charts", label: "Charts", short: "Charts", icon: BarChart3 },
+  { value: "settings", label: "Settings", short: "Settings", icon: Settings },
+] as const;
 
 /** Nominal billing day for a charge: the subscription's start day projected onto the
  *  charge's billing month, clamped when that month is too short (a Jan 31 start bills
@@ -846,7 +858,7 @@ export default function SubscriptionPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-24 sm:pb-0">
       {/* Header */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -950,14 +962,13 @@ export default function SubscriptionPage() {
       {/* Tabs */}
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
-          <Tabs value={activeTab} onValueChange={(val) => setActiveTab(val as string)}>
-            <TabsList className="max-w-full overflow-x-auto">
-              <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
-              <TabsTrigger value="charges">Charges</TabsTrigger>
-              <TabsTrigger value="people">People</TabsTrigger>
-              <TabsTrigger value="payment-methods">Cards</TabsTrigger>
-              <TabsTrigger value="charts">Charts</TabsTrigger>
-              <TabsTrigger value="settings">Settings</TabsTrigger>
+          {/* Six text labels cannot fit 375px. The phone gets the bottom bar
+              instead of a strip that scrolls sideways. */}
+          <Tabs value={activeTab} onValueChange={(val) => setActiveTab(val as string)} className="hidden sm:block">
+            <TabsList>
+              {SECTIONS.map((sec) => (
+                <TabsTrigger key={sec.value} value={sec.value}>{sec.label}</TabsTrigger>
+              ))}
             </TabsList>
           </Tabs>
           {activeTab === "charges" && (
@@ -1221,7 +1232,10 @@ export default function SubscriptionPage() {
               </div>
             ) : (
               <>
-                <div className="overflow-x-auto">
+                {/* Nine columns cannot fit a phone, and a table that scrolls
+                    sideways hides half its own data. Desktop keeps the table;
+                    the phone gets the card list below. */}
+                <div className="hidden sm:block">
                   <table className="w-full text-sm">
                     <thead className="border-b">
                       <tr>
@@ -1323,6 +1337,47 @@ export default function SubscriptionPage() {
                       </AnimatePresence>
                     </tbody>
                   </table>
+                </div>
+
+                <div className="divide-y sm:hidden">
+                  {paginatedCharges.map((charge) => {
+                    const subscriber = data.subscribers.find((s) => s.id === charge.subscriber_id);
+                    const name = chargeName(charge, data.services);
+                    const by = paidBy(charge);
+                    return (
+                      <div key={charge.id} className="px-4 py-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-2.5">
+                            <ServiceIcon name={name} />
+                            <div className="min-w-0">
+                              <div className="truncate text-sm font-medium">{name}</div>
+                              <div className="truncate text-xs text-muted-foreground">
+                                {subscriber?.name ?? "?"} {"\u00b7"} {chargeBillingDate(charge)}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex shrink-0 flex-col items-end gap-1">
+                            <Money value={Number(charge.total_cny)} size="sm" />
+                            <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
+                              {charge.paid ? "Paid" : "Unpaid"}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 pl-[34px] text-[11px] text-muted-foreground tabular-nums">
+                          <span>{charge.monthly_cost} {charge.currency} {"\u00d7"} {charge.exchange_rate}</span>
+                          {by && <span>paid by {by}</span>}
+                          {charge.note && <span className="truncate">{charge.note}</span>}
+                          {canEdit && (
+                            <span className="ml-auto">
+                              <MiniAction onClick={() => charge.paid ? handleUnsettle(charge) : openSettle(charge)}>
+                                {charge.paid ? "reverse" : "settle"}
+                              </MiniAction>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
                 {totalPages > 1 && (
                   <div className="flex items-center justify-between border-t px-3 py-2 text-xs text-muted-foreground">
@@ -1968,6 +2023,28 @@ export default function SubscriptionPage() {
       />
 
       <KeyboardHelp open={keyboardHelpOpen} onOpenChange={setKeyboardHelpOpen} />
+
+      {/* Phone navigation. Fixed to the bottom where a thumb reaches, six items
+          across at 62px each — a sixth of 375px — so nothing scrolls sideways.
+          pb-[env(safe-area-inset-bottom)] keeps it clear of the home indicator. */}
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 backdrop-blur pb-[env(safe-area-inset-bottom)] sm:hidden">
+        <div className="mx-auto grid max-w-lg grid-cols-6">
+          {SECTIONS.map((sec) => {
+            const active = activeTab === sec.value;
+            return (
+              <button
+                key={sec.value}
+                onClick={() => setActiveTab(sec.value)}
+                aria-current={active ? "page" : undefined}
+                className={`flex flex-col items-center gap-0.5 py-2 transition-colors ${active ? "text-foreground" : "text-muted-foreground"}`}
+              >
+                <sec.icon className={`h-[18px] w-[18px] ${active ? "" : "opacity-70"}`} />
+                <span className="text-[10px] leading-none">{sec.short}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 }
