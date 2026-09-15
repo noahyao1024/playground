@@ -3,7 +3,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import { motion } from "framer-motion";
 import { toast } from "sonner";
 import {
   fetchSubscriptionData,
@@ -906,7 +905,7 @@ export default function SubscriptionPage() {
   return (
     <div className="space-y-6 pb-24 sm:pb-0">
       {/* Header */}
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Subscriptions</h1>
           {/* Two lines on a phone for a sentence that explains nothing you can't
@@ -966,10 +965,10 @@ export default function SubscriptionPage() {
             </DialogContent>
           </Dialog>}
         </div>
-      </motion.div>
+      </div>
 
       {/* Stats */}
-      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.05 }} className="grid grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-4">
         {[
           { label: "Paid", value: summary.totalPaid.toFixed(2), prefix: "¥", icon: Check, iconBg: "bg-emerald-500/15", iconColor: "text-emerald-600 dark:text-emerald-400", color: "text-emerald-600 dark:text-emerald-400", glowClass: "glass-card-emerald", rateEntries: null as [string, number][] | null },
           { label: "Unpaid", value: summary.totalUnpaid.toFixed(2), prefix: "¥", icon: Clock, iconBg: "bg-amber-500/15", iconColor: "text-amber-600 dark:text-amber-400", color: "text-amber-600 dark:text-amber-400", glowClass: "glass-card-amber", rateEntries: null as [string, number][] | null },
@@ -1005,10 +1004,10 @@ export default function SubscriptionPage() {
             )}
           </div>
         ))}
-      </motion.div>
+      </div>
 
       {/* Tabs */}
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}>
+      <div>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
           {/* Six text labels cannot fit 375px. The phone gets the bottom bar
               instead of a strip that scrolls sideways. */}
@@ -1607,7 +1606,7 @@ export default function SubscriptionPage() {
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {(data.payment_methods ?? []).map((pm) => (
-                  <motion.div key={pm.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="rounded-lg border bg-card p-4 space-y-3 relative">
+                  <div key={pm.id} className="rounded-lg border bg-card p-4 space-y-3 relative">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2.5">
                         <CardIcon type={pm.card_type} className="h-5 w-5" />
@@ -1670,7 +1669,7 @@ export default function SubscriptionPage() {
                         </button>
                       </div>
                     )}
-                  </motion.div>
+                  </div>
                 ))}
               </div>
             )}
@@ -1814,7 +1813,7 @@ export default function SubscriptionPage() {
             </div>
           </div>
         )}
-      </motion.div>
+      </div>
 
       {/* Edit service dialog */}
       <Dialog open={editServiceOpen} onOpenChange={(open) => { setEditServiceOpen(open); if (!open) setEditingService(null); }}>
