@@ -53,7 +53,7 @@ import { getServiceIcon, getPersonColor } from "@/lib/service-icons";
 import {
   Plus, Trash2, Edit2, Check, X, Users, Settings,
   Search, Download, TrendingUp, Clock,
-  ArrowUpDown, ChevronLeft, ChevronRight, BarChart3, Keyboard,
+  ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, BarChart3, Keyboard,
   Zap, Pause, Play, Receipt, Lock, CreditCard, Star,
 } from "lucide-react";
 import { SpendingPieChart } from "@/components/charts/spending-pie-chart";
@@ -189,7 +189,14 @@ function KeyboardHelp({ open, onOpenChange }: { open: boolean; onOpenChange: (o:
       <DialogContent>
         <DialogHeader><DialogTitle>Keyboard Shortcuts</DialogTitle></DialogHeader>
         <div className="space-y-2 text-sm">
-          {[["?", "Show help"], ["n", "New subscription"], ["/", "Focus search"], ["1-6", "Switch tabs"]].map(([key, desc]) => (
+          {[
+            ["?", "Show help"],
+            ["n", "New subscription"],
+            ["/", "Focus search"],
+            // Listed one by one rather than as "1-6": which number goes where is
+            // the thing you are looking this up to find out.
+            ...SECTIONS.map((sec, i) => [String(i + 1), sec.label] as [string, string]),
+          ].map(([key, desc]) => (
             <div key={key} className="flex items-center justify-between">
               <span className="text-muted-foreground">{desc}</span>
               <kbd className="rounded border bg-muted px-2 py-0.5 font-mono text-xs">{key}</kbd>
@@ -278,7 +285,9 @@ export default function SubscriptionPage() {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [currentPage, setCurrentPage] = useState(1);
   const [keyboardHelpOpen, setKeyboardHelpOpen] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState<{ type: string; id: string; name: string } | null>(null);
+  // `detail` spells out the consequence where "this cannot be undone" is not
+  // enough — how many rows go, and how much money they represent.
+  const [confirmDelete, setConfirmDelete] = useState<{ type: string; id: string; name: string; detail?: string } | null>(null);
   const [editingChargeId, setEditingChargeId] = useState<string | null>(null);
   const [editingChargeNote, setEditingChargeNote] = useState("");
   const [editingSubNoteId, setEditingSubNoteId] = useState<string | null>(null);
@@ -353,12 +362,10 @@ export default function SubscriptionPage() {
       if (e.key === "?") { e.preventDefault(); setKeyboardHelpOpen(true); }
       if (e.key === "n") { e.preventDefault(); setAddSubOpen(true); }
       if (e.key === "/") { e.preventDefault(); searchRef.current?.focus(); }
-      if (e.key === "1") setActiveTab("subscriptions");
-      if (e.key === "2") setActiveTab("charges");
-      if (e.key === "3") setActiveTab("people");
-      if (e.key === "4") setActiveTab("payment-methods");
-      if (e.key === "5") setActiveTab("charts");
-      if (e.key === "6") setActiveTab("settings");
+      // Derived from SECTIONS so the numbers always match the order on screen.
+      // They were hard-coded and stopped matching the moment the order changed.
+      const n = Number(e.key);
+      if (Number.isInteger(n) && n >= 1 && n <= SECTIONS.length) setActiveTab(SECTIONS[n - 1].value);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -829,6 +836,17 @@ export default function SubscriptionPage() {
     return name ? `${name} \u00b7 \u00a5${walletBalance(data!.wallet_entries, id!).toFixed(2)}` : null;
   };
 
+  /** The card a charge went out on. Only one charge in seventy carries its own;
+   *  the rest inherit whatever the subscription pays with, which is what the
+   *  statement will show. Without this the whole column reads "—". */
+  function chargeCard(charge: ChargeRecord) {
+    const own = data!.payment_methods.find((p) => p.id === charge.payment_method_id);
+    if (own) return { pm: own, inherited: false };
+    const sub = data!.subscriptions.find((x) => x.subscriber_id === charge.subscriber_id && x.service_id === charge.service_id);
+    const fromSub = data!.payment_methods.find((p) => p.id === sub?.payment_method_id);
+    return { pm: fromSub, inherited: !!fromSub };
+  }
+
   function chargeBillingDate(charge: ChargeRecord) {
     // Stored wins. Deriving is the fallback for rows written before it was kept,
     // and it fails outright when the subscription behind them is gone.
@@ -870,8 +888,17 @@ export default function SubscriptionPage() {
 
   function SortHeader({ column, children }: { column: string; children: React.ReactNode }) {
     return (
-      <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground cursor-pointer select-none hover:text-foreground transition-colors" onClick={() => handleSort(column)}>
-        <span className="inline-flex items-center gap-1">{children}<ArrowUpDown className={`h-3 w-3 ${sortColumn === column ? "text-foreground" : "text-muted-foreground/30"}`} /></span>
+      <th className="h-9 cursor-pointer select-none px-3 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground" onClick={() => handleSort(column)}>
+        <span className="inline-flex items-center gap-1">
+          {children}
+          {/* A bidirectional glyph cannot say which way it sorted. The active
+              column shows the actual direction; the rest show the affordance. */}
+          {sortColumn === column
+            ? (sortDir === "asc"
+                ? <ArrowUp className="h-3 w-3 text-foreground" />
+                : <ArrowDown className="h-3 w-3 text-foreground" />)
+            : <ArrowUpDown className="h-3 w-3 text-muted-foreground/30" />}
+        </span>
       </th>
     );
   }
@@ -994,7 +1021,24 @@ export default function SubscriptionPage() {
             <div className="flex gap-2 flex-wrap">
               <div className="relative">
                 <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
-                <Input ref={searchRef} placeholder="Search..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="h-8 w-44 pl-8 text-sm" />
+                <Input
+                  ref={searchRef}
+                  placeholder="Search..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Escape") { setSearchQuery(""); e.currentTarget.blur(); } }}
+                  className={`h-8 w-44 pl-8 text-sm ${searchQuery ? "pr-7" : ""}`}
+                />
+                {/* Clearing a query meant selecting the whole field and deleting it. */}
+                {searchQuery && (
+                  <button
+                    onClick={() => { setSearchQuery(""); searchRef.current?.focus(); }}
+                    title="Clear search (Esc)"
+                    className="absolute right-1.5 top-1.5 rounded p-0.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
               </div>
               {canEdit && (
                 <>
@@ -1125,9 +1169,6 @@ export default function SubscriptionPage() {
                   <Button size="sm" className="h-8" onClick={() => handleBillNow()} disabled={billing}>
                     {billing ? "Billing..." : "Bill now"}
                   </Button>
-                  <Button variant="outline" size="sm" className="h-8 text-destructive hover:bg-destructive/10" onClick={() => setConfirmDelete({ type: "all-charges", id: "", name: "all charges" })}>
-                    Clear
-                  </Button>
                 </div>
               </div>
             )}
@@ -1228,7 +1269,10 @@ export default function SubscriptionPage() {
                               </TooltipTrigger>
                               <TooltipContent>{sub.active ? "Pause" : "Activate"}</TooltipContent>
                             </Tooltip>
-                            <button onClick={() => setConfirmDelete({ type: "subscription", id: sub.id, name: `${subscriber?.name} - ${service?.name}` })} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors">
+                            <button onClick={() => setConfirmDelete({
+                              type: "subscription", id: sub.id, name: `${subscriber?.name} - ${service?.name}`,
+                              detail: `Delete this subscription? Its ${data.charges.filter((c) => c.subscriber_id === sub.subscriber_id && c.service_id === sub.service_id).length} existing charge(s) stay and keep their amounts, but no new ones will be generated, and their billing day can no longer be derived.`,
+                            })} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors">
                               <Trash2 className="h-3 w-3 text-muted-foreground" />
                             </button>
                           </div>
@@ -1303,7 +1347,6 @@ export default function SubscriptionPage() {
                                 ) : (
                                   <span title={chargeHistory(charge) || undefined} className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"}`}>
                                     {charge.paid ? "Paid" : "Unpaid"}
-                                    {charge.updated_at && <span className="ml-1 opacity-50">{"\u00b7"}</span>}
                                   </span>
                                 )}
                               </td>
@@ -1325,12 +1368,18 @@ export default function SubscriptionPage() {
                                       </select>
                                     </div>
                                   ) : (
-                                    <button onClick={() => setPayChargeMethodOpen(charge.id)} className="hover:bg-muted/50 rounded px-1 py-0.5 transition-colors">
-                                      <PaymentMethodBadge pm={(data.payment_methods ?? []).find((p) => p.id === charge.payment_method_id)} />
+                                    <button onClick={() => setPayChargeMethodOpen(charge.id)} className="rounded px-1 py-0.5 transition-colors hover:bg-muted/50">
+                                      {(() => {
+                                        const { pm, inherited } = chargeCard(charge);
+                                        return <span className={inherited ? "opacity-60" : ""} title={inherited ? "From the subscription" : undefined}><PaymentMethodBadge pm={pm} /></span>;
+                                      })()}
                                     </button>
                                   )
                                 ) : (
-                                  <PaymentMethodBadge pm={(data.payment_methods ?? []).find((p) => p.id === charge.payment_method_id)} />
+                                  (() => {
+                                    const { pm, inherited } = chargeCard(charge);
+                                    return <span className={inherited ? "opacity-60" : ""} title={inherited ? "From the subscription" : undefined}><PaymentMethodBadge pm={pm} /></span>;
+                                  })()
                                 )}
                               </td>
                               {canEdit && (
@@ -1344,7 +1393,12 @@ export default function SubscriptionPage() {
                                     ) : (
                                       <>
                                         <button onClick={() => { setEditingChargeId(charge.id); setEditingChargeNote(charge.note ?? ""); }} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Edit2 className="h-3 w-3 text-muted-foreground" /></button>
-                                        <button onClick={() => setConfirmDelete({ type: "charge", id: charge.id, name: `${subscriber?.name} - ${name}` })} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Trash2 className="h-3 w-3 text-muted-foreground" /></button>
+                                        <button onClick={() => setConfirmDelete({
+                                          type: "charge", id: charge.id, name: `${subscriber?.name} - ${name}`,
+                                          detail: charge.paid
+                                            ? `Delete this settled charge of ${"\u00a5"}${Number(charge.total_cny).toFixed(2)}? The wallet entry that paid it stays, so that balance will no longer match what it paid for. This cannot be undone.`
+                                            : `Delete this charge of ${"\u00a5"}${Number(charge.total_cny).toFixed(2)}? This cannot be undone.`,
+                                        })} className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"><Trash2 className="h-3 w-3 text-muted-foreground" /></button>
                                       </>
                                     )}
                                   </div>
@@ -1606,7 +1660,10 @@ export default function SubscriptionPage() {
                           </Tooltip>
                         )}
                         <button
-                          onClick={() => setConfirmDelete({ type: "payment_method", id: pm.id, name: `${CARD_TYPE_LABELS[pm.card_type]} ****${pm.last4}` })}
+                          onClick={() => setConfirmDelete({
+                            type: "payment_method", id: pm.id, name: `${CARD_TYPE_LABELS[pm.card_type]} ****${pm.last4}`,
+                            detail: `Delete this card? ${data.subscriptions.filter((x) => x.payment_method_id === pm.id).length} subscription(s) pay with it and will be left with no card. Nothing else changes.`,
+                          })}
                           className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"
                         >
                           <Trash2 className="h-3 w-3 text-muted-foreground" />
@@ -1641,6 +1698,40 @@ export default function SubscriptionPage() {
         {/* ═══ Settings tab ════════════════════════════════════════════ */}
         {activeTab === "settings" && (
           <div className="space-y-4">
+            {/* This used to sit six pixels from "Bill now", the most-used button on
+                the page, separated only by colour. It deletes every charge. */}
+            {canEdit && data.charges.length > 0 && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+                <p className="text-xs font-medium uppercase tracking-wider text-destructive">Danger zone</p>
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-sm">
+                    <div>Delete every charge</div>
+                    <div className="text-xs text-muted-foreground tabular-nums">
+                      {data.charges.length} charge{data.charges.length === 1 ? "" : "s"}
+                      {" \u00b7 "}
+                      {"\u00a5"}{data.charges.reduce((t, c) => t + Number(c.total_cny), 0).toFixed(2)}
+                      {" \u00b7 "}
+                      {data.charges.filter((c) => c.paid).length} already settled
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-destructive hover:bg-destructive/10"
+                    onClick={() => {
+                      const total = data.charges.reduce((t, c) => t + Number(c.total_cny), 0);
+                      const settled = data.charges.filter((c) => c.paid).length;
+                      setConfirmDelete({
+                        type: "all-charges", id: "", name: "all charges",
+                        detail: `Delete all ${data.charges.length} charges, ${"\u00a5"}${total.toFixed(2)} in total, including ${settled} already settled? Wallet entries stay, so balances will no longer match what they paid for. This cannot be undone.`,
+                      });
+                    }}
+                  >
+                    Delete all
+                  </Button>
+                </div>
+              </div>
+            )}
             <div className="rounded-lg border bg-card p-4 space-y-3">
               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Subscribers</p>
               <div className="flex flex-wrap gap-1.5">
@@ -2033,7 +2124,7 @@ export default function SubscriptionPage() {
         open={!!confirmDelete}
         onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
         title="Delete"
-        description={`Delete "${confirmDelete?.name}"? This cannot be undone.`}
+        description={confirmDelete?.detail ?? `Delete "${confirmDelete?.name}"? This cannot be undone.`}
         onConfirm={() => {
           if (!confirmDelete) return;
           if (confirmDelete.type === "charge") handleRemoveCharge(confirmDelete.id);
