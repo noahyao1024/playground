@@ -1,0 +1,100 @@
+name: Unpaid Alert
+
+# Flags anyone owing more than the threshold.
+#
+# The detail goes to the run summary, so this works with no configuration at all —
+# open the run and read it. Email is an addition for when you would rather be told
+# than remember to look, and is skipped silently when SMTP is not set up.
+#
+# These summaries are public, as the repository is. That is its owner's call.
+
+on:
+  schedule:
+    - cron: '23 1 * * 1' # Mondays, off-the-hour to dodge Actions cron congestion
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # Job level, not step level: a step's `if` cannot read env declared on itself.
+    env:
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+    steps:
+      - name: Find who is over the threshold
+        id: check
+        env:
+          SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          THRESHOLD: ${{ vars.UNPAID_THRESHOLD_CNY || '500' }}
+        run: |
+          set -euo pipefail
+          base="${SUPABASE_URL%/}"
+          auth=(-H "apikey: ${SUPABASE_KEY}" -H "Authorization: Bearer ${SUPABASE_KEY}")
+
+          curl --fail -sS "${auth[@]}" -o charges.json \
+            "${base}/rest/v1/charges?select=subscriber_id,total_cny,period_start,paid,deleted_at&paid=eq.false&deleted_at=is.null"
+          curl --fail -sS "${auth[@]}" -o people.json \
+            "${base}/rest/v1/subscribers?select=id,name"
+
+          python3 - <<'PY'
+          import json, os, collections
+
+          threshold = float(os.environ["THRESHOLD"])
+          charges = json.load(open("charges.json"))
+          names = {p["id"]: p["name"] for p in json.load(open("people.json"))}
+
+          owed = collections.defaultdict(float)
+          count = collections.Counter()
+          oldest = {}
+          for c in charges:
+              sid = c["subscriber_id"]
+              owed[sid] += float(c["total_cny"])
+              count[sid] += 1
+              p = c["period_start"]
+              if sid not in oldest or p < oldest[sid]:
+                  oldest[sid] = p
+
+          over = sorted(
+              ((names.get(s, s), owed[s], count[s], oldest[s]) for s in owed if owed[s] > threshold),
+              key=lambda r: -r[1],
+          )
+
+          print(f"over threshold: {len(over)}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"count={len(over)}\n")
+
+          # The run summary, so the alert is readable with no email configured.
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
+              if not over:
+                  fh.write(f"Nobody owes more than ¥{threshold:,.0f}.\n")
+              else:
+                  fh.write(f"## {len(over)} over ¥{threshold:,.0f}\n\n")
+                  fh.write("| Person | Owed | Charges | Oldest |\n|---|---:|---:|---|\n")
+                  for name, total, n, first in over:
+                      fh.write(f"| {name} | ¥{total:,.2f} | {n} | {first} |\n")
+                  fh.write("\n[Open split bill](https://playground.noahyao.me/split-bill)\n")
+
+          if over:
+              lines = [f"{len(over)} person(s) owe more than ¥{threshold:,.0f}.", ""]
+              for name, total, n, first in over:
+                  lines.append(f"  {name}: ¥{total:,.2f} across {n} charge(s), oldest {first}")
+              lines += ["", "https://playground.noahyao.me/split-bill"]
+              open("alert.txt", "w").write("\n".join(lines))
+          PY
+
+      - name: Email the detail
+        # Skipped silently when SMTP is not configured — the check above still ran.
+        if: steps.check.outputs.count != '0' && env.SMTP_USERNAME != ''
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ vars.SMTP_SERVER || 'smtp.gmail.com' }}
+          server_port: ${{ vars.SMTP_PORT || '465' }}
+          secure: true
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          from: Split Bill <${{ secrets.SMTP_USERNAME }}>
+          to: ${{ secrets.ALERT_TO || secrets.SMTP_USERNAME }}
+          subject: "Split bill: ${{ steps.check.outputs.count }} over the unpaid threshold"
+          # file:// keeps the body out of the workflow definition and the log.
+          body: file://alert.txt
