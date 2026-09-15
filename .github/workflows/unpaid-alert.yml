@@ -29,19 +29,20 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The stored secrets carry trailing whitespace, which survives into the
-          # URL and makes curl reject it as a malformed port. The keep-alive
-          # interpolates them straight into the argument and never notices.
-          base="$(printf '%s' "$SUPABASE_URL" | tr -d '[:space:]')"
-          base="${base%/}"
-          key="$(printf '%s' "$SUPABASE_KEY" | tr -d '[:space:]')"
+          # Shape only — the value itself stays masked. Enough to tell a stray
+          # quote or scheme from a whitespace problem if this ever breaks again.
+          printf 'url: len=%s first=%s colons=%s\n' \
+            "${#SUPABASE_URL}" "$(printf '%.1s' "$SUPABASE_URL")" \
+            "$(printf '%s' "$SUPABASE_URL" | tr -cd ':' | wc -c)"
 
           curl --fail -sS -o charges.json \
-            -H "apikey: ${key}" -H "Authorization: Bearer ${key}" \
-            "${base}/rest/v1/charges?select=subscriber_id,total_cny,period_start,paid,deleted_at&paid=eq.false&deleted_at=is.null"
+            -H "apikey: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
+            "${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}/rest/v1/charges?select=subscriber_id,total_cny,period_start,paid,deleted_at&paid=eq.false&deleted_at=is.null"
           curl --fail -sS -o people.json \
-            -H "apikey: ${key}" -H "Authorization: Bearer ${key}" \
-            "${base}/rest/v1/subscribers?select=id,name"
+            -H "apikey: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
+            "${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}/rest/v1/subscribers?select=id,name"
 
           python3 - <<'PY'
           import json, os, collections
