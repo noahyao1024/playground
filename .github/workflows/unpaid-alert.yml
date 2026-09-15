@@ -98,6 +98,9 @@ jobs:
 
       - name: Email the detail
         # Skipped silently when SMTP is not configured — the check above still ran.
+        # Not fatal either: the run summary already carries the alert, so a mail
+        # server having a bad day should not make the check itself look failed.
+        continue-on-error: true
         if: steps.check.outputs.count != '0' && env.SMTP_USERNAME != ''
         uses: dawidd6/action-send-mail@v3
         with:
