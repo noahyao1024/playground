@@ -7,7 +7,10 @@ name: Supabase Keep-Alive
 
 on:
   schedule:
-    - cron: '17 3 * * *' # daily, off-the-hour to avoid GitHub Actions cron congestion
+    # Daily. Off-the-hour dodges the busiest slots but does not avoid delay:
+    # in practice GitHub has been running this about four hours late. Harmless
+    # here, since only the 7-day inactivity window matters.
+    - cron: '17 3 * * *'
   workflow_dispatch:
 
 jobs:
@@ -16,7 +19,10 @@ jobs:
     steps:
       - name: Query Supabase to reset inactivity timer
         run: |
-          curl --fail -sS \
+          # 2026-09-13 this failed on a one-off 504 from Supabase and stayed
+          # failed: one missed ping is fine, but a keep-alive that gives up on
+          # a transient error is one you cannot read as a health signal.
+          curl --fail -sS --retry 3 --retry-delay 10 --retry-all-errors \
             "${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}/rest/v1/payment_methods?select=id&limit=1" \
             -H "apikey: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
             -H "Authorization: Bearer ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}"
