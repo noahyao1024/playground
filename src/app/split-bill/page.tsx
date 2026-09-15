@@ -909,7 +909,9 @@ export default function SubscriptionPage() {
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.3 }} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Subscriptions</h1>
-          <p className="text-sm text-muted-foreground">Manage subscriptions. Bill monthly, track payments.</p>
+          {/* Two lines on a phone for a sentence that explains nothing you can't
+              see from the page itself. Kept for desktop, where it costs nothing. */}
+          <p className="hidden text-sm text-muted-foreground sm:block">Manage subscriptions. Bill monthly, track payments.</p>
         </div>
         <div className="flex gap-2 items-center">
           {!session?.user && (
@@ -974,7 +976,7 @@ export default function SubscriptionPage() {
           { label: "Active", value: String(summary.activeSubs), prefix: null as string | null, icon: Receipt, iconBg: "bg-blue-500/15", iconColor: "text-blue-600 dark:text-blue-400", color: "text-blue-600 dark:text-blue-400", glowClass: "glass-card-blue", rateEntries: null as [string, number][] | null },
           { label: liveRates ? "Live rate" : "Avg rate", value: null as string | null, prefix: null as string | null, icon: TrendingUp, iconBg: "bg-purple-500/15", iconColor: "text-purple-600 dark:text-purple-400", color: "text-purple-600 dark:text-purple-400", glowClass: "glass-card-purple", rateEntries: liveRates ? Object.entries(liveRates).map(([cur, rate]) => [cur, rate] as [string, number]) : Object.keys(summary.avgRates).length > 0 ? Object.entries(summary.avgRates).map(([cur, rate]) => [cur, Number(rate.toFixed(4))] as [string, number]) : null },
         ].map((stat) => (
-          <div key={stat.label} className={`glass-card rounded-2xl p-4 sm:p-6 ${stat.glowClass}`}>
+          <div key={stat.label} className={`glass-card flex flex-col rounded-2xl p-4 sm:p-6 ${stat.glowClass}`}>
             <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground sm:mb-3 sm:gap-2.5 sm:text-sm">
               <div className={`flex h-7 w-7 items-center justify-center rounded-lg sm:h-8 sm:w-8 ${stat.iconBg}`}>
                 <stat.icon className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${stat.iconColor}`} />
@@ -1196,9 +1198,9 @@ export default function SubscriptionPage() {
                             </div>
                             {/* Wraps rather than squeezing: on a phone the price, the
                                 start date and the card do not fit on one line. */}
-                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground tabular-nums">
-                              <span>{service?.monthly_cost} {service?.currency}/mo {"\u00b7"} since {sub.start_date ?? sub.created_at?.slice(0, 10) ?? "—"}</span>
-                              {"\u00b7"}
+                            <div className="meta-row flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground tabular-nums">
+                              <span>{service?.monthly_cost} {service?.currency}/mo</span>
+                              <span>since {sub.start_date ?? sub.created_at?.slice(0, 10) ?? "\u2014"}</span>
                               {canEdit && subPayMethodOpen === sub.id ? (
                                 <select
                                   value={sub.payment_method_id ?? ""}
@@ -1436,7 +1438,7 @@ export default function SubscriptionPage() {
                             </span>
                           </div>
                         </div>
-                        <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 pl-[34px] text-[11px] text-muted-foreground tabular-nums">
+                        <div className="meta-row mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pl-[34px] text-[11px] text-muted-foreground tabular-nums">
                           <span>{charge.monthly_cost} {charge.currency} {"\u00d7"} {charge.exchange_rate}</span>
                           {by && <span>paid by {by}</span>}
                           {charge.note && <span className="truncate">{charge.note}</span>}
@@ -1556,9 +1558,9 @@ export default function SubscriptionPage() {
                                 <ServiceIcon name={name} />
                                 <div className="min-w-0">
                                   <div className="truncate">{name}</div>
-                                  <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                                  <div className="meta-row flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground">
                                     <span className="tabular-nums">{chargeBillingDate(charge)}</span>
-                                    {charge.note && <span className="truncate">{"\u00b7"} {charge.note}</span>}
+                                    {charge.note && <span className="truncate">{charge.note}</span>}
                                   </div>
                                 </div>
                               </div>
@@ -2059,7 +2061,7 @@ export default function SubscriptionPage() {
                               </div>
                               {ch && (
                                 <div className="mt-0.5 truncate text-muted-foreground">
-                                  {chargeName(ch, data.services)} {"\u00b7"} {ch.period_start}
+                                  {chargeName(ch, data.services)}{" "}<span className="tabular-nums opacity-70">{ch.period_start}</span>
                                   {owedBy && owedBy.id !== walletOpen && (
                                     <span className="ml-1 text-amber-600 dark:text-amber-400">for {owedBy.name}</span>
                                   )}
