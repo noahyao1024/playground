@@ -67,6 +67,12 @@ const DATE_COLUMNS = new Set(["date", "month"]);
 // Chosen in the service dropdown to bill something that has no service behind it.
 const ONE_OFF = "__one_off__";
 
+const WALLET_KIND_LABELS: Record<WalletKind, string> = {
+  topup: "Top-up (adds)",
+  charge: "Charge (deducts)",
+  adjustment: "Adjustment (deducts)",
+};
+
 /** The sections, defined once. The top strip and the phone's bottom bar render the
  *  same list, so they cannot drift apart. `short` is what fits under an icon at
  *  62px, which is a sixth of a 375px screen. */
@@ -810,6 +816,19 @@ export default function SubscriptionPage() {
     return lines.join("\n");
   }
 
+  // Base UI renders the raw value unless given a formatter, so a select bound to an
+  // id showed the id. These map a value back to what the item reads as.
+  const personLabel = (id: string | null) => data!.subscribers.find((p) => p.id === id)?.name ?? null;
+  const serviceLabel = (id: string | null) => {
+    if (id === ONE_OFF) return "One-off, not a service";
+    const svc = data!.services.find((x) => x.id === id);
+    return svc ? `${svc.name} (${svc.monthly_cost} ${svc.currency}/mo)` : null;
+  };
+  const walletLabel = (id: string | null) => {
+    const name = personLabel(id);
+    return name ? `${name} \u00b7 \u00a5${walletBalance(data!.wallet_entries, id!).toFixed(2)}` : null;
+  };
+
   function chargeBillingDate(charge: ChargeRecord) {
     // Stored wins. Deriving is the fallback for rows written before it was kept,
     // and it fails outright when the subscription behind them is gone.
@@ -885,7 +904,7 @@ export default function SubscriptionPage() {
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Subscriber</Label>
                   <Select value={subForm.subscriberId} onValueChange={(val) => setSubForm({ ...subForm, subscriberId: val as string })}>
-                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Select person" /></SelectTrigger>
+                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Select person">{(v: string | null) => personLabel(v) ?? "Select person"}</SelectValue></SelectTrigger>
                     <SelectContent>
                       {data.subscribers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
                     </SelectContent>
@@ -894,7 +913,7 @@ export default function SubscriptionPage() {
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Service</Label>
                   <Select value={subForm.serviceId} onValueChange={(val) => setSubForm({ ...subForm, serviceId: val as string })}>
-                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Select service" /></SelectTrigger>
+                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Select service">{(v: string | null) => serviceLabel(v) ?? "Select service"}</SelectValue></SelectTrigger>
                     <SelectContent>
                       {data.services.map((s) => <SelectItem key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</SelectItem>)}
                     </SelectContent>
@@ -989,7 +1008,7 @@ export default function SubscriptionPage() {
                         <div className="grid gap-1.5">
                           <Label className="text-xs text-muted-foreground">Subscriber</Label>
                           <Select value={chargeForm.subscriberId} onValueChange={(val) => setChargeForm({ ...chargeForm, subscriberId: val as string })}>
-                            <SelectTrigger className="w-full h-9"><SelectValue placeholder="Select person" /></SelectTrigger>
+                            <SelectTrigger className="w-full h-9"><SelectValue placeholder="Select person">{(v: string | null) => personLabel(v) ?? "Select person"}</SelectValue></SelectTrigger>
                             <SelectContent>
                               {data.subscribers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
                             </SelectContent>
@@ -1003,7 +1022,7 @@ export default function SubscriptionPage() {
                             const rate = cur && liveRates?.[cur] ? liveRates[cur] : chargeForm.exchangeRate;
                             setChargeForm({ ...chargeForm, serviceId: val as string, exchangeRate: rate });
                           }}>
-                            <SelectTrigger className="w-full h-9"><SelectValue placeholder="Select service" /></SelectTrigger>
+                            <SelectTrigger className="w-full h-9"><SelectValue placeholder="Select service">{(v: string | null) => serviceLabel(v) ?? "Select service"}</SelectValue></SelectTrigger>
                             <SelectContent>
                               <SelectItem value={ONE_OFF}>{"\u2014"} One-off, not a service {"\u2014"}</SelectItem>
                               {data.services.map((s) => <SelectItem key={s.id} value={s.id}>{s.name} ({s.monthly_cost} {s.currency}/mo)</SelectItem>)}
@@ -1776,7 +1795,9 @@ export default function SubscriptionPage() {
               <div className="grid gap-1.5">
                 <Label className="text-xs text-muted-foreground">Expiry month</Label>
                 <Select value={String(pmForm.expiryMonth)} onValueChange={(val) => setPmForm({ ...pmForm, expiryMonth: Number(val) })}>
-                  <SelectTrigger className="w-full h-9"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-full h-9">
+                    <SelectValue>{(v: string | null) => (v ? v.padStart(2, "0") : v)}</SelectValue>
+                  </SelectTrigger>
                   <SelectContent>
                     {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
                       <SelectItem key={m} value={String(m)}>{String(m).padStart(2, "0")}</SelectItem>
@@ -1826,7 +1847,7 @@ export default function SubscriptionPage() {
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Pay from</Label>
                   <Select value={settleWallet} onValueChange={(v) => setSettleWallet(v as string)}>
-                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Whose wallet" /></SelectTrigger>
+                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Whose wallet">{(v: string | null) => walletLabel(v) ?? "Whose wallet"}</SelectValue></SelectTrigger>
                     <SelectContent>
                       {data.subscribers.map((p) => (
                         <SelectItem key={p.id} value={p.id}>
@@ -1876,7 +1897,7 @@ export default function SubscriptionPage() {
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Pay from</Label>
                   <Select value={settleWallet} onValueChange={(v) => setSettleWallet(v as string)}>
-                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Whose wallet" /></SelectTrigger>
+                    <SelectTrigger className="w-full h-9"><SelectValue placeholder="Whose wallet">{(v: string | null) => walletLabel(v) ?? "Whose wallet"}</SelectValue></SelectTrigger>
                     <SelectContent>
                       {data.subscribers.map((p) => (
                         <SelectItem key={p.id} value={p.id}>
@@ -1971,11 +1992,13 @@ export default function SubscriptionPage() {
               <div className="grid gap-1.5">
                 <Label className="text-xs text-muted-foreground">Kind</Label>
                 <Select value={walletForm.kind} onValueChange={(v) => setWalletForm({ ...walletForm, kind: v as WalletKind })}>
-                  <SelectTrigger className="w-full h-9"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-full h-9">
+                    <SelectValue>{(v: string | null) => WALLET_KIND_LABELS[v as WalletKind] ?? v}</SelectValue>
+                  </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="topup">Top-up (adds)</SelectItem>
-                    <SelectItem value="charge">Charge (deducts)</SelectItem>
-                    <SelectItem value="adjustment">Adjustment (deducts)</SelectItem>
+                    <SelectItem value="topup">{WALLET_KIND_LABELS.topup}</SelectItem>
+                    <SelectItem value="charge">{WALLET_KIND_LABELS.charge}</SelectItem>
+                    <SelectItem value="adjustment">{WALLET_KIND_LABELS.adjustment}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
