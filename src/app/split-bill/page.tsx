@@ -97,6 +97,36 @@ function LoadingSkeleton() {
   );
 }
 
+/** The small inline actions — settle, reverse, bill. They were each a bare button
+ *  with its own font size, padding and hover, so no two lined up or had the same
+ *  hit area. */
+function MiniAction({ onClick, disabled, title, children }: {
+  onClick: () => void; disabled?: boolean; title?: string; children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className="rounded px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+    >
+      {children}
+    </button>
+  );
+}
+
+/** An amount with its symbol. The symbol is smaller and dimmer but sits on the
+ *  same baseline, which five separate inline spellings of this did not. */
+function Money({ value, className = "", size = "base" }: { value: number; className?: string; size?: "sm" | "base" | "lg" }) {
+  const digits = size === "lg" ? "text-xl" : size === "sm" ? "text-sm" : "text-base";
+  return (
+    <span className={`inline-flex items-baseline gap-0.5 tabular-nums ${className}`}>
+      <span className="text-[0.7em] opacity-60">{"\u00a5"}</span>
+      <span className={`${digits} font-bold`}>{value.toFixed(2)}</span>
+    </span>
+  );
+}
+
 function PersonAvatar({ name, index = 0, size = "sm" }: { name: string; index?: number; size?: "sm" | "default" }) {
   const colors = getPersonColor(index);
   const s = size === "default" ? "h-8 w-8 text-xs" : "h-6 w-6 text-[10px]";
@@ -1081,7 +1111,7 @@ export default function SubscriptionPage() {
                     const subscriber = data.subscribers.find((s) => s.id === sub.subscriber_id);
                     const service = data.services.find((s) => s.id === sub.service_id);
                     return (
-                      <div key={sub.id} className={`flex items-center justify-between px-5 py-4 transition-colors hover:bg-muted/30 ${!sub.active ? "opacity-50" : ""}`}>
+                      <div key={sub.id} className={`flex items-center justify-between px-5 py-4 transition-colors hover:bg-muted/30 ${!sub.active ? "opacity-60 grayscale" : ""}`}>
                         <div className="flex items-center gap-3 min-w-0">
                           <ServiceIcon name={service?.name ?? ""} />
                           <div className="min-w-0">
@@ -1137,7 +1167,9 @@ export default function SubscriptionPage() {
                               </div>
                             ) : (
                               <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                                <span className="truncate">{sub.note?.trim() || "No notes"}</span>
+                                {/* An empty note used to reserve a line on every row to say
+                                    nothing. Now only a real note takes space. */}
+                                {sub.note?.trim() && <span className="truncate">{sub.note.trim()}</span>}
                                 {canEdit && (
                                   <button
                                     onClick={() => {
@@ -1213,7 +1245,7 @@ export default function SubscriptionPage() {
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.created_at?.slice(0, 10) ?? "—"}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.monthly_cost} {charge.currency}</td>
                               <td className="px-3 py-2.5 text-xs tabular-nums text-muted-foreground">{charge.exchange_rate}</td>
-                              <td className="px-3 py-2.5 tabular-nums"><span className="text-xs text-muted-foreground">¥ </span><span className="text-base font-extrabold">{Number(charge.total_cny).toFixed(2)}</span></td>
+                              <td className="px-3 py-2.5"><Money value={Number(charge.total_cny)} /></td>
                               <td className="px-3 py-2.5">
                                 {canEdit ? (
                                   <div className="flex items-center gap-1.5">
@@ -1225,9 +1257,9 @@ export default function SubscriptionPage() {
                                       return by ? <span className="text-[10px] text-muted-foreground">by {by}</span> : null;
                                     })()}
                                     {charge.paid ? (
-                                      <button onClick={() => handleUnsettle(charge)} className="text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors">reverse</button>
+                                      <MiniAction onClick={() => handleUnsettle(charge)}>reverse</MiniAction>
                                     ) : (
-                                      <button onClick={() => openSettle(charge)} className="text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors">settle</button>
+                                      <MiniAction onClick={() => openSettle(charge)}>settle</MiniAction>
                                     )}
                                   </div>
                                 ) : (
@@ -1326,14 +1358,13 @@ export default function SubscriptionPage() {
                           <div className="flex items-center gap-2">
                             <span className="font-medium">{subscriber.name}</span>
                             {canEdit && subs.length > 0 && (
-                              <button
+                              <MiniAction
                                 onClick={() => handleBillNow(subscriber.id)}
                                 disabled={billing}
                                 title={`Generate this person's charges up to ${billMonth}`}
-                                className="text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground transition-colors disabled:opacity-40"
                               >
-                                {billing ? "billing..." : `bill ${billMonth}`}
-                              </button>
+                                {billing ? "billing\u2026" : `bill ${billMonth}`}
+                              </MiniAction>
                             )}
                           </div>
                           {subs.length > 0 && (
@@ -1351,28 +1382,33 @@ export default function SubscriptionPage() {
                           )}
                         </div>
                       </div>
-                      <div className="flex gap-5 tabular-nums">
+                      <div className="flex items-start gap-6">
                         {unpaid > 0 && (
-                          <div className="text-right text-amber-600 dark:text-amber-400">
-                            <div className="text-lg font-extrabold"><span className="text-xs font-medium opacity-60">¥ </span>{unpaid.toFixed(2)}</div>
+                          <div className="flex flex-col items-end gap-0.5 text-amber-600 dark:text-amber-400">
+                            <Money value={unpaid} size="lg" />
                             {canEdit ? (
-                              <button onClick={() => openSettleAll(subscriber.id)} className="text-[10px] font-normal underline underline-offset-2 opacity-70 hover:opacity-100 transition-opacity">settle all</button>
+                              <MiniAction onClick={() => openSettleAll(subscriber.id)}>settle all</MiniAction>
                             ) : (
-                              <div className="text-[10px] font-normal opacity-70">unpaid</div>
+                              <span className="px-1.5 text-[11px] opacity-70">unpaid</span>
                             )}
                           </div>
                         )}
-                        {paid > 0 && <div className="text-right text-emerald-600 dark:text-emerald-400"><div className="text-lg font-extrabold"><span className="text-xs font-medium opacity-60">¥ </span>{paid.toFixed(2)}</div><div className="text-[10px] font-normal opacity-70">paid</div></div>}
+                        {paid > 0 && (
+                          <div className="flex flex-col items-end gap-0.5 text-emerald-600 dark:text-emerald-400">
+                            <Money value={paid} size="lg" />
+                            <span className="px-1.5 text-[11px] opacity-70">paid</span>
+                          </div>
+                        )}
                         {canEdit && (
                           <button
                             onClick={() => { setWalletOpen(subscriber.id); setWalletForm({ amount: 0, kind: "topup", note: "" }); }}
-                            className={`text-right rounded-md px-2 py-1 transition-colors hover:bg-muted ${balance < 0 ? "text-amber-600 dark:text-amber-400" : "text-foreground"}`}
+                            className={`flex flex-col items-end gap-0.5 rounded-md px-1.5 py-0.5 transition-colors hover:bg-muted ${balance < 0 ? "text-amber-600 dark:text-amber-400" : "text-foreground"}`}
                             title={ledger.length ? `${ledger.length} wallet ${ledger.length === 1 ? "entry" : "entries"}` : "No wallet entries yet"}
                           >
-                            <div className="text-lg font-extrabold"><span className="text-xs font-medium opacity-60">¥ </span>{balance.toFixed(2)}</div>
-                            <div className="text-[10px] font-normal opacity-70 underline underline-offset-2">
+                            <Money value={balance} size="lg" />
+                            <span className="text-[11px] font-medium opacity-70">
                               wallet{ledger.length ? ` (${ledger.length})` : ""}
-                            </div>
+                            </span>
                           </button>
                         )}
                       </div>
@@ -1391,7 +1427,7 @@ export default function SubscriptionPage() {
                               </div>
                               <div className="flex items-center gap-3">
                                 <span className="text-xs text-muted-foreground tabular-nums">{charge.monthly_cost} {charge.currency}</span>
-                                <span className="tabular-nums"><span className="text-xs text-muted-foreground">¥ </span><span className="text-base font-extrabold">{Number(charge.total_cny).toFixed(2)}</span></span>
+                                <Money value={Number(charge.total_cny)} />
                                 {canEdit ? (
                                   <button onClick={() => charge.paid ? handleUnsettle(charge) : openSettle(charge)} className={`text-xs font-medium px-2 py-0.5 rounded-md transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
                                     {charge.paid ? "Paid" : "Unpaid"}
