@@ -47,13 +47,14 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { MonthPicker } from "@/components/month-picker";
 import { getServiceIcon, getPersonColor } from "@/lib/service-icons";
 import {
   Plus, Trash2, Edit2, Check, X, Users, Settings,
   Search, Download, TrendingUp, Clock,
-  ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, BarChart3, Keyboard,
+  ArrowUpDown, ArrowUp, ArrowDown, ChevronLeft, ChevronRight, BarChart3, Keyboard, MoreHorizontal,
   Zap, Pause, Play, Receipt, Lock, CreditCard, Star,
 } from "lucide-react";
 import { SpendingPieChart } from "@/components/charts/spending-pie-chart";
@@ -73,17 +74,28 @@ const WALLET_KIND_LABELS: Record<WalletKind, string> = {
   adjustment: "Adjustment (deducts)",
 };
 
-/** The sections, defined once. The top strip and the phone's bottom bar render the
- *  same list, so they cannot drift apart. `short` is what fits under an icon at
- *  62px, which is a sixth of a 375px screen. */
-const SECTIONS = [
+/** The sections, defined once, split by how often you actually go there.
+ *
+ *  PRIMARY is what the day looks like: what is owed, and who owes it. SECONDARY
+ *  is setup you touch a few times a year. They were six flat tabs, so a card
+ *  list you open twice a year competed for the same space as the charge list.
+ *
+ *  Desktop has room for all six and shows them. The phone's bottom bar carries
+ *  the three primary ones plus More, at a quarter of the screen each rather than
+ *  six icons crammed into a sixth. */
+const PRIMARY_SECTIONS = [
   { value: "charges", label: "Charges", short: "Charges", icon: Receipt },
   { value: "people", label: "People", short: "People", icon: Users },
   { value: "subscriptions", label: "Subscriptions", short: "Subs", icon: Zap },
+] as const;
+
+const SECONDARY_SECTIONS = [
   { value: "payment-methods", label: "Cards", short: "Cards", icon: CreditCard },
   { value: "charts", label: "Charts", short: "Charts", icon: BarChart3 },
   { value: "settings", label: "Settings", short: "Settings", icon: Settings },
 ] as const;
+
+const SECTIONS = [...PRIMARY_SECTIONS, ...SECONDARY_SECTIONS];
 
 /** Nominal billing day for a charge: the subscription's start day projected onto the
  *  charge's billing month, clamped when that month is too short (a Jan 31 start bills
@@ -274,7 +286,9 @@ export default function SubscriptionPage() {
 
   const [data, setData] = useState<SubscriptionData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState("subscriptions");
+  // Opening the app is to see what is owed, not to manage subscriptions.
+  const [activeTab, setActiveTab] = useState("charges");
+  const [moreOpen, setMoreOpen] = useState(false);
   const [addSubOpen, setAddSubOpen] = useState(false);
   const [addChargeOpen, setAddChargeOpen] = useState(false);
   const [editServiceOpen, setEditServiceOpen] = useState(false);
@@ -924,7 +938,11 @@ export default function SubscriptionPage() {
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Subscriptions</h1>
+          {/* Was hard-coded to "Subscriptions" while the page landed on Charges,
+              so the heading and the content disagreed from the first paint. */}
+          <h1 className="text-xl font-semibold tracking-tight">
+            {SECTIONS.find((sec) => sec.value === activeTab)?.label ?? "Split bill"}
+          </h1>
           {/* Two lines on a phone for a sentence that explains nothing you can't
               see from the page itself. Kept for desktop, where it costs nothing. */}
           <p className="hidden text-sm text-muted-foreground sm:block">Manage subscriptions. Bill monthly, track payments.</p>
@@ -1030,7 +1048,14 @@ export default function SubscriptionPage() {
               instead of a strip that scrolls sideways. */}
           <Tabs value={activeTab} onValueChange={(val) => setActiveTab(val as string)} className="hidden sm:block">
             <TabsList>
-              {SECTIONS.map((sec) => (
+              {PRIMARY_SECTIONS.map((sec) => (
+                <TabsTrigger key={sec.value} value={sec.value}>{sec.label}</TabsTrigger>
+              ))}
+              {/* Desktop has room for all six, so it shows them — but the rule
+                  divides the daily three from the setup three, rather than
+                  presenting six things of equal weight. */}
+              <span aria-hidden className="mx-1 h-4 w-px self-center bg-border" />
+              {SECONDARY_SECTIONS.map((sec) => (
                 <TabsTrigger key={sec.value} value={sec.value}>{sec.label}</TabsTrigger>
               ))}
             </TabsList>
@@ -2157,9 +2182,9 @@ export default function SubscriptionPage() {
       {/* Phone navigation. Fixed to the bottom where a thumb reaches, six items
           across at 62px each — a sixth of 375px — so nothing scrolls sideways.
           pb-[env(safe-area-inset-bottom)] keeps it clear of the home indicator. */}
-      <nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 backdrop-blur pb-[env(safe-area-inset-bottom)] sm:hidden">
-        <div className="mx-auto grid max-w-lg grid-cols-6">
-          {SECTIONS.map((sec) => {
+      <nav className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 pb-[env(safe-area-inset-bottom)] backdrop-blur sm:hidden">
+        <div className="mx-auto grid max-w-lg grid-cols-4">
+          {PRIMARY_SECTIONS.map((sec) => {
             const active = activeTab === sec.value;
             return (
               <button
@@ -2173,8 +2198,43 @@ export default function SubscriptionPage() {
               </button>
             );
           })}
+          {(() => {
+            // "More" reads as selected when you are inside one of the sections it
+            // holds, so the bar never looks like nothing is active.
+            const inMore = SECONDARY_SECTIONS.some((sec) => sec.value === activeTab);
+            return (
+              <button
+                onClick={() => setMoreOpen(true)}
+                aria-current={inMore ? "page" : undefined}
+                className={`flex flex-col items-center gap-0.5 py-2 transition-colors ${inMore ? "text-foreground" : "text-muted-foreground"}`}
+              >
+                <MoreHorizontal className={`h-[18px] w-[18px] ${inMore ? "" : "opacity-70"}`} />
+                <span className="text-[10px] leading-none">
+                  {inMore ? SECONDARY_SECTIONS.find((sec) => sec.value === activeTab)?.short : "More"}
+                </span>
+              </button>
+            );
+          })()}
         </div>
       </nav>
+
+      <Sheet open={moreOpen} onOpenChange={setMoreOpen}>
+        <SheetContent side="bottom" className="sm:hidden">
+          <SheetHeader><SheetTitle>More</SheetTitle></SheetHeader>
+          <div className="grid gap-1 p-4 pt-0">
+            {SECONDARY_SECTIONS.map((sec) => (
+              <button
+                key={sec.value}
+                onClick={() => { setActiveTab(sec.value); setMoreOpen(false); }}
+                className={`flex items-center gap-3 rounded-lg px-3 py-3 text-left text-sm transition-colors ${activeTab === sec.value ? "bg-muted font-medium" : "hover:bg-muted/60"}`}
+              >
+                <sec.icon className="h-4 w-4 text-muted-foreground" />
+                {sec.label}
+              </button>
+            ))}
+          </div>
+        </SheetContent>
+      </Sheet>
     </div>
   );
 }
