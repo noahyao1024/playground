@@ -103,6 +103,9 @@ jobs:
       - name: Open or update the tracking issue
         env:
           GH_TOKEN: ${{ github.token }}
+          # gh infers the repository from the git remote, and this job has no
+          # checkout — cloning the whole repo to file an issue would be absurd.
+          GH_REPO: ${{ github.repository }}
           COUNT: ${{ steps.check.outputs.count }}
         run: |
           set -euo pipefail
