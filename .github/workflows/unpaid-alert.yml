@@ -2,9 +2,16 @@ name: Unpaid Alert
 
 # Flags anyone owing more than the threshold.
 #
-# The detail goes to the run summary, so this works with no configuration at all —
-# open the run and read it. Email is an addition for when you would rather be told
-# than remember to look, and is skipped silently when SMTP is not set up.
+# Reports three ways, in increasing order of how much setup they need:
+#
+#   run summary  always, readable in the Actions tab
+#   issue        always, using the built-in token — GitHub notifies you for free,
+#                and the phone app pushes it
+#   email        only when SMTP secrets exist, skipped silently otherwise
+#
+# The issue is reused rather than reopened each week, so a standing debt is one
+# thread that updates, not an inbox full of duplicates. It closes itself when
+# everyone drops back under the threshold.
 #
 # These summaries are public, as the repository is. That is its owner's call.
 
@@ -17,6 +24,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     # Job level, not step level: a step's `if` cannot read env declared on itself.
+    permissions:
+      issues: write
     env:
       SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
     steps:
@@ -90,6 +99,31 @@ jobs:
               lines += ["", "https://playground.noahyao.me/split-bill"]
               open("alert.txt", "w").write("\n".join(lines))
           PY
+
+      - name: Open or update the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COUNT: ${{ steps.check.outputs.count }}
+        run: |
+          set -euo pipefail
+          title="Unpaid over threshold"
+          existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')"
+
+          if [ "$COUNT" = "0" ]; then
+            # Nothing outstanding: close the thread rather than leaving a stale alert open.
+            if [ -n "$existing" ]; then
+              gh issue close "$existing" --comment "Everyone is back under the threshold."
+            fi
+            exit 0
+          fi
+
+          body="$(cat alert.txt)
+          "
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
 
       - name: Email the detail
         # Skipped silently when SMTP is not configured — the check above still ran.
