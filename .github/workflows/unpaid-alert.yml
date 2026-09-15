@@ -2,16 +2,14 @@ name: Unpaid Alert
 
 # Flags anyone owing more than the threshold.
 #
-# Reports three ways, in increasing order of how much setup they need:
+# Reports two ways:
 #
 #   run summary  always, readable in the Actions tab
-#   issue        always, using the built-in token — GitHub notifies you for free,
-#                and the phone app pushes it
 #   email        only when SMTP secrets exist, skipped silently otherwise
 #
-# The issue is reused rather than reopened each week, so a standing debt is one
-# thread that updates, not an inbox full of duplicates. It closes itself when
-# everyone drops back under the threshold.
+# Until those secrets are set, the run summary is the only place this shows up —
+# which means remembering to look. Set SMTP_USERNAME, SMTP_PASSWORD and ALERT_TO
+# and the mail starts going out on its own, with no change to this file.
 #
 # These summaries are public, as the repository is. That is its owner's call.
 
@@ -24,8 +22,6 @@ jobs:
   check:
     runs-on: ubuntu-latest
     # Job level, not step level: a step's `if` cannot read env declared on itself.
-    permissions:
-      issues: write
     env:
       SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
     steps:
@@ -99,34 +95,6 @@ jobs:
               lines += ["", "https://playground.noahyao.me/split-bill"]
               open("alert.txt", "w").write("\n".join(lines))
           PY
-
-      - name: Open or update the tracking issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          # gh infers the repository from the git remote, and this job has no
-          # checkout — cloning the whole repo to file an issue would be absurd.
-          GH_REPO: ${{ github.repository }}
-          COUNT: ${{ steps.check.outputs.count }}
-        run: |
-          set -euo pipefail
-          title="Unpaid over threshold"
-          existing="$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')"
-
-          if [ "$COUNT" = "0" ]; then
-            # Nothing outstanding: close the thread rather than leaving a stale alert open.
-            if [ -n "$existing" ]; then
-              gh issue close "$existing" --comment "Everyone is back under the threshold."
-            fi
-            exit 0
-          fi
-
-          body="$(cat alert.txt)
-          "
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
-          else
-            gh issue create --title "$title" --body "$body"
-          fi
 
       - name: Email the detail
         # Skipped silently when SMTP is not configured — the check above still ran.
