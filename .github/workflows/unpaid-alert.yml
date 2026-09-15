@@ -15,7 +15,10 @@ name: Unpaid Alert
 
 on:
   schedule:
-    - cron: '23 1 * * 1' # Mondays, off-the-hour to dodge Actions cron congestion
+    # Daily, alongside the keep-alive. Off-the-hour only because the busiest
+    # slots are the worst; GitHub still runs scheduled jobs late, and this repo
+    # has seen the keep-alive drift by four hours. Treat the time as a hint.
+    - cron: '23 1 * * *'
   workflow_dispatch:
 
 jobs:
