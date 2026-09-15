@@ -109,7 +109,10 @@ jobs:
           secure: true
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          from: Split Bill <${{ secrets.SMTP_USERNAME }}>
+          # Gmail only lets you send as an address verified under
+          # Settings -> Accounts -> "Send mail as". Without that it rewrites the
+          # header back to the authenticated account, so MAIL_FROM defaults to it.
+          from: Split Bill <${{ vars.MAIL_FROM || secrets.SMTP_USERNAME }}>
           to: ${{ secrets.ALERT_TO || secrets.SMTP_USERNAME }}
           subject: "Split bill: ${{ steps.check.outputs.count }} over the unpaid threshold"
           # file:// keeps the body out of the workflow definition and the log.
