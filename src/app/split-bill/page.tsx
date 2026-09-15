@@ -90,7 +90,7 @@ function Skeleton({ className = "" }: { className?: string }) {
 function LoadingSkeleton() {
   return (
     <div className="space-y-6">
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
       <Skeleton className="h-10 w-64" />
       <Skeleton className="h-96" />
     </div>
@@ -909,17 +909,17 @@ export default function SubscriptionPage() {
       </motion.div>
 
       {/* Stats */}
-      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.05 }} className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: 0.05 }} className="grid grid-cols-2 gap-3 sm:gap-5 lg:grid-cols-4">
         {[
           { label: "Paid", value: summary.totalPaid.toFixed(2), prefix: "¥", icon: Check, iconBg: "bg-emerald-500/15", iconColor: "text-emerald-600 dark:text-emerald-400", color: "text-emerald-600 dark:text-emerald-400", glowClass: "glass-card-emerald", rateEntries: null as [string, number][] | null },
           { label: "Unpaid", value: summary.totalUnpaid.toFixed(2), prefix: "¥", icon: Clock, iconBg: "bg-amber-500/15", iconColor: "text-amber-600 dark:text-amber-400", color: "text-amber-600 dark:text-amber-400", glowClass: "glass-card-amber", rateEntries: null as [string, number][] | null },
           { label: "Active", value: String(summary.activeSubs), prefix: null as string | null, icon: Receipt, iconBg: "bg-blue-500/15", iconColor: "text-blue-600 dark:text-blue-400", color: "text-blue-600 dark:text-blue-400", glowClass: "glass-card-blue", rateEntries: null as [string, number][] | null },
           { label: liveRates ? "Live rate" : "Avg rate", value: null as string | null, prefix: null as string | null, icon: TrendingUp, iconBg: "bg-purple-500/15", iconColor: "text-purple-600 dark:text-purple-400", color: "text-purple-600 dark:text-purple-400", glowClass: "glass-card-purple", rateEntries: liveRates ? Object.entries(liveRates).map(([cur, rate]) => [cur, rate] as [string, number]) : Object.keys(summary.avgRates).length > 0 ? Object.entries(summary.avgRates).map(([cur, rate]) => [cur, Number(rate.toFixed(4))] as [string, number]) : null },
         ].map((stat) => (
-          <div key={stat.label} className={`glass-card rounded-2xl p-6 ${stat.glowClass}`}>
-            <div className="flex items-center gap-2.5 text-sm text-muted-foreground mb-3">
-              <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${stat.iconBg}`}>
-                <stat.icon className={`h-4 w-4 ${stat.iconColor}`} />
+          <div key={stat.label} className={`glass-card rounded-2xl p-4 sm:p-6 ${stat.glowClass}`}>
+            <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground sm:mb-3 sm:gap-2.5 sm:text-sm">
+              <div className={`flex h-7 w-7 items-center justify-center rounded-lg sm:h-8 sm:w-8 ${stat.iconBg}`}>
+                <stat.icon className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${stat.iconColor}`} />
               </div>
               {stat.label}
             </div>
@@ -938,10 +938,10 @@ export default function SubscriptionPage() {
                     digits and shares their baseline, rather than being a fixed
                     size pushed against them. */}
                 {stat.prefix && <span className="text-[0.55em] opacity-60">{stat.prefix}</span>}
-                <span className="text-3xl">{stat.value}</span>
+                <span className="text-2xl sm:text-3xl">{stat.value}</span>
               </div>
             ) : (
-              <div className={`text-3xl font-bold tabular-nums tracking-tight ${stat.color}`}>{"\u2014"}</div>
+              <div className={`text-2xl font-bold tabular-nums tracking-tight sm:text-3xl ${stat.color}`}>{"\u2014"}</div>
             )}
           </div>
         ))}
@@ -951,7 +951,7 @@ export default function SubscriptionPage() {
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.1 }}>
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
           <Tabs value={activeTab} onValueChange={(val) => setActiveTab(val as string)}>
-            <TabsList>
+            <TabsList className="max-w-full overflow-x-auto">
               <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
               <TabsTrigger value="charges">Charges</TabsTrigger>
               <TabsTrigger value="people">People</TabsTrigger>
@@ -1006,7 +1006,7 @@ export default function SubscriptionPage() {
                               <Label className="text-xs text-muted-foreground">What for</Label>
                               <Input className="h-9" value={chargeForm.label} onChange={(e) => setChargeForm({ ...chargeForm, label: e.target.value })} placeholder="e.g. ChatGPT credits top-up" autoFocus />
                             </div>
-                            <div className="grid grid-cols-2 gap-3">
+                            <div className="grid gap-3 sm:grid-cols-2">
                               <div className="grid gap-1.5">
                                 <Label className="text-xs text-muted-foreground">Amount</Label>
                                 <Input type="number" step="0.01" className="h-9" value={chargeForm.amount || ""} onChange={(e) => setChargeForm({ ...chargeForm, amount: Number(e.target.value) })} placeholder="0.00" />
@@ -1033,7 +1033,7 @@ export default function SubscriptionPage() {
                           <Label className="text-xs text-muted-foreground">Date</Label>
                           <Input type="date" className="h-9" value={chargeForm.date} onChange={(e) => handleChargeDateChange(e.target.value)} />
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid gap-3 sm:grid-cols-2">
                           <div className="grid gap-1.5">
                             <Label className="text-xs text-muted-foreground">Exchange rate (to CNY) {liveRates && <span className="text-emerald-600 dark:text-emerald-400">Live</span>}</Label>
                             <Input type="number" step="0.01" className="h-9" value={chargeForm.exchangeRate} onChange={(e) => setChargeForm({ ...chargeForm, exchangeRate: Number(e.target.value) })} />
@@ -1074,7 +1074,7 @@ export default function SubscriptionPage() {
           <div className="space-y-4">
             {/* Bill now */}
             {canEdit && (
-              <div className="relative z-10 flex items-center gap-2 rounded-2xl border bg-card p-4 flex-wrap">
+              <div className="relative z-10 flex flex-wrap items-center gap-2 rounded-2xl border bg-card p-3 sm:p-4">
                 <Zap className="h-4 w-4 text-muted-foreground" />
                 <span className="text-sm text-muted-foreground">Generate charges for</span>
                 <MonthPicker value={billMonth} onChange={setBillMonth} />
@@ -1091,7 +1091,7 @@ export default function SubscriptionPage() {
                     )}
                   </div>
                 )}
-                <div className="flex items-center gap-1.5 ml-auto">
+                <div className="flex w-full items-center gap-1.5 sm:ml-auto sm:w-auto">
                   <Button size="sm" className="h-8" onClick={() => handleBillNow()} disabled={billing}>
                     {billing ? "Billing..." : "Bill now"}
                   </Button>
@@ -1118,12 +1118,14 @@ export default function SubscriptionPage() {
                         <div className="flex items-center gap-3 min-w-0">
                           <ServiceIcon name={service?.name ?? ""} />
                           <div className="min-w-0">
-                            <div className="flex items-center gap-2 text-sm">
-                              <span className="font-medium">{service?.name ?? "?"}</span>
-                              <span className="text-muted-foreground">{"\u2192"}</span>
-                              <span className="text-muted-foreground">{subscriber?.name ?? "?"}</span>
+                            <div className="flex items-center gap-2 text-sm min-w-0">
+                              <span className="truncate font-medium">{service?.name ?? "?"}</span>
+                              <span className="shrink-0 text-muted-foreground">{"\u2192"}</span>
+                              <span className="shrink-0 text-muted-foreground">{subscriber?.name ?? "?"}</span>
                             </div>
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground tabular-nums">
+                            {/* Wraps rather than squeezing: on a phone the price, the
+                                start date and the card do not fit on one line. */}
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground tabular-nums">
                               <span>{service?.monthly_cost} {service?.currency}/mo {"\u00b7"} since {sub.start_date ?? sub.created_at?.slice(0, 10) ?? "—"}</span>
                               {"\u00b7"}
                               {canEdit && subPayMethodOpen === sub.id ? (
@@ -1354,7 +1356,7 @@ export default function SubscriptionPage() {
                 const ledger = walletEntriesFor(subscriber.id);
                 return (
                   <div key={subscriber.id} className="rounded-2xl border bg-card">
-                    <div className="flex items-center justify-between px-5 py-4 border-b">
+                    <div className="flex flex-col gap-3 border-b px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:px-5">
                       <div className="flex items-center gap-3">
                         <PersonAvatar name={subscriber.name} index={data.subscribers.indexOf(subscriber)} size="default" />
                         <div>
@@ -1385,7 +1387,7 @@ export default function SubscriptionPage() {
                           )}
                         </div>
                       </div>
-                      <div className="flex items-start gap-6">
+                      <div className="flex items-start gap-5 sm:gap-6">
                         {unpaid > 0 && (
                           <div className="flex flex-col items-end gap-0.5 text-amber-600 dark:text-amber-400">
                             <Money value={unpaid} size="lg" />
@@ -1421,15 +1423,21 @@ export default function SubscriptionPage() {
                         {charges.map((charge) => {
                           const name = chargeName(charge, data.services);
                           return (
-                            <div key={charge.id} className="flex items-center justify-between px-5 py-3 text-sm hover:bg-muted/30 transition-colors">
-                              <div className="flex items-center gap-2.5">
+                            <div key={charge.id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm transition-colors hover:bg-muted/30 sm:px-5">
+                              <div className="flex min-w-0 items-center gap-2.5">
                                 <ServiceIcon name={name} />
-                                <span>{name}</span>
-                                <span className="text-xs text-muted-foreground">{chargeBillingDate(charge)}</span>
-                                {charge.note && <span className="text-xs text-muted-foreground">{"\u00b7"} {charge.note}</span>}
+                                <div className="min-w-0">
+                                  <div className="truncate">{name}</div>
+                                  <div className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                                    <span className="tabular-nums">{chargeBillingDate(charge)}</span>
+                                    {charge.note && <span className="truncate">{"\u00b7"} {charge.note}</span>}
+                                  </div>
+                                </div>
                               </div>
-                              <div className="flex items-center gap-3">
-                                <span className="text-xs text-muted-foreground tabular-nums">{charge.monthly_cost} {charge.currency}</span>
+                              <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+                                {/* The original figure is the least load-bearing thing here,
+                                    so it is what gives way on a narrow screen. */}
+                                <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">{charge.monthly_cost} {charge.currency}</span>
                                 <Money value={Number(charge.total_cny)} />
                                 {canEdit ? (
                                   <button onClick={() => charge.paid ? handleUnsettle(charge) : openSettle(charge)} className={`text-xs font-medium px-2 py-0.5 rounded-md transition-colors ${charge.paid ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-500/20" : "bg-amber-500/10 text-amber-600 dark:text-amber-400 hover:bg-amber-500/20"}`}>
@@ -1653,7 +1661,7 @@ export default function SubscriptionPage() {
                 <Label className="text-xs text-muted-foreground">Name</Label>
                 <Input className="h-9" value={editingService.name} onChange={(e) => setEditingService({ ...editingService, name: e.target.value })} />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Monthly cost</Label>
                   <Input type="number" step="0.01" className="h-9" value={editingService.monthly_cost} onChange={(e) => setEditingService({ ...editingService, monthly_cost: Number(e.target.value) })} />
@@ -1709,7 +1717,7 @@ export default function SubscriptionPage() {
               <Label className="text-xs text-muted-foreground">Label / nickname (optional)</Label>
               <Input className="h-9" placeholder="e.g. Personal Visa" value={pmForm.label} onChange={(e) => setPmForm({ ...pmForm, label: e.target.value })} />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <div className="grid gap-1.5">
                 <Label className="text-xs text-muted-foreground">Expiry month</Label>
                 <Select value={String(pmForm.expiryMonth)} onValueChange={(val) => setPmForm({ ...pmForm, expiryMonth: Number(val) })}>
@@ -1904,7 +1912,7 @@ export default function SubscriptionPage() {
                 </>
               );
             })()}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-3 sm:grid-cols-2">
               <div className="grid gap-1.5">
                 <Label className="text-xs text-muted-foreground">Kind</Label>
                 <Select value={walletForm.kind} onValueChange={(v) => setWalletForm({ ...walletForm, kind: v as WalletKind })}>
