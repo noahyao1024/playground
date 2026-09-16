@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { fetchAllRows } from "./paginate";
 import { monthInSG } from "./dates";
 
 // ─── Server write helper ────────────────────────────────────────────
@@ -176,21 +177,37 @@ function localId(): string {
 export async function fetchSubscriptionData(): Promise<SubscriptionData> {
   if (!supabase) return readLocal();
 
-  const [{ data: services }, { data: subscribers }, { data: subscriptions }, { data: charges }, { data: payment_methods }, { data: wallet_entries }] = await Promise.all([
+  // charges and wallet_entries are the two that grow without bound — a row per
+  // subscription per month, forever — so they are read a page at a time. The
+  // rest are bounded by how many people and services actually exist.
+  //
+  // Both carry a unique tiebreaker after created_at: a billing run stamps its
+  // whole batch with the same second, and paging on a sort with ties can drop
+  // rows at a page boundary. A short read of wallet_entries would misstate a
+  // balance, which is how someone ends up settling against money that is not
+  // there.
+  const [{ data: services }, { data: subscribers }, { data: subscriptions }, charges, { data: payment_methods }, wallet_entries] = await Promise.all([
     supabase.from("services").select("*").order("name"),
     supabase.from("subscribers").select("*").order("name"),
     supabase.from("subscriptions").select("*").order("created_at"),
-    supabase.from("charges").select("*").is("deleted_at", null).order("created_at"),
+    fetchAllRows<ChargeRecord>((from, to) =>
+      supabase.from("charges").select("*").is("deleted_at", null)
+        .order("created_at").order("id").range(from, to)
+    ),
     supabase.from("payment_methods").select("*").order("created_at"),
-    supabase.from("wallet_entries").select("*").order("created_at", { ascending: false }),
+    fetchAllRows<WalletEntry>((from, to) =>
+      supabase.from("wallet_entries").select("*")
+        .order("created_at", { ascending: false }).order("id", { ascending: false })
+        .range(from, to)
+    ),
   ]);
   return {
     services: (services ?? []) as Service[],
     subscribers: (subscribers ?? []) as Subscriber[],
     subscriptions: (subscriptions ?? []) as Subscription[],
-    charges: (charges ?? []) as ChargeRecord[],
+    charges,
     payment_methods: (payment_methods ?? []) as PaymentMethod[],
-    wallet_entries: (wallet_entries ?? []) as WalletEntry[],
+    wallet_entries,
   };
 }
 
