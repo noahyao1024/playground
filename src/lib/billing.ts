@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import { fetchAllRows } from "./paginate";
 
 export function getServerSupabase(): SupabaseClient | null {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -78,14 +79,25 @@ export async function generateChargesForMonth(
 ): Promise<{ generated: number; details: Array<{ subscriber: string; service: string; total_cny: number }> }> {
   const [
     { data: subscriptions },
-    { data: allExistingCharges },
+    allExistingCharges,
     { data: services },
     { data: subscribers },
   ] = await Promise.all([
     subscriberId
       ? supabase.from("subscriptions").select("*").eq("active", true).eq("subscriber_id", subscriberId)
       : supabase.from("subscriptions").select("*").eq("active", true),
-    supabase.from("charges").select("subscriber_id, service_id, period_start"),
+    // Every charge ever written, and it does have to be every one: this is the
+    // only thing standing between a re-run and billing a month twice. Ordered
+    // by id because paging needs a unique sort, and because a billing batch
+    // shares one created_at down to the second.
+    fetchAllRows<{ subscriber_id: string; service_id: string; period_start: string }>(
+      (from, to) =>
+        supabase
+          .from("charges")
+          .select("subscriber_id, service_id, period_start")
+          .order("id")
+          .range(from, to),
+    ),
     supabase.from("services").select("*"),
     supabase.from("subscribers").select("*"),
   ]);
@@ -96,7 +108,7 @@ export async function generateChargesForMonth(
 
   // Build a set of "subscriber::service::month" keys for all existing charges
   const billed = new Set(
-    (allExistingCharges ?? []).map((c: { subscriber_id: string; service_id: string; period_start: string }) =>
+    allExistingCharges.map((c) =>
       `${c.subscriber_id}::${c.service_id}::${c.period_start}`
     )
   );
