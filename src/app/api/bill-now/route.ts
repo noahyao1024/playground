@@ -40,7 +40,11 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await generateChargesForMonth(supabase, month, ratesFor, subscriberId);
-    return NextResponse.json({ message: `Generated ${result.generated} charge(s)`, month, ...result });
+    // A run that skipped everything would otherwise read as a clean success.
+          const note = result.skipped.length
+            ? ` (skipped ${result.skipped.length} with no rate for their currency)`
+            : "";
+          return NextResponse.json({ message: `Generated ${result.generated} charge(s)${note}`, month, ...result });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null && "message" in err ? (err as { message: string }).message : JSON.stringify(err);
     return NextResponse.json({ error: msg }, { status: 500 });

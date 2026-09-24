@@ -15,7 +15,7 @@ const tools = [
   {
     title: "Split Bill",
     subtitle: "分账",
-    description: "Track shared subscription costs with SGD & USD to CNY conversion.",
+    description: "Track shared subscription costs with SGD, USD and JPY to CNY conversion.",
     icon: Receipt,
     href: "/split-bill",
   },

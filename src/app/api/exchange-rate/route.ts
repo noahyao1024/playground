@@ -14,14 +14,23 @@ const FX = "https://api.frankfurter.dev/v1";
 // Last resort only, when the source and the recorded history are both
 // unreachable. The previous constants (7.25 / 5.39) sat 8% and 1.7% above the
 // market and fourteen charges were billed at them.
-const LAST_RESORT: Record<string, number> = { USD: 6.72, SGD: 5.30 };
+const LAST_RESORT: Record<string, number> = { USD: 6.72, SGD: 5.30, JPY: 0.0425 };
 
 const TTL = 10 * 60 * 1000;
 let liveCache: { mid: Record<string, number>; ts: number } | null = null;
 // Historical rates never change once published, so they are cached for the process's life.
 const pastCache = new Map<string, Record<string, number>>();
 
-const round4 = (n: number) => Math.round(n * 10000) / 10000;
+/** Four decimals suits a rate near 1 and matches every rate recorded so far, so
+ *  at or above 1 nothing changes. Below 1 it is not enough: JPY trades near
+ *  0.042, where four decimals leaves three significant digits and puts a 12,000
+ *  JPY subscription about 0.3 CNY out. Widen to six significant digits there. */
+const roundRate = (n: number) => {
+  if (!Number.isFinite(n) || n <= 0) return n;
+  const magnitude = Math.floor(Math.log10(n));
+  const decimals = magnitude >= 0 ? 4 : Math.min(5 - magnitude, 12);
+  return Number(n.toFixed(decimals));
+};
 
 /** Rates actually used on the most recent charge in each currency — a better
  *  fallback than a constant, because it tracks reality on its own. */
@@ -45,14 +54,19 @@ async function recordedRates(): Promise<Record<string, number>> {
  *  request with the nearest trading day at or before it, which is what a weekend
  *  or holiday should resolve to. */
 async function fetchMid(day: string | null): Promise<{ mid: Record<string, number>; asOf: string } | null> {
-  const res = await fetch(`${FX}/${day ?? "latest"}?base=USD&symbols=CNY,SGD`, { next: { revalidate: 600 } });
+  const res = await fetch(`${FX}/${day ?? "latest"}?base=USD&symbols=CNY,SGD,JPY`, { next: { revalidate: 600 } });
   if (!res.ok) return null;
   const data = await res.json();
   const cny = Number(data?.rates?.CNY);
   const sgd = Number(data?.rates?.SGD);
   if (!cny || !sgd) return null;
   // The source quotes per USD, so CNY per SGD is the ratio of the two.
-  return { mid: { USD: round4(cny), SGD: round4(cny / sgd) }, asOf: data.date ?? day ?? "" };
+  const mid: Record<string, number> = { USD: roundRate(cny), SGD: roundRate(cny / sgd) };
+  // Added only when the source returned it. A currency missing upstream should
+  // cost that currency its live rate, not take the other two down with it.
+  const jpy = Number(data?.rates?.JPY);
+  if (jpy) mid.JPY = roundRate(cny / jpy);
+  return { mid, asOf: data.date ?? day ?? "" };
 }
 
 export async function GET(req: NextRequest) {
@@ -102,7 +116,7 @@ export async function GET(req: NextRequest) {
   }
 
   const rates: Record<string, number> = {};
-  for (const [cur, value] of Object.entries(mid)) rates[cur] = round4(value * MARKUP);
+  for (const [cur, value] of Object.entries(mid)) rates[cur] = roundRate(value * MARKUP);
   // rates is what to settle at; mid is what it came from, so the markup stays visible.
   return NextResponse.json({ rates, mid, markup: MARKUP, source, asOf });
 }

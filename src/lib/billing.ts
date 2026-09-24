@@ -39,7 +39,7 @@ function monthRange(startMonth: string, endMonth: string): string[] {
  *  The endpoint owns the markup and its own fallbacks; these constants only cover
  *  it being unreachable entirely. */
 export async function fetchExchangeRates(baseUrl?: string, month?: string): Promise<Record<string, number>> {
-  const defaults: Record<string, number> = { USD: 6.79, SGD: 5.35 };
+  const defaults: Record<string, number> = { USD: 6.79, SGD: 5.35, JPY: 0.0425 };
   try {
     const base = baseUrl ? `${baseUrl}/api/exchange-rate` : "/api/exchange-rate";
     // The 1st of the billing month; the source resolves a non-trading day back to
@@ -76,7 +76,11 @@ export async function generateChargesForMonth(
   ratesFor: (month: string) => Promise<Record<string, number>>,
   /** Restrict to one person's subscriptions. Omit to bill everyone. */
   subscriberId?: string,
-): Promise<{ generated: number; details: Array<{ subscriber: string; service: string; total_cny: number }> }> {
+): Promise<{
+  generated: number;
+  details: Array<{ subscriber: string; service: string; total_cny: number }>;
+  skipped: Array<{ subscriber: string; service: string; month: string; currency: string }>;
+}> {
   const [
     { data: subscriptions },
     allExistingCharges,
@@ -115,6 +119,7 @@ export async function generateChargesForMonth(
 
   const newCharges: Array<Record<string, unknown>> = [];
   const details: Array<{ subscriber: string; service: string; total_cny: number }> = [];
+  const skipped: Array<{ subscriber: string; service: string; month: string; currency: string }> = [];
 
   for (const sub of subscriptions) {
     const startDate = sub.start_date ?? sub.created_at?.slice(0, 10) ?? `${month}-01`;
@@ -133,7 +138,18 @@ export async function generateChargesForMonth(
       if (!shouldBillMonth(startDate, m)) continue;
 
       const monthRates = await ratesFor(m);
-      const rate = monthRates[service.currency] ?? monthRates.USD ?? 6.79;
+      // No substituting another currency's rate. The old fallback reached for
+      // USD, which is survivable when the two sit near each other and ruinous
+      // when they do not: JPY trades near 0.042, so a 12,000 JPY subscription
+      // billed at a USD rate lands at 81,480 CNY instead of 510. The currency
+      // column is free text, so an unrecognised one is reachable by typing it.
+      // Skip and report it -- a run picks up what it skipped the next time
+      // round, once a rate exists, and a wrong charge would not fix itself.
+      const rate = monthRates[service.currency];
+      if (!rate) {
+        skipped.push({ subscriber: subscriberName, service: service.name, month: m, currency: service.currency });
+        continue;
+      }
       const totalCny = Number((monthlyCost * rate).toFixed(2));
       const note = "Auto-generated";
 
@@ -169,5 +185,5 @@ export async function generateChargesForMonth(
     if (error) throw error;
   }
 
-  return { generated: newCharges.length, details };
+  return { generated: newCharges.length, details, skipped };
 }

@@ -29,6 +29,7 @@ import {
   deletePaymentMethod as apiDeletePaymentMethod,
   detectCardType,
   currentMonth as getCurrentMonth,
+  CURRENCIES,
   type SubscriptionData,
   type Service,
   type Subscription,
@@ -277,6 +278,23 @@ function formatCardInput(value: string): string {
 // ═══════════════════════════════════════════════════════════════════════
 // Main page
 // ═══════════════════════════════════════════════════════════════════════
+/** Shown only in the instant before the live rate arrives, then overwritten.
+ *  It used to be 7.25 -- a rate the FX route's own notes record as sitting 8%
+ *  above the market, and which fourteen charges were once billed at. The form
+ *  opens on SGD, so the placeholder is an SGD-shaped number now. */
+const RATE_PLACEHOLDER = 5.3;
+
+const emptyChargeForm = () => ({
+  subscriberId: "",
+  serviceId: "",
+  date: todayInSG(),
+  exchangeRate: RATE_PLACEHOLDER,
+  note: "",
+  label: "",
+  amount: 0,
+  currency: "SGD" as Currency,
+});
+
 export default function SubscriptionPage() {
   const { data: session } = useSession();
   const router = useRouter();
@@ -312,7 +330,7 @@ export default function SubscriptionPage() {
   const [editingSubscriberName, setEditingSubscriberName] = useState("");
 
   const [subForm, setSubForm] = useState({ subscriberId: "", serviceId: "", startDate: todayInSG(), note: "" });
-  const [chargeForm, setChargeForm] = useState({ subscriberId: "", serviceId: "", date: todayInSG(), exchangeRate: 7.25, note: "", label: "", amount: 0, currency: "SGD" as Currency });
+  const [chargeForm, setChargeForm] = useState(emptyChargeForm());
   const [liveRates, setLiveRates] = useState<Record<string, number> | null>(null);
   // How far the settlement rate sits above mid-market, so the adjustment is visible.
   const [fxMarkup, setFxMarkup] = useState<number | null>(null);
@@ -363,8 +381,11 @@ export default function SubscriptionPage() {
           setLiveRates(rates);
           setFxMarkup(typeof payload.markup === "number" ? payload.markup : null);
           // Only seeds the manual charge form; the billing run asks the server for
-          // the rate of whichever month it is generating.
-          if (rates.USD) setChargeForm((f) => ({ ...f, exchangeRate: rates.USD }));
+          // the rate of whichever month it is generating. Seeded from the form's
+          // own currency -- it defaults to SGD, and seeding it with the USD rate
+          // priced a one-off SGD charge about 29% high unless the picker was
+          // touched.
+          setChargeForm((f) => (rates[f.currency] ? { ...f, exchangeRate: rates[f.currency] } : f));
         }
       })
       .catch(() => {});
@@ -650,7 +671,7 @@ export default function SubscriptionPage() {
         billing_date: date,
         note: note || "Manual",
       });
-      setChargeForm({ subscriberId: "", serviceId: "", date: todayInSG(), exchangeRate: 7.25, note: "", label: "", amount: 0, currency: "SGD" });
+      setChargeForm(emptyChargeForm());
       setAddChargeOpen(false);
       toast.success("Charge added");
       await reload();
@@ -1137,8 +1158,7 @@ export default function SubscriptionPage() {
                                 }}>
                                   <SelectTrigger className="w-full h-9"><SelectValue /></SelectTrigger>
                                   <SelectContent>
-                                    <SelectItem value="SGD">SGD</SelectItem>
-                                    <SelectItem value="USD">USD</SelectItem>
+                                    {CURRENCIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                                   </SelectContent>
                                 </Select>
                               </div>
@@ -1153,7 +1173,7 @@ export default function SubscriptionPage() {
                         <div className="grid gap-3 sm:grid-cols-2">
                           <div className="grid gap-1.5">
                             <Label className="text-xs text-muted-foreground">Exchange rate (to CNY) {liveRates && <span className="text-emerald-600 dark:text-emerald-400">Live</span>}</Label>
-                            <Input type="number" step="0.01" className="h-9" value={chargeForm.exchangeRate} onChange={(e) => setChargeForm({ ...chargeForm, exchangeRate: Number(e.target.value) })} />
+                            <Input type="number" step="any" className="h-9" value={chargeForm.exchangeRate} onChange={(e) => setChargeForm({ ...chargeForm, exchangeRate: Number(e.target.value) })} />
                           </div>
                           <div className="grid gap-1.5">
                             <Label className="text-xs text-muted-foreground">Note</Label>
@@ -1877,8 +1897,7 @@ export default function SubscriptionPage() {
                   <Select value={editingService.currency} onValueChange={(val) => setEditingService({ ...editingService, currency: val as Currency })}>
                     <SelectTrigger className="w-full h-9"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="USD">USD</SelectItem>
-                      <SelectItem value="SGD">SGD</SelectItem>
+                      {CURRENCIES.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
