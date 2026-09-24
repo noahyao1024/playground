@@ -19,7 +19,11 @@ async function serverWrite(action: string, table: string, payload: Record<string
 
 // ─── Types ───────────────────────────────────────────────────────────
 
-export type Currency = "USD" | "SGD";
+/** The list is the source of truth and the type is derived from it, so a
+ *  currency cannot be half-added: anything appearing in one and not the other
+ *  stops compiling. Order is the order the pickers show. */
+export const CURRENCIES = ["SGD", "USD", "JPY"] as const;
+export type Currency = (typeof CURRENCIES)[number];
 
 export interface Service {
   id: string;
