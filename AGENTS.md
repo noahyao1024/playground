@@ -53,9 +53,16 @@ file, a commit message, or a PR description.
 GitHub runs scheduled jobs late, routinely by hours. A job that has not fired yet is not
 evidence it is broken; check `gh run list --workflow=<name>` for `event=schedule`.
 
-## Migrations are a record, not a runner
+## Applying a migration
 
-`supabase/migrations/` holds what was run, in order. Nothing applies them automatically —
-they went in through the Supabase MCP server or the SQL editor. So never assume a file
-there is live. Check first: one way that writes nothing is to aim PostgREST's `on_conflict`
-at the index you expect and read the error — `42P10` means it does not exist.
+`.github/workflows/apply-migration.yml`, run by hand, one named file at a time. Leave
+`apply` off first: it executes the file inside a transaction and rolls back, so syntax,
+permissions and conflicts surface without keeping anything.
+
+Not `supabase db push`. That replays whatever the remote's `schema_migrations` table does
+not list, and these migrations went in one at a time through the MCP server, which did not
+record them — seven of the thirteen are not idempotent and would error or double-apply.
+
+A file in `supabase/migrations/` is therefore still not proof it is live. Check before
+assuming: aim PostgREST's `on_conflict` at the index you expect and read the error code —
+`42P10` means no such constraint, and the probe writes nothing.

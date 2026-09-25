@@ -59,10 +59,18 @@ historical rate. A missed run costs latency, not data.
 
 ## Database
 
-Migrations are in [`supabase/migrations/`](supabase/migrations), applied via the
-Supabase MCP server (see `.mcp.json`) or pasted into the SQL editor. They are a
-record of what was run, not a runner — there is no migration tool wired up, so
-check a migration has actually been applied before assuming it has.
+Migrations are in [`supabase/migrations/`](supabase/migrations). Apply one with
+the **Apply Migration** workflow, which takes a filename and, unless you tick
+`apply`, runs it inside a transaction and rolls back — a rehearsal against the
+real schema rather than a printout.
+
+It applies one named file rather than `supabase db push`, because these went in
+one at a time through the MCP server and the remote's `schema_migrations` table
+does not list them; a push would replay all thirteen, seven of which are not
+idempotent.
+
+That also means a file sitting in the directory is not proof it is live. Check
+rather than assume.
 
 ## Deploying
 
