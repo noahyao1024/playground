@@ -1,0 +1,32 @@
+# Enabling Dependabot on this repo immediately produced seven pull requests,
+# one per package, all of them dev-only bumps inside the shadcn CLI's subtree.
+# Seven PRs that each rewrite package-lock.json also conflict with each other:
+# merging one makes the other six stale. Grouping turns that into one branch.
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      # Split by tree, because the two carry different weight. A production
+      # bump reaches the deployed app and is worth reading; a dev one lives in
+      # tooling that never ships.
+      production:
+        dependency-type: production
+      development:
+        dependency-type: development
+    commit-message:
+      prefix: chore(deps)
+      prefix-development: chore(deps-dev)
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
