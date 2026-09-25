@@ -295,6 +295,50 @@ const emptyChargeForm = () => ({
   currency: "SGD" as Currency,
 });
 
+/** Declared out here rather than inside the page. A component defined during
+ *  render is a new type on every pass, so React unmounts the old one and
+ *  mounts a fresh one instead of updating it -- losing any state it held and
+ *  doing more work than an update would. The sort state it used to close over
+ *  is passed in. */
+function SortHeader({
+  column,
+  children,
+  sortColumn,
+  sortDir,
+  onSort,
+}: {
+  column: string;
+  children: React.ReactNode;
+  sortColumn: string | null;
+  sortDir: "asc" | "desc";
+  onSort: (column: string) => void;
+}) {
+  return (
+    <th className="h-9 cursor-pointer select-none px-3 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground" onClick={() => onSort(column)}>
+      <span className="inline-flex items-center gap-1">
+        {children}
+        {/* A bidirectional glyph cannot say which way it sorted. The active
+            column shows the actual direction; the rest show the affordance. */}
+        {sortColumn === column
+          ? (sortDir === "asc"
+              ? <ArrowUp className="h-3 w-3 text-foreground" />
+              : <ArrowDown className="h-3 w-3 text-foreground" />)
+          : <ArrowUpDown className="h-3 w-3 text-muted-foreground/30" />}
+      </span>
+    </th>
+  );
+}
+
+/** A fresh object each call, like emptyChargeForm above it. A shared constant
+ *  would have handed both failure paths the same arrays; freezing it would
+ *  only have protected the outer object, since Object.freeze does not reach
+ *  the arrays inside. Nothing mutates these today -- filteredCharges copies
+ *  before it sorts -- but that is a property of the current callers, not
+ *  something the value itself guarantees. */
+const emptyData = (): SubscriptionData => ({
+  services: [], subscribers: [], subscriptions: [], charges: [], payment_methods: [], wallet_entries: [],
+});
+
 export default function SubscriptionPage() {
   const { data: session } = useSession();
   const router = useRouter();
@@ -362,14 +406,29 @@ export default function SubscriptionPage() {
       setData(d);
     } catch (err) {
       console.error("Failed to load data:", err);
-      setData({ services: [], subscribers: [], subscriptions: [], charges: [], payment_methods: [], wallet_entries: [] });
+      setData(emptyData());
     } finally {
       setLoading(false);
     }
   }, []);
 
-  // Load data regardless of auth status
-  useEffect(() => { reload(); }, [reload]);
+  // The mount load is spelled out here rather than calling reload(), for two
+  // reasons. Its writes land in promise callbacks instead of synchronously in
+  // the effect body, which is what the effect is allowed to do; and it can be
+  // abandoned if the page goes away before the request lands. reload() stays
+  // for the two dozen handlers that call it after a mutation, where the
+  // component is certainly still mounted.
+  useEffect(() => {
+    let alive = true;
+    fetchSubscriptionData()
+      .then((d) => { if (alive) setData(d); })
+      .catch((err) => {
+        console.error("Failed to load data:", err);
+        if (alive) setData(emptyData());
+      })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, []);
 
   // Fetch live exchange rates
   useEffect(() => {
@@ -461,9 +520,23 @@ export default function SubscriptionPage() {
     return charges;
   }, [data, searchQuery, sortColumn, sortDir]);
 
+  // Page 1 whenever the filter or sort changes. Doing it from an effect meant
+  // painting the old page number against the new results for one frame before
+  // the correction arrived; adjusting during render, React throws this pass
+  // away and re-runs before anything reaches the screen. The separator is a
+  // NUL so it cannot appear in a search string and fake a change.
+  const filterKey = `${searchQuery}\u0000${sortColumn}\u0000${sortDir}`;
+  const [pagedFor, setPagedFor] = useState(filterKey);
+  if (pagedFor !== filterKey) {
+    setPagedFor(filterKey);
+    setCurrentPage(1);
+  }
+
   const totalPages = Math.max(1, Math.ceil(filteredCharges.length / PAGE_SIZE));
   const paginatedCharges = filteredCharges.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-  useEffect(() => { setCurrentPage(1); }, [searchQuery, sortColumn, sortDir]);
+
+  // One object so six call sites do not each repeat three props.
+  const sortHeaderProps = { sortColumn, sortDir, onSort: handleSort };
 
   function handleSort(col: string) {
     if (sortColumn === col) setSortDir(sortDir === "asc" ? "desc" : "asc");
@@ -937,23 +1010,6 @@ export default function SubscriptionPage() {
   }
   function subscriberUnpaid(subscriberId: string) { return subscriberCharges(subscriberId).filter((c) => !c.paid).reduce((s, c) => s + Number(c.total_cny), 0); }
 
-  function SortHeader({ column, children }: { column: string; children: React.ReactNode }) {
-    return (
-      <th className="h-9 cursor-pointer select-none px-3 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground" onClick={() => handleSort(column)}>
-        <span className="inline-flex items-center gap-1">
-          {children}
-          {/* A bidirectional glyph cannot say which way it sorted. The active
-              column shows the actual direction; the rest show the affordance. */}
-          {sortColumn === column
-            ? (sortDir === "asc"
-                ? <ArrowUp className="h-3 w-3 text-foreground" />
-                : <ArrowDown className="h-3 w-3 text-foreground" />)
-            : <ArrowUpDown className="h-3 w-3 text-muted-foreground/30" />}
-        </span>
-      </th>
-    );
-  }
-
   return (
     <div className="space-y-6 pb-24 sm:pb-0">
       {/* Header */}
@@ -1365,14 +1421,14 @@ export default function SubscriptionPage() {
                   <table className="w-full text-sm">
                     <thead className="border-b">
                       <tr>
-                        <SortHeader column="subscriber">Person</SortHeader>
-                        <SortHeader column="service">Service</SortHeader>
-                        <SortHeader column="month">Billing date</SortHeader>
-                        <SortHeader column="date">Recorded</SortHeader>
+                        <SortHeader column="subscriber" {...sortHeaderProps}>Person</SortHeader>
+                        <SortHeader column="service" {...sortHeaderProps}>Service</SortHeader>
+                        <SortHeader column="month" {...sortHeaderProps}>Billing date</SortHeader>
+                        <SortHeader column="date" {...sortHeaderProps}>Recorded</SortHeader>
                         <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground">Price</th>
                         <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground">Rate</th>
-                        <SortHeader column="total">Total</SortHeader>
-                        <SortHeader column="paid">Status</SortHeader>
+                        <SortHeader column="total" {...sortHeaderProps}>Total</SortHeader>
+                        <SortHeader column="paid" {...sortHeaderProps}>Status</SortHeader>
                         <th className="h-9 px-3 text-left text-xs font-medium text-muted-foreground">Card</th>
                         {canEdit && <th className="h-9 px-3 w-16"></th>}
                       </tr>
