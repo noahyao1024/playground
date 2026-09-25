@@ -180,6 +180,9 @@ function localId(): string {
 
 export async function fetchSubscriptionData(): Promise<SubscriptionData> {
   if (!supabase) return readLocal();
+  // Bound to a local so the narrowing survives into the paging callbacks below;
+  // TypeScript cannot carry it across a closure on a module-level binding.
+  const db = supabase;
 
   // charges and wallet_entries are the two that grow without bound — a row per
   // subscription per month, forever — so they are read a page at a time. The
@@ -195,12 +198,12 @@ export async function fetchSubscriptionData(): Promise<SubscriptionData> {
     supabase.from("subscribers").select("*").order("name"),
     supabase.from("subscriptions").select("*").order("created_at"),
     fetchAllRows<ChargeRecord>((from, to) =>
-      supabase.from("charges").select("*").is("deleted_at", null)
+      db.from("charges").select("*").is("deleted_at", null)
         .order("created_at").order("id").range(from, to)
     ),
     supabase.from("payment_methods").select("*").order("created_at"),
     fetchAllRows<WalletEntry>((from, to) =>
-      supabase.from("wallet_entries").select("*")
+      db.from("wallet_entries").select("*")
         .order("created_at", { ascending: false }).order("id", { ascending: false })
         .range(from, to)
     ),

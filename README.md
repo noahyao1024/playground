@@ -1,32 +1,75 @@
-# Playground - playground.noahyao.me
+# Playground — playground.noahyao.me
 
-A collection of useful tools built with Next.js 15, Tailwind CSS, and shadcn/ui.
+Personal tools, deployed on Vercel.
 
-## Tools
+- **Split Bill / 分账** — tracks shared subscription costs among a handful of
+  friends. Services are priced in SGD, USD or JPY and converted to CNY at the
+  rate that held in the month being billed. Charges are settled from per-person
+  wallets.
+- **SRE Machine Delivery** — server deliveries from order to deployment.
 
-- **Split Bill / 分账** — Subscription cost-sharing tracker among friends. Supports SGD & USD with auto CNY conversion.
-- **SRE Machine Delivery** — Track server/machine deliveries from order to deployment with timeline view.
+## Stack
 
-## Tech Stack
+Next.js 16 (App Router) · React 19 · TypeScript · Tailwind v4 · shadcn/ui +
+Base UI · Supabase (Postgres + PostgREST) · NextAuth v5 with Google OAuth.
 
-- Next.js 15 (App Router)
-- TypeScript
-- Tailwind CSS v4
-- shadcn/ui components
-- localStorage (Supabase integration planned)
-- NextAuth.js with Google OAuth (planned)
+## How access works
 
-## Getting Started
+Worth reading before changing anything that touches data.
 
-```bash
-npm install
-npm run dev
-```
+The anon key is **public on purpose** — it ships in the browser bundle. What
+keeps it safe is RLS: every table has one policy, `select … using (true)`, so
+that key can read and nothing more. A write attempted with it fails at the
+database.
 
-## Environment Variables
+Writes go through `/api/*` routes, which run server-side with the service-role
+key and gate on `isAllowedEmail(session.user.email)` against the allowlist in
+[`src/lib/auth.ts`](src/lib/auth.ts). The check reads `session.user` and then
+the address — not merely whether a session exists — so a NextAuth config error
+that yields a session object without a user still returns 401.
 
-Copy `.env.example` to `.env.local` and fill in the values.
+`/api/charges/today` is read-only and open. Set `READONLY_TOKEN` to require a
+bearer token; no code change needed.
 
-## Deployment
+## Environment
 
-Deployed on Vercel. Push to main to deploy.
+Copy `.env.example` to `.env.local`. Every key is listed there with a line on
+what breaks without it.
+
+Production values live in **Vercel** (`vercel env ls production`) and the two
+GitHub Actions read theirs from **repository secrets**. Nothing is stored in
+this repo, and `src/lib/supabase.ts` has no fallback: without
+`NEXT_PUBLIC_SUPABASE_*` the client is `null` and the app runs against
+localStorage rather than quietly attaching to production.
+
+## Scheduled work
+
+| what | where | when |
+|---|---|---|
+| Generate the month's charges | `vercel.json` → `/api/cron/bill` | 1st, 00:00 UTC |
+| Email anyone owing over the threshold | `.github/workflows/unpaid-alert.yml` | daily, 01:23 UTC |
+| Keep the free-tier Supabase project awake | `.github/workflows/supabase-keepalive.yml` | daily, 03:17 UTC |
+
+GitHub runs scheduled jobs late — several hours, routinely. Treat the times as
+hints.
+
+Billing is self-healing: each run walks every month from a subscription's start
+to the target month and fills whatever has no charge yet, each at its own
+historical rate. A missed run costs latency, not data.
+
+## Database
+
+Migrations are in [`supabase/migrations/`](supabase/migrations), applied via the
+Supabase MCP server (see `.mcp.json`) or pasted into the SQL editor. They are a
+record of what was run, not a runner — there is no migration tool wired up, so
+check a migration has actually been applied before assuming it has.
+
+## Deploying
+
+Push to `main`; Vercel deploys it. There is no deploy command.
+
+## Local development
+
+`npm install && npm run dev` starts the app, but without a `.env.local` holding
+real values it runs in localStorage mode with sign-in disabled. Verification for
+this project happens against the deployed site — see [AGENTS.md](AGENTS.md).
