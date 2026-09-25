@@ -88,11 +88,14 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
 - Supabase (`@supabase/supabase-js`) for data; NextAuth v5 + Google OAuth for sign-in
 - `.github/workflows/supabase-keepalive.yml` — daily, pings Supabase REST so the free-tier
   project doesn't get paused. Occasional 504s from upstream are noise; it retries.
-- `.github/workflows/unpaid-alert.yml` — daily, emails whoever owes more than
-  `UNPAID_THRESHOLD_CNY`. Silent when nobody is over it, which is the common case.
+- `.github/workflows/unpaid-alert.yml` — daily, emails `ALERT_TO` — the owner, not the people
+  who owe — a list of anyone owing more than `UNPAID_THRESHOLD_CNY`. Silent when nobody is
+  over it, which is the common case.
 - `.github/workflows/check.yml` — typecheck, lint and tests on every pull request and push
   to `main`, with a Postgres service for `test/sql/`. The gate pre-approved deploys rest on.
-- `vercel.json` — monthly cron hitting `/api/cron/bill` on the 1st
+- `vercel.json` — cron hitting `/api/cron/bill` at 00:00 UTC on the 1st, 2nd and 3rd. The
+  last two are retries: billing fills only what has no charge yet, so they bill nothing when
+  the 1st worked.
 - `.github/dependabot.yml` — grouped weekly updates, split into production and development,
   with majors excluded. Not because majors are unwelcome, but because they want someone able
   to look at the result; a green preview build does not catch a renamed icon. Note that a

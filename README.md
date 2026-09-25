@@ -46,8 +46,8 @@ localStorage rather than quietly attaching to production.
 
 | what | where | when |
 |---|---|---|
-| Generate the month's charges | `vercel.json` → `/api/cron/bill` | 1st, 00:00 UTC |
-| Email anyone owing over the threshold | `.github/workflows/unpaid-alert.yml` | daily, 01:23 UTC |
+| Generate the month's charges | `vercel.json` → `/api/cron/bill` | 1st–3rd, 00:00 UTC |
+| Email `ALERT_TO` who owes over the threshold | `.github/workflows/unpaid-alert.yml` | daily, 01:23 UTC |
 | Keep the free-tier Supabase project awake | `.github/workflows/supabase-keepalive.yml` | daily, 03:17 UTC |
 
 GitHub runs scheduled jobs late — several hours, routinely. Treat the times as
@@ -55,7 +55,9 @@ hints.
 
 Billing is self-healing: each run walks every month from a subscription's start
 to the target month and fills whatever has no charge yet, each at its own
-historical rate. A missed run costs latency, not data.
+historical rate. A missed run costs latency, not data -- and running on the 1st,
+2nd and 3rd keeps that latency to a day: the later two bill nothing when the 1st
+worked. Twice this year a single missed run left a month unbilled for days.
 
 ## Database
 
