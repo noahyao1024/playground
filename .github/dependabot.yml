@@ -19,6 +19,16 @@ updates:
         dependency-type: production
       development:
         dependency-type: development
+    # Majors are not refused, only un-automated. The first grouped run offered
+    # framer-motion 12 to 13, lucide-react 0.x to 1.x, TypeScript 5 to 7 and
+    # ESLint 9 to 10 -- none of them security fixes, both trees being at zero
+    # advisories, and all of them able to break things a preview build still
+    # reports as green: an icon that got renamed, an animation whose default
+    # changed. Those want a person looking at the result, which is a different
+    # moment from a Monday morning PR. Security alerts are unaffected.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: chore(deps)
       prefix-development: chore(deps-dev)
