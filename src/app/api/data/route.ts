@@ -52,8 +52,12 @@ export async function POST(req: NextRequest) {
           );
         }
         if (id === "__all__") {
-          // Bulk update all rows (used for clearing is_default on payment_methods)
-          const { error } = await supabase.from(table).update(updates).neq("id", "");
+          // Bulk update all rows (used for clearing is_default on payment_methods).
+          // Supabase refuses an update with no filter, so this one matches every
+          // row. It used to be neq("id", ""), which a uuid column rejects as
+          // invalid input: the old default was never cleared, and since the
+          // caller swallows errors, every card ever made default stayed marked so.
+          const { error } = await supabase.from(table).update(updates).not("id", "is", null);
           if (error) throw error;
           return NextResponse.json({ ok: true });
         }
