@@ -25,6 +25,10 @@ vercel ls                                        # Vercel deployments (CLI is lo
 gh api repos/noahyao1024/playground/deployments  # same, via the GitHub Deployments Vercel writes back
 ```
 
+A Claude Code on the web session may have neither `gh` nor `vercel`, and its network policy
+may not reach the live site or Supabase. The repo is public, so which commit is live still
+answers without either: `curl -s 'https://api.github.com/repos/noahyao1024/playground/deployments?per_page=1'`.
+
 Type-level checks that need no server or secrets are fine and expected:
 
 ```bash
@@ -61,12 +65,16 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   project doesn't get paused. Occasional 504s from upstream are noise; it retries.
 - `.github/workflows/unpaid-alert.yml` — daily, emails whoever owes more than
   `UNPAID_THRESHOLD_CNY`. Silent when nobody is over it, which is the common case.
+- `.github/workflows/check.yml` — typecheck and lint on every pull request and push to
+  `main`, the same two commands as above.
 - `vercel.json` — monthly cron hitting `/api/cron/bill` on the 1st
 - `.github/dependabot.yml` — grouped weekly updates, split into production and development,
   with majors excluded. Not because majors are unwelcome, but because they want someone able
   to look at the result; a green preview build does not catch a renamed icon. Note that a
   *minor* has broken the build here too: eslint-plugin-react-hooks 7.1.1 added two rules and
   took lint from zero errors to eight.
+- `.claude/hooks/session-start.sh` — runs `npm install` when a Claude Code on the web session
+  starts, so typecheck and lint work there from the first command. A no-op on your machine.
 
 Two conventions worth knowing before adding code:
 
