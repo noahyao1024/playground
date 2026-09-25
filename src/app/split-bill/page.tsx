@@ -41,6 +41,7 @@ import {
 
 import { ALLOWED_EMAILS } from "@/lib/auth";
 import { SG_TZ, todayInSG } from "@/lib/dates";
+import { toCSV } from "@/lib/csv";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NumberInput } from "@/components/ui/number-input";
@@ -235,11 +236,7 @@ function exportToCSV(charges: ChargeRecord[], services: Service[], subscribers: 
     // The stored date first, as the table shows it; deriving is the fallback.
     return [sub?.name ?? "", chargeName(c, services), c.billing_date ?? billingDate(c.period_start, sc?.start_date), c.period_start, c.monthly_cost, c.currency, c.exchange_rate, Number(c.total_cny).toFixed(2), c.paid ? "Yes" : "No", c.paid_date ?? "", c.note ?? ""];
   });
-  // A quote inside a value is doubled, or a note containing one ends its field
-  // early and shifts every column after it. The byte-order mark is what makes
-  // Excel read the file as UTF-8 instead of garbling every Chinese name in it.
-  const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
-  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+  const blob = new Blob([toCSV([headers, ...rows])], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;

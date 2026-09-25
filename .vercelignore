@@ -7,3 +7,5 @@ AGENTS.md
 README.md
 .mcp.json
 .claude/
+test/
+vitest.config.mts
