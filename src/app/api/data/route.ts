@@ -37,6 +37,16 @@ export async function POST(req: NextRequest) {
 
     switch (action) {
       case "insert": {
+        // A charge starts unpaid. Paying one is a ledger entry, which only
+        // /api/settle writes; a row inserted as paid is money with no entry
+        // behind it -- what the update guard below refuses, by the other door.
+        const rows: Array<Record<string, unknown> | null> = Array.isArray(data) ? data : [data];
+        if (table === "charges" && rows.some((r) => r?.paid === true || r?.paid_at != null || r?.paid_date != null)) {
+          return NextResponse.json(
+            { error: "A charge starts unpaid. Settle it against a wallet with /api/settle." },
+            { status: 400 },
+          );
+        }
         const { data: result, error } = await supabase.from(table).insert(data).select().single();
         if (error) throw error;
         return NextResponse.json(result);
@@ -52,11 +62,17 @@ export async function POST(req: NextRequest) {
           );
         }
         if (id === "__all__") {
-          // Bulk update all rows (used for clearing is_default on payment_methods).
+          // Bulk update all rows, which exists for one thing: clearing
+          // is_default before another card takes it. Nothing else rewrites a
+          // whole table from one request, so nothing else is accepted.
+          const keys = updates && typeof updates === "object" ? Object.keys(updates) : [];
+          if (table !== "payment_methods" || keys.length !== 1 || updates.is_default !== false) {
+            return NextResponse.json({ error: "Bulk update only clears the default card" }, { status: 400 });
+          }
           // Supabase refuses an update with no filter, so this one matches every
           // row. It used to be neq("id", ""), which a uuid column rejects as
           // invalid input: the old default was never cleared, and since the
-          // caller swallows errors, every card ever made default stayed marked so.
+          // caller swallowed errors, every card ever made default stayed marked so.
           const { error } = await supabase.from(table).update(updates).not("id", "is", null);
           if (error) throw error;
           return NextResponse.json({ ok: true });
@@ -66,6 +82,15 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: true });
       }
       case "delete": {
+        // Charges are marked deleted, never removed: a removed one leaves any
+        // wallet entry that settled it pointing at nothing while still counting
+        // against a balance. The UI only ever marks; this refuses the other way.
+        if (table === "charges") {
+          return NextResponse.json(
+            { error: "Charges are marked deleted, not removed. Set deleted_at instead." },
+            { status: 400 },
+          );
+        }
         // Postgres refuses these deletes (the foreign keys are ON DELETE
         // RESTRICT), but its error names a constraint rather than the thing the
         // user is looking at. Count first so the message can.
@@ -99,6 +124,19 @@ export async function POST(req: NextRequest) {
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null && "message" in err ? (err as { message: string }).message : JSON.stringify(err);
+    // A unique index names what it protects by constraint; say it the way the
+    // screen would. The charge one also catches restoring a deleted charge into
+    // a month that has since been billed again.
+    const code = typeof err === "object" && err !== null && "code" in err ? String((err as { code: unknown }).code) : "";
+    if (code === "23505" && msg.includes("charges_one_per_service_month")) {
+      return NextResponse.json(
+        { error: "That person already has a charge for this service in that month." },
+        { status: 409 },
+      );
+    }
+    if (code === "23505" && msg.includes("payment_methods_one_default")) {
+      return NextResponse.json({ error: "Another card is already the default." }, { status: 409 });
+    }
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
