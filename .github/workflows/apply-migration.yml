@@ -61,6 +61,27 @@ jobs:
             echo "::error::SUPABASE_DB_URL is not set. Add it as a repository secret."
             exit 1
           fi
+          # psql treats a value it cannot parse as a URI as a database NAME and
+          # quietly connects to a local socket, which on a runner fails as
+          # "/var/run/postgresql/.s.PGSQL.5432: No such file or directory" -- a
+          # message about sockets when the real fault is the secret's contents.
+          # Check the shape, and describe it without printing it.
+          case "$PGURL" in
+            postgresql://*|postgres://*) ;;
+            *)
+              echo "::error::SUPABASE_DB_URL does not start with postgresql:// -- psql would read it as a database name."
+              printf 'shape: length=%s first=%q scheme_at=%s at_signs=%s colons=%s newlines=%s\n' \
+                "${#PGURL}" "$(printf '%.1s' "$PGURL")" \
+                "$(expr index "$PGURL" ':' || true)" \
+                "$(printf '%s' "$PGURL" | tr -cd '@' | wc -c | tr -d ' ')" \
+                "$(printf '%s' "$PGURL" | tr -cd ':' | wc -c | tr -d ' ')" \
+                "$(printf '%s' "$PGURL" | tr -cd '\n' | wc -c | tr -d ' ')"
+              echo "Expected: postgresql://postgres.<ref>:<password>@<host>.pooler.supabase.com:5432/postgres"
+              echo "Common causes: the value was wrapped in quotes, only the password was pasted,"
+              echo "or [YOUR-PASSWORD] was left unreplaced."
+              exit 1
+              ;;
+          esac
           # A real rehearsal, not a printout: the statements execute against the
           # live schema and are then discarded, so syntax, permissions and
           # conflicts all surface here rather than on the run that keeps them.
@@ -79,6 +100,27 @@ jobs:
             echo "::error::SUPABASE_DB_URL is not set. Add it as a repository secret."
             exit 1
           fi
+          # psql treats a value it cannot parse as a URI as a database NAME and
+          # quietly connects to a local socket, which on a runner fails as
+          # "/var/run/postgresql/.s.PGSQL.5432: No such file or directory" -- a
+          # message about sockets when the real fault is the secret's contents.
+          # Check the shape, and describe it without printing it.
+          case "$PGURL" in
+            postgresql://*|postgres://*) ;;
+            *)
+              echo "::error::SUPABASE_DB_URL does not start with postgresql:// -- psql would read it as a database name."
+              printf 'shape: length=%s first=%q scheme_at=%s at_signs=%s colons=%s newlines=%s\n' \
+                "${#PGURL}" "$(printf '%.1s' "$PGURL")" \
+                "$(expr index "$PGURL" ':' || true)" \
+                "$(printf '%s' "$PGURL" | tr -cd '@' | wc -c | tr -d ' ')" \
+                "$(printf '%s' "$PGURL" | tr -cd ':' | wc -c | tr -d ' ')" \
+                "$(printf '%s' "$PGURL" | tr -cd '\n' | wc -c | tr -d ' ')"
+              echo "Expected: postgresql://postgres.<ref>:<password>@<host>.pooler.supabase.com:5432/postgres"
+              echo "Common causes: the value was wrapped in quotes, only the password was pasted,"
+              echo "or [YOUR-PASSWORD] was left unreplaced."
+              exit 1
+              ;;
+          esac
           # All or nothing: a migration that fails half way leaves no trace.
           psql "$PGURL" --no-psqlrc -v ON_ERROR_STOP=1 --single-transaction -f "$MIG"
           echo "Applied." >> "$GITHUB_STEP_SUMMARY"
