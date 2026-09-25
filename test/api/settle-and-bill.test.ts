@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { startPostgrest, type Row, type StandIn } from "../helpers/postgrest";
@@ -113,5 +114,36 @@ describe("GET /api/cron/bill", () => {
     ]);
     const asked = db.requests.filter((r) => r.path === "/api/exchange-rate").map((r) => r.params.get("date"));
     expect(asked).toEqual(["2026-09-01", "2026-10-01"]);
+  });
+
+  it("bills nothing more when it runs again the same month -- what makes the retries on the 2nd and 3rd safe", async () => {
+    vi.stubEnv("CRON_SECRET", "s3cret");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
+    expect((await (await cron(request({ authorization: "Bearer s3cret" }))).json()).generated).toBe(2);
+    for (const day of ["2026-10-02T00:00:00Z", "2026-10-03T00:00:00Z"]) {
+      vi.setSystemTime(new Date(day));
+      const again = await (await cron(request({ authorization: "Bearer s3cret" }))).json();
+      expect(again.generated).toBe(0);
+    }
+    expect(db.tables.charges).toHaveLength(2);
+  });
+
+  it("catches up on the 2nd when the 1st never ran", async () => {
+    vi.stubEnv("CRON_SECRET", "s3cret");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-02T00:00:00Z"));
+    const body = await (await cron(request({ authorization: "Bearer s3cret" }))).json();
+    expect(body.month).toBe("2026-10");
+    expect(db.tables.charges.map((c) => c.period_start)).toEqual(["2026-09", "2026-10"]);
+  });
+});
+
+describe("vercel.json", () => {
+  it("runs billing on the 1st, and again on the 2nd and 3rd in case the 1st failed", () => {
+    // Twice in 2026 a single missed run on the 1st left a month unbilled for
+    // days. The later runs fill only what is missing, per the test above.
+    const { crons } = JSON.parse(readFileSync("vercel.json", "utf8"));
+    expect(crons).toEqual([{ path: "/api/cron/bill", schedule: "0 0 1-3 * *" }]);
   });
 });
