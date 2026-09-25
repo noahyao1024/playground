@@ -7,10 +7,14 @@ Guidance for AI agents working in this repo.
 Verification happens against the **remote**, not `localhost`. Do not run `npm run dev`,
 `npm run build`, or start any server to check your work.
 
-`.env.local` intentionally holds only `VERCEL_OIDC_TOKEN` — no Supabase URL/keys, no
-`AUTH_*`. `src/lib/supabase.ts` has no hardcoded fallback, so a local dev server comes up
-in localStorage mode with sign-in disabled: a local "it works" proves nothing. Don't try to
-repair this by copying values out of `.env.production`.
+There is no `.env.local` here, and no `.env.production` — both held real production values
+and were deleted; `vercel env pull` regenerates either if you ever genuinely need one.
+`src/lib/supabase.ts` has no hardcoded fallback, so a dev server started in this checkout
+comes up in localStorage mode with sign-in disabled. A local "it works" proves nothing, and
+filling those files back in to make it work would be solving the wrong problem.
+
+`.env.example` is tracked and lists every variable with a line on what breaks without it.
+It is the one place that describes the environment; keep it true.
 
 To check something, use the remote instead:
 
@@ -21,8 +25,15 @@ vercel ls                                        # Vercel deployments (CLI is lo
 gh api repos/noahyao1024/playground/deployments  # same, via the GitHub Deployments Vercel writes back
 ```
 
-Type-level checks that need no server or secrets (`npx tsc --noEmit`, `npm run lint`) are
-fine.
+Type-level checks that need no server or secrets are fine and expected:
+
+```bash
+npm run typecheck   # tsc --noEmit
+npm run lint        # eslint
+```
+
+Check their output, not their exit code through a pipe — `npx eslint src | head` reports
+success because `head` succeeded.
 
 ## Deploying
 
@@ -34,9 +45,11 @@ tells you which commit is live and whether it succeeded.
 
 ## This repo is public
 
-`noahyao1024/playground` is a **public** repo. `.env*` is gitignored and the history is
-clean — keep it that way. Never paste a key, token, or connection string into a tracked
-file, a commit message, or a PR description.
+`noahyao1024/playground` is a **public** repo. `.env*` is gitignored with one deliberate
+exception, `!.env.example`, which holds placeholders only. The history is clean — no
+service-role key has ever been committed. Keep it that way: never paste a key, token, or
+connection string into a tracked file, a commit message, or a PR description. Workflow logs
+are public too, so print the *shape* of a secret when diagnosing one, never the value.
 
 `vercel.json` is tracked and holds only a cron schedule. Don't put secrets there.
 
@@ -49,6 +62,20 @@ file, a commit message, or a PR description.
 - `.github/workflows/unpaid-alert.yml` — daily, emails whoever owes more than
   `UNPAID_THRESHOLD_CNY`. Silent when nobody is over it, which is the common case.
 - `vercel.json` — monthly cron hitting `/api/cron/bill` on the 1st
+- `.github/dependabot.yml` — grouped weekly updates, split into production and development,
+  with majors excluded. Not because majors are unwelcome, but because they want someone able
+  to look at the result; a green preview build does not catch a renamed icon. Note that a
+  *minor* has broken the build here too: eslint-plugin-react-hooks 7.1.1 added two rules and
+  took lint from zero errors to eight.
+
+Two conventions worth knowing before adding code:
+
+- `src/lib/paginate.ts` — PostgREST caps rows per request and a capped response is an
+  ordinary 200, so anything reading a table that grows without bound pages through it. Every
+  paged query needs a unique sort key; `created_at` is not one, since a billing run stamps
+  its whole batch with the same second.
+- `src/components/ui/number-input.tsx` — use it for numeric fields. Binding a number
+  straight to a controlled input makes the field refuse to be emptied.
 
 GitHub runs scheduled jobs late, routinely by hours. A job that has not fired yet is not
 evidence it is broken; check `gh run list --workflow=<name>` for `event=schedule`.
