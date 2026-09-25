@@ -1,0 +1,98 @@
+name: Apply Migration
+
+# Applies ONE named file from supabase/migrations/.
+#
+# Deliberately not `supabase db push`. That replays every migration the remote's
+# schema_migrations table does not already list, and this project's were applied
+# one at a time through the Supabase MCP server, which did not record them.
+# Seven of the thirteen are not idempotent -- they would error or double-apply on
+# a replay. Naming one file is the honest operation here.
+#
+# workflow_dispatch only. This repo is public: nothing that can run DDL may be
+# reachable from a push or a fork's pull request.
+
+on:
+  workflow_dispatch:
+    inputs:
+      file:
+        description: "Filename under supabase/migrations/ (e.g. 20260917_one_charge_per_service_month.sql)"
+        required: true
+        type: string
+      apply:
+        description: "Commit the change. Left off, it runs inside a transaction and rolls back."
+        required: true
+        type: boolean
+        default: false
+
+concurrency: apply-migration
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the file
+        id: resolve
+        env:
+          FILE: ${{ inputs.file }}
+        run: |
+          set -euo pipefail
+          # Basename only, so no input can reach outside the migrations directory.
+          name="$(basename -- "$FILE")"
+          path="supabase/migrations/$name"
+          if [ ! -f "$path" ]; then
+            echo "::error::No such migration: $name"
+            echo "Available:"; ls -1 supabase/migrations/
+            exit 1
+          fi
+          echo "path=$path" >> "$GITHUB_OUTPUT"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          { echo "## \`$name\`"; echo; echo '```sql'; cat "$path"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Rehearse in a transaction, then roll back
+        if: ${{ !inputs.apply }}
+        env:
+          PGURL: ${{ secrets.SUPABASE_DB_URL }}
+          MIG: ${{ steps.resolve.outputs.path }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PGURL:-}" ]; then
+            echo "::error::SUPABASE_DB_URL is not set. Add it as a repository secret."
+            exit 1
+          fi
+          # A real rehearsal, not a printout: the statements execute against the
+          # live schema and are then discarded, so syntax, permissions and
+          # conflicts all surface here rather than on the run that keeps them.
+          printf 'begin;\n\\i %s\nrollback;\n' "$MIG" > /tmp/rehearse.sql
+          psql "$PGURL" --no-psqlrc -v ON_ERROR_STOP=1 -f /tmp/rehearse.sql
+          echo "Rehearsed and rolled back. Nothing was kept." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Apply
+        if: ${{ inputs.apply }}
+        env:
+          PGURL: ${{ secrets.SUPABASE_DB_URL }}
+          MIG: ${{ steps.resolve.outputs.path }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PGURL:-}" ]; then
+            echo "::error::SUPABASE_DB_URL is not set. Add it as a repository secret."
+            exit 1
+          fi
+          # All or nothing: a migration that fails half way leaves no trace.
+          psql "$PGURL" --no-psqlrc -v ON_ERROR_STOP=1 --single-transaction -f "$MIG"
+          echo "Applied." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show the indexes and policies that now exist on charges
+        if: ${{ always() }}
+        env:
+          PGURL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          [ -z "${PGURL:-}" ] && exit 0
+          {
+            echo; echo "### charges — indexes"; echo '```'
+            psql "$PGURL" --no-psqlrc -At -c \
+              "select indexname from pg_indexes where schemaname='public' and tablename='charges' order by 1;"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
