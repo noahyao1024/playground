@@ -7,7 +7,8 @@
  *
  * Only unpaid charges are considered. A settled charge is money someone has
  * already handed over; correcting one silently moves that amount, so if a paid
- * charge is wrong the fix is a wallet entry, not a rewrite.
+ * charge is wrong the fix is a wallet entry, not a rewrite. Deleted charges are
+ * left out too: nobody owes them, so there is nothing to reprice.
  *
  * Reads credentials from .env.production (NEXT_PUBLIC_SUPABASE_URL and
  * SUPABASE_SERVICE_ROLE_KEY).
@@ -56,7 +57,7 @@ async function ratesFor(month) {
 }
 
 const res = await fetch(
-  `${base}/rest/v1/charges?paid=eq.false&select=id,period_start,currency,monthly_cost,months,exchange_rate,total_cny,subscriber_id,service_id,label&order=period_start`,
+  `${base}/rest/v1/charges?paid=eq.false&deleted_at=is.null&select=id,period_start,currency,monthly_cost,months,exchange_rate,total_cny,subscriber_id,service_id,label&order=period_start`,
   { headers },
 );
 if (!res.ok) { console.error(`Fetch failed: ${res.status} ${await res.text()}`); process.exit(1); }
