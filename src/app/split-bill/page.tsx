@@ -232,10 +232,14 @@ function exportToCSV(charges: ChargeRecord[], services: Service[], subscribers: 
   const rows = charges.map((c) => {
     const sub = subscribers.find((s) => s.id === c.subscriber_id);
     const sc = subscriptions.find((s) => s.subscriber_id === c.subscriber_id && s.service_id === c.service_id);
-    return [sub?.name ?? "", chargeName(c, services), billingDate(c.period_start, sc?.start_date), c.period_start, c.monthly_cost, c.currency, c.exchange_rate, Number(c.total_cny).toFixed(2), c.paid ? "Yes" : "No", c.paid_date ?? "", c.note ?? ""];
+    // The stored date first, as the table shows it; deriving is the fallback.
+    return [sub?.name ?? "", chargeName(c, services), c.billing_date ?? billingDate(c.period_start, sc?.start_date), c.period_start, c.monthly_cost, c.currency, c.exchange_rate, Number(c.total_cny).toFixed(2), c.paid ? "Yes" : "No", c.paid_date ?? "", c.note ?? ""];
   });
-  const csv = [headers, ...rows].map((r) => r.map((v) => `"${v}"`).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv" });
+  // A quote inside a value is doubled, or a note containing one ends its field
+  // early and shifts every column after it. The byte-order mark is what makes
+  // Excel read the file as UTF-8 instead of garbling every Chinese name in it.
+  const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -494,7 +498,9 @@ export default function SubscriptionPage() {
       charges = charges.filter((c) => {
         const sub = data.subscribers.find((s) => s.id === c.subscriber_id);
         const sc = data.subscriptions.find((s) => s.subscriber_id === c.subscriber_id && s.service_id === c.service_id);
-        return (sub?.name ?? "").toLowerCase().includes(q) || chargeName(c, data.services).toLowerCase().includes(q) || billingDate(c.period_start, sc?.start_date).includes(q) || (c.note ?? "").toLowerCase().includes(q);
+        // Matched against the date the table shows: stored first, derived otherwise.
+        const date = c.billing_date ?? billingDate(c.period_start, sc?.start_date);
+        return (sub?.name ?? "").toLowerCase().includes(q) || chargeName(c, data.services).toLowerCase().includes(q) || date.includes(q) || (c.note ?? "").toLowerCase().includes(q);
       });
     }
     if (sortColumn) {
