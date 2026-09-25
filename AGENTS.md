@@ -109,6 +109,8 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   `authenticated`. Do not give them a `select` policy to match the other tables — that publishes
   the owner's balances to anyone holding the public key. The arithmetic (carry-forward, archive
   cut-off, stored rates) lives in `src/lib/finance.ts`; the page only draws it.
+  `FINANCE_API_TOKEN` lets the owner's own agents in as the owner (`src/lib/finance-server.ts`);
+  `/api/finance/openapi` describes the API and a test holds it to the route.
 - Chart colours are `--series-1` to `--series-3` in `globals.css`, a palette checked for
   colour-blind separation with separate dark steps. Marks wear them; text never does.
 

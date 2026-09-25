@@ -6,6 +6,8 @@ const session = vi.hoisted(() => ({ current: null as { user: { email: string } }
 vi.mock("@/lib/auth", () => ({ auth: async () => session.current }));
 
 const { GET, POST } = await import("@/app/api/finance/route");
+const { GET: SUMMARY } = await import("@/app/api/finance/summary/route");
+const { FINANCE_ACTIONS } = await import("@/lib/finance-openapi");
 
 const OWNER = { user: { email: "hi@noahyao.me" } };
 const DBS = "00000000-0000-0000-0000-0000000000a1";
@@ -53,8 +55,10 @@ afterEach(async () => {
   await db.close();
 });
 
-async function post(payload: Row) {
-  const res = await POST(new NextRequest("http://localhost/api/finance", { method: "POST", body: JSON.stringify(payload) }));
+const get = (headers: Record<string, string> = {}, path = "/api/finance") => new NextRequest(`http://localhost${path}`, { headers });
+
+async function post(payload: Row, headers: Record<string, string> = {}) {
+  const res = await POST(new NextRequest("http://localhost/api/finance", { method: "POST", body: JSON.stringify(payload), headers }));
   return { status: res.status, body: await res.json(), headers: res.headers };
 }
 
@@ -62,7 +66,8 @@ describe("who may see it", () => {
   it("answers no one but the owner -- not the signed-out, not the split bill's other allowed address", async () => {
     for (const who of [null, { user: { email: "nicholasyao.sg@gmail.com" } }, { user: { email: "someone@else.com" } }]) {
       session.current = who;
-      expect((await GET()).status).toBe(401);
+      expect((await GET(get())).status).toBe(401);
+      expect((await SUMMARY(get({}, "/api/finance/summary"))).status).toBe(401);
       expect((await post({ action: "createAccount", account: {} })).status).toBe(401);
     }
     expect(db.requests).toHaveLength(0);
@@ -70,13 +75,79 @@ describe("who may see it", () => {
 
   it("hands the owner everything, uncacheable, with balances paged", async () => {
     db.tables.finance_balances.push({ id: "b1", account_id: DBS, as_of: "2026-08-31", currency: "SGD", amount: 100, cny_rate: 5.3, sgd_rate: 1, rate_date: "2026-08-31" });
-    const res = await GET();
+    const res = await GET(get());
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(body.accounts).toHaveLength(3);
     expect(body.balances).toHaveLength(1);
     expect(calls(db, "finance_balances")).toEqual(["GET order=as_of.asc,id.asc&offset=0&limit=1000"]);
+  });
+});
+
+describe("an agent's token", () => {
+  // 64 characters, as `openssl rand -hex 32` makes them.
+  const TOKEN = "3f9a0c1e7b2d4a6f8e0c2b4d6f8a0c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a";
+  const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
+  const valid = { name: "CPF OA", region: "SG", currency: "SGD", kind: "asset", category: "retirement" };
+
+  beforeEach(() => { session.current = null; });
+
+  it("acts as the owner with FINANCE_API_TOKEN and no session at all: reads, writes, and the summary", async () => {
+    vi.stubEnv("FINANCE_API_TOKEN", TOKEN);
+    const res = await GET(get(bearer(TOKEN)));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect((await post({ action: "createAccount", account: valid }, bearer(TOKEN))).status).toBe(200);
+    expect(db.tables.finance_accounts).toHaveLength(4);
+    expect((await SUMMARY(get(bearer(TOKEN), "/api/finance/summary"))).status).toBe(200);
+  });
+
+  it("refuses a wrong token, one not sent as a bearer, and a truncated one", async () => {
+    vi.stubEnv("FINANCE_API_TOKEN", TOKEN);
+    for (const headers of [
+      bearer(TOKEN.replace(/.$/, "0")),
+      bearer(TOKEN.slice(0, 32)),
+      bearer(`${TOKEN}${TOKEN}`),
+      { authorization: TOKEN },
+      { authorization: `Basic ${TOKEN}` },
+      { "x-api-key": TOKEN },
+    ]) {
+      expect((await GET(get(headers))).status, JSON.stringify(headers)).toBe(401);
+      expect((await post({ action: "createAccount", account: valid }, headers)).status).toBe(401);
+    }
+    expect(db.tables.finance_accounts).toHaveLength(3);
+  });
+
+  it("is closed while FINANCE_API_TOKEN is unset, empty, or too short to be safe", async () => {
+    for (const configured of [undefined, "", "   ", "short-but-set", "x".repeat(31)]) {
+      if (configured === undefined) vi.stubEnv("FINANCE_API_TOKEN", undefined);
+      else vi.stubEnv("FINANCE_API_TOKEN", configured);
+      const offered = (configured ?? "").trim() || "anything";
+      expect((await GET(get(bearer(offered)))).status, JSON.stringify(configured)).toBe(401);
+    }
+    expect(db.requests).toHaveLength(0);
+  });
+
+  it("forgives the newline a dashboard paste leaves on the configured value", async () => {
+    vi.stubEnv("FINANCE_API_TOKEN", `${TOKEN}\n`);
+    expect((await GET(get(bearer(TOKEN)))).status).toBe(200);
+  });
+
+  it("takes the scheme in any case, as HTTP says it may be sent", async () => {
+    vi.stubEnv("FINANCE_API_TOKEN", TOKEN);
+    expect((await GET(get({ authorization: `bearer ${TOKEN}` }))).status).toBe(200);
+  });
+});
+
+describe("the actions the OpenAPI description promises", () => {
+  it("are each handled by the route, and nothing else is", async () => {
+    for (const action of FINANCE_ACTIONS) {
+      const { status, body } = await post({ action });
+      expect(body.error, action).not.toBe("Invalid action");
+      expect(status, action).toBe(400);
+    }
+    expect((await post({ action: "dropEverything" })).body.error).toBe("Invalid action");
   });
 });
 
@@ -192,5 +263,53 @@ describe("recording balances", () => {
     const id = db.tables.finance_balances[0].id;
     expect((await post({ action: "deleteBalance", id })).status).toBe(200);
     expect(db.tables.finance_balances).toHaveLength(0);
+  });
+});
+
+describe("the summary", () => {
+  const CNY_ACCOUNT = ICBC;
+  const balance = (id: string, account_id: string, as_of: string, amount: number, cny_rate: number, sgd_rate: number, currency: string): Row => ({
+    id, account_id, as_of, currency, amount, cny_rate, sgd_rate, rate_date: as_of, note: null, created_at: `${as_of}T10:00:00Z`, updated_at: null,
+  });
+
+  it("is where things stand on the latest record, carried forward and archived the way the page does it", async () => {
+    db.tables.finance_balances.push(
+      balance("b1", OLD, "2026-05-31", 10, 5.3, 1, "SGD"),
+      balance("b2", DBS, "2026-08-31", 1000, 5.3, 1, "SGD"),
+      balance("b3", CNY_ACCOUNT, "2026-08-31", 50000, 1, 0.19, "CNY"),
+      // ICBC is not recorded on the 30th: it carries its August balance forward.
+      balance("b4", DBS, "2026-09-30", 1200, 5.2, 1, "SGD"),
+    );
+    const res = await SUMMARY(get({}, "/api/finance/summary"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    const s = await res.json();
+
+    expect(s.as_of).toBe("2026-09-30");
+    expect(s.net.cny).toBe(1200 * 5.2 + 50000);
+    expect(s.net.sgd).toBe(1200 + 9500);
+    // Against the 31st of August, when DBS held 1000 at 5.3.
+    expect(s.change).toEqual({
+      since: "2026-08-31",
+      assets: { cny: 940, sgd: 200 },
+      liabilities: { cny: 0, sgd: 0 },
+      net: { cny: 940, sgd: 200 },
+    });
+    expect(s.by_region.CN.net.cny).toBe(50000);
+    expect(s.by_category["asset:deposit"].sgd).toBe(9500);
+    expect(s.history.map((p: { day: string }) => p.day)).toEqual(["2026-05-31", "2026-08-31", "2026-09-30"]);
+
+    const byId = Object.fromEntries(s.accounts.map((a: { id: string }) => [a.id, a]));
+    expect(byId[DBS]).toMatchObject({ counted: true, latest: { as_of: "2026-09-30", amount: 1200, value: { cny: 6240, sgd: 1200 } } });
+    expect(byId[CNY_ACCOUNT]).toMatchObject({ counted: true, latest: { as_of: "2026-08-31", amount: 50000 } });
+    // Archived in June: its May balance is history, not part of today.
+    expect(byId[OLD]).toMatchObject({ counted: false, latest: { as_of: "2026-05-31" } });
+    expect(calls(db, "finance_balances")).toEqual(["GET order=as_of.asc,id.asc&offset=0&limit=1000"]);
+  });
+
+  it("says nothing has been recorded rather than inventing zeros for a day", async () => {
+    const s = await (await SUMMARY(get({}, "/api/finance/summary"))).json();
+    expect(s).toMatchObject({ as_of: null, change: null, history: [], net: { cny: 0, sgd: 0 } });
+    expect(s.accounts.every((a: { latest: unknown; counted: boolean }) => a.latest === null && !a.counted)).toBe(true);
   });
 });

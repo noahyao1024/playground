@@ -203,3 +203,71 @@ export function sortAccounts(accounts: FinanceAccount[]): FinanceAccount[] {
     || a.name.localeCompare(b.name)
     || a.id.localeCompare(b.id));
 }
+
+const cents = (n: number) => Math.round(n * 100) / 100;
+const rounded = (m: Money): Money => ({ cny: cents(m.cny), sgd: cents(m.sgd) });
+const roundedTotals = (t: Totals): Totals => ({ assets: rounded(t.assets), liabilities: rounded(t.liabilities), net: rounded(t.net) });
+const minus = (a: Money, b: Money): Money => ({ cny: a.cny - b.cny, sgd: a.sgd - b.sgd });
+
+export type AccountSummary = FinanceAccount & {
+  /** Whether it counts in the totals of `as_of`: open then, and recorded by then. */
+  counted: boolean;
+  /** Its newest balance, valued at the rates stored with it. */
+  latest: (Pick<FinanceBalance, "as_of" | "amount" | "cny_rate" | "sgd_rate" | "rate_date"> & { value: Money }) | null;
+};
+
+/** Where things stand, worked out the way the page works it out -- for anything
+ *  reading the API rather than the page, so it need not redo carry-forward,
+ *  archiving and stored rates, and cannot get them subtly wrong. Money is
+ *  rounded to cents; rates are left as stored. */
+export type Summary = Totals & {
+  /** The latest day anything was recorded; null before the first record. */
+  as_of: string | null;
+  /** Against the record before `as_of`; null with fewer than two. */
+  change: (Totals & { since: string }) | null;
+  by_region: Record<Region, Totals>;
+  /** Gross, per `${kind}:${category}`. */
+  by_category: Record<string, Money>;
+  accounts: AccountSummary[];
+  history: Array<Totals & { day: string }>;
+};
+
+export function summarize(accounts: FinanceAccount[], balances: FinanceBalance[]): Summary {
+  const history = historyOf(accounts, balances);
+  const latest = history.at(-1);
+  const previous = history.at(-2);
+  const counted = latest ? latestOn(accounts, balances, latest.day) : new Map<string, FinanceBalance>();
+  const last = lastBalances(balances);
+  return {
+    as_of: latest?.day ?? null,
+    ...roundedTotals(latest ?? noTotals()),
+    change: latest && previous
+      ? {
+        since: previous.day,
+        assets: rounded(minus(latest.assets, previous.assets)),
+        liabilities: rounded(minus(latest.liabilities, previous.liabilities)),
+        net: rounded(minus(latest.net, previous.net)),
+      }
+      : null,
+    by_region: Object.fromEntries(REGIONS.map((r) => [r, roundedTotals(latest?.byRegion[r] ?? noTotals())])) as Record<Region, Totals>,
+    by_category: Object.fromEntries(Object.entries(latest?.byCategory ?? {}).map(([key, value]) => [key, rounded(value)])),
+    accounts: sortAccounts(accounts).map((a) => {
+      const b = last.get(a.id);
+      return {
+        ...a,
+        counted: counted.has(a.id),
+        latest: b
+          ? {
+            as_of: b.as_of,
+            amount: Number(b.amount),
+            cny_rate: Number(b.cny_rate),
+            sgd_rate: Number(b.sgd_rate),
+            rate_date: b.rate_date,
+            value: rounded(valueOf(b)),
+          }
+          : null,
+      };
+    }),
+    history: history.map((p) => ({ day: p.day, ...roundedTotals(p) })),
+  };
+}

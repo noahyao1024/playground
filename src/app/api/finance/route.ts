@@ -1,38 +1,14 @@
-import { NextRequest, NextResponse } from "next/server";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { auth } from "@/lib/auth";
-import { isFinanceOwner } from "@/lib/access";
+import { NextRequest } from "next/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { todayInSG } from "@/lib/dates";
-import { fetchAllRows } from "@/lib/paginate";
 import { isFinanceCurrency, ratesOn } from "@/lib/fx";
-import { isCategory, isKind, isRegion, type FinanceAccount, type FinanceBalance, type Kind } from "@/lib/finance";
+import { isCategory, isKind, isRegion, type FinanceAccount, type Kind } from "@/lib/finance";
+import { financeDatabase, financeJson as json, isFinanceRequest, readFinance, reason } from "@/lib/finance-server";
 
-/** The owner's money. Every request is checked against one address, and every
- *  answer is marked uncacheable: nothing here may be served to anyone else from a
- *  cache, a CDN or the browser's back button. */
+/** The owner's money. Every request is checked -- the owner's session, or the
+ *  token an agent carries -- and every answer is marked uncacheable. What the
+ *  actions take is described at /api/finance/openapi. */
 export const dynamic = "force-dynamic";
-
-const NO_STORE = { "Cache-Control": "private, no-store" };
-const json = (body: unknown, status = 200) => NextResponse.json(body, { status, headers: NO_STORE });
-
-/** The service role only. Elsewhere the anon key is a fallback; here it would
- *  read nothing, since the finance tables grant it nothing. */
-function database(): SupabaseClient | null {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  return url && key ? createClient(url, key, { auth: { persistSession: false } }) : null;
-}
-
-async function isOwner() {
-  const session = await auth();
-  return isFinanceOwner(session?.user?.email);
-}
-
-function reason(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "object" && err !== null && "message" in err) return String((err as { message: unknown }).message);
-  return JSON.stringify(err);
-}
 
 class Invalid extends Error {}
 
@@ -51,28 +27,20 @@ function isRealDay(day: unknown): day is string {
   return typeof day === "string" && DAY.test(day) && new Date(`${day}T00:00:00Z`).toISOString().startsWith(day);
 }
 
-export async function GET() {
-  if (!(await isOwner())) return json({ error: "Unauthorized" }, 401);
-  const db = database();
+export async function GET(req: NextRequest) {
+  if (!(await isFinanceRequest(req))) return json({ error: "Unauthorized" }, 401);
+  const db = financeDatabase();
   if (!db) return json({ error: "Supabase not configured" }, 500);
   try {
-    const [{ data: accounts, error }, balances] = await Promise.all([
-      db.from("finance_accounts").select("*").order("created_at").order("id"),
-      // Balances grow by a row per account per record, forever: paged, on a
-      // unique order.
-      fetchAllRows<FinanceBalance>((from, to) =>
-        db.from("finance_balances").select("*").order("as_of").order("id").range(from, to)),
-    ]);
-    if (error) throw error;
-    return json({ accounts: accounts ?? [], balances });
+    return json(await readFinance(db));
   } catch (err) {
     return json({ error: reason(err) }, 500);
   }
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await isOwner())) return json({ error: "Unauthorized" }, 401);
-  const db = database();
+  if (!(await isFinanceRequest(req))) return json({ error: "Unauthorized" }, 401);
+  const db = financeDatabase();
   if (!db) return json({ error: "Supabase not configured" }, 500);
 
   let body: Record<string, unknown>;
