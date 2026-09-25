@@ -82,6 +82,19 @@ jobs:
               exit 1
               ;;
           esac
+          # Supabase's direct host is IPv6-only and GitHub runners have no IPv6,
+          # so it fails as "Network is unreachable" -- a message about the network
+          # when the fault is picking the wrong one of two connection strings the
+          # dashboard offers side by side. The pooler is the IPv4 path.
+          case "$PGURL" in
+            *db.*.supabase.co*)
+              echo "::error::That is the Direct connection host, which is IPv6-only. GitHub runners cannot reach it."
+              echo "Use the Connection pooling string instead (Session mode, port 5432):"
+              echo "  host     aws-<region>.pooler.supabase.com   not  db.<ref>.supabase.co"
+              echo "  username postgres.<ref>                     not  postgres"
+              exit 1
+              ;;
+          esac
           # A real rehearsal, not a printout: the statements execute against the
           # live schema and are then discarded, so syntax, permissions and
           # conflicts all surface here rather than on the run that keeps them.
@@ -118,6 +131,19 @@ jobs:
               echo "Expected: postgresql://postgres.<ref>:<password>@<host>.pooler.supabase.com:5432/postgres"
               echo "Common causes: the value was wrapped in quotes, only the password was pasted,"
               echo "or [YOUR-PASSWORD] was left unreplaced."
+              exit 1
+              ;;
+          esac
+          # Supabase's direct host is IPv6-only and GitHub runners have no IPv6,
+          # so it fails as "Network is unreachable" -- a message about the network
+          # when the fault is picking the wrong one of two connection strings the
+          # dashboard offers side by side. The pooler is the IPv4 path.
+          case "$PGURL" in
+            *db.*.supabase.co*)
+              echo "::error::That is the Direct connection host, which is IPv6-only. GitHub runners cannot reach it."
+              echo "Use the Connection pooling string instead (Session mode, port 5432):"
+              echo "  host     aws-<region>.pooler.supabase.com   not  db.<ref>.supabase.co"
+              echo "  username postgres.<ref>                     not  postgres"
               exit 1
               ;;
           esac
