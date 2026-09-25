@@ -32,6 +32,9 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# ...but the template is meant to be in the repo, and the blanket rule above
+# swallowed it: it sat untracked and drifted four keys out of date.
+!.env.example
 
 # vercel
 .vercel
