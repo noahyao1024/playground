@@ -32,8 +32,6 @@ export async function POST(req: NextRequest) {
 
   const proto = req.headers.get("x-forwarded-proto") ?? "https";
   const host = req.headers.get("host") ?? "localhost:3000";
-  // A run can span months it never billed; each gets its own rate. Rates supplied
-  // in the body override that for every month, which is what an explicit rate means.
   // No rate override: a run can span months it never billed, and each must be
   // priced at its own. Passing one figure for all of them is the bug this drops.
   const ratesFor = monthlyRates(`${proto}://${host}`);
@@ -41,10 +39,10 @@ export async function POST(req: NextRequest) {
   try {
     const result = await generateChargesForMonth(supabase, month, ratesFor, subscriberId);
     // A run that skipped everything would otherwise read as a clean success.
-          const note = result.skipped.length
-            ? ` (skipped ${result.skipped.length} with no rate for their currency)`
-            : "";
-          return NextResponse.json({ message: `Generated ${result.generated} charge(s)${note}`, month, ...result });
+    const note = result.skipped.length
+      ? ` (skipped ${result.skipped.length} with no rate for their currency)`
+      : "";
+    return NextResponse.json({ message: `Generated ${result.generated} charge(s)${note}`, month, ...result });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null && "message" in err ? (err as { message: string }).message : JSON.stringify(err);
     return NextResponse.json({ error: msg }, { status: 500 });
