@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSupabase } from "@/lib/billing";
 import { SG_TZ, todayInSG } from "@/lib/dates";
+import { fetchAllRows } from "@/lib/paginate";
 
 
 /** The day a charge nominally falls on: the subscription's start day projected onto
@@ -57,15 +58,29 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
   }
 
-  const [{ data: rows, error }, { data: subs }, { data: cards }, { data: settlements }, { data: people }] = await Promise.all([
+  const [{ data: rows, error }, { data: subs }, { data: cards }, settlements, { data: people }] = await Promise.all([
     supabase
       .from("charges")
       .select("id, subscriber_id, service_id, payment_method_id, monthly_cost, currency, total_cny, paid, paid_date, paid_at, updated_at, billing_date, period_start, created_at, label, subscribers(name), services(name)")
       .eq("period_start", month)
+      // A deleted charge is only marked, and nobody owes it any more. Counting it
+      // would report a debit as recorded after the charge behind it was removed.
+      .is("deleted_at", null)
       .order("created_at", { ascending: false }),
     supabase.from("subscriptions").select("subscriber_id, service_id, start_date, payment_method_id"),
     supabase.from("payment_methods").select("id, label, card_type, last4"),
-    supabase.from("wallet_entries").select("subscriber_id, charge_id, kind").eq("kind", "charge"),
+    // Every settlement ever posted, so a page at a time, oldest first. Best effort
+    // like the lookups around it: if this fails, paid_by is null and the charges
+    // themselves are still right.
+    fetchAllRows<{ subscriber_id: string; charge_id: string | null }>((from, to) =>
+      supabase
+        .from("wallet_entries")
+        .select("subscriber_id, charge_id")
+        .eq("kind", "charge")
+        .order("created_at")
+        .order("id")
+        .range(from, to),
+    ).catch(() => null),
     supabase.from("subscribers").select("id, name"),
   ]);
 
@@ -78,7 +93,9 @@ export async function GET(req: NextRequest) {
     (subs ?? []).map((s: SubRow) => [`${s.subscriber_id}::${s.service_id}`, s]),
   );
   const cardById = new Map((cards ?? []).map((c: CardRow) => [c.id, c]));
-  // Who settled each charge — not always the person who owes it.
+  // Who settled each charge — not always the person who owes it. Entries arrive
+  // oldest first and a later one overwrites an earlier, so a charge settled,
+  // reversed and settled again maps to whoever paid last.
   const paidByCharge = new Map(
     (settlements ?? []).map((e: { subscriber_id: string; charge_id: string | null }) => [e.charge_id, e.subscriber_id]),
   );
@@ -101,8 +118,10 @@ export async function GET(req: NextRequest) {
       card: describeCard(c.payment_method_id ?? sub?.payment_method_id),
       paid: c.paid,
       // The wallet the money came out of, when it was not the charge's own person.
+      // Only while the charge is paid: a reversed settlement keeps its entry in the
+      // ledger, but nobody has paid.
       paid_by: (() => {
-        const payer = paidByCharge.get(c.id);
+        const payer = c.paid ? paidByCharge.get(c.id) : undefined;
         return payer && payer !== c.subscriber_id ? nameById.get(payer) ?? null : null;
       })(),
       paid_date: c.paid_date,
