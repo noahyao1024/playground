@@ -31,10 +31,10 @@ export async function GET(req: NextRequest) {
   try {
     const result = await generateChargesForMonth(supabase, month, ratesFor);
     // A run that skipped everything would otherwise read as a clean success.
-            const note = result.skipped.length
-              ? ` (skipped ${result.skipped.length} with no rate for their currency)`
-              : "";
-            return NextResponse.json({ message: `Generated ${result.generated} charge(s)${note}`, month, ...result });
+    const note = result.skipped.length
+      ? ` (skipped ${result.skipped.length} with no rate for their currency)`
+      : "";
+    return NextResponse.json({ message: `Generated ${result.generated} charge(s)${note}`, month, ...result });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null && "message" in err ? (err as { message: string }).message : JSON.stringify(err);
     return NextResponse.json({ error: msg }, { status: 500 });

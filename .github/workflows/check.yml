@@ -1,0 +1,33 @@
+name: Check
+
+# Typecheck and lint, on every pull request and every push to main: the two
+# checks AGENTS.md asks for before a push, run where a reviewer can see them.
+# Until this, a pull request's only check was Vercel's preview build.
+#
+# No secrets, and nothing here talks to Supabase or Vercel, which is also what
+# makes it safe to run on a pull request from a fork.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint

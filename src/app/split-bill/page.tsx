@@ -232,10 +232,14 @@ function exportToCSV(charges: ChargeRecord[], services: Service[], subscribers: 
   const rows = charges.map((c) => {
     const sub = subscribers.find((s) => s.id === c.subscriber_id);
     const sc = subscriptions.find((s) => s.subscriber_id === c.subscriber_id && s.service_id === c.service_id);
-    return [sub?.name ?? "", chargeName(c, services), billingDate(c.period_start, sc?.start_date), c.period_start, c.monthly_cost, c.currency, c.exchange_rate, Number(c.total_cny).toFixed(2), c.paid ? "Yes" : "No", c.paid_date ?? "", c.note ?? ""];
+    // The stored date first, as the table shows it; deriving is the fallback.
+    return [sub?.name ?? "", chargeName(c, services), c.billing_date ?? billingDate(c.period_start, sc?.start_date), c.period_start, c.monthly_cost, c.currency, c.exchange_rate, Number(c.total_cny).toFixed(2), c.paid ? "Yes" : "No", c.paid_date ?? "", c.note ?? ""];
   });
-  const csv = [headers, ...rows].map((r) => r.map((v) => `"${v}"`).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv" });
+  // A quote inside a value is doubled, or a note containing one ends its field
+  // early and shifts every column after it. The byte-order mark is what makes
+  // Excel read the file as UTF-8 instead of garbling every Chinese name in it.
+  const csv = [headers, ...rows].map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -494,7 +498,9 @@ export default function SubscriptionPage() {
       charges = charges.filter((c) => {
         const sub = data.subscribers.find((s) => s.id === c.subscriber_id);
         const sc = data.subscriptions.find((s) => s.subscriber_id === c.subscriber_id && s.service_id === c.service_id);
-        return (sub?.name ?? "").toLowerCase().includes(q) || chargeName(c, data.services).toLowerCase().includes(q) || billingDate(c.period_start, sc?.start_date).includes(q) || (c.note ?? "").toLowerCase().includes(q);
+        // Matched against the date the table shows: stored first, derived otherwise.
+        const date = c.billing_date ?? billingDate(c.period_start, sc?.start_date);
+        return (sub?.name ?? "").toLowerCase().includes(q) || chargeName(c, data.services).toLowerCase().includes(q) || date.includes(q) || (c.note ?? "").toLowerCase().includes(q);
       });
     }
     if (sortColumn) {
@@ -573,27 +579,42 @@ export default function SubscriptionPage() {
     }
   }
 
+  // Every write below catches. One that does not has nowhere to report a
+  // failure -- the rejection leaves the click handler unseen, and the page just
+  // sits there as if nothing had been asked of it.
   async function handleToggleSubscription(sub: Subscription) {
     if (!requireEdit()) return;
-    await apiUpdateSubscription(sub.id, { active: !sub.active });
-    toast.success(sub.active ? "Paused" : "Activated");
-    await reload();
+    try {
+      await apiUpdateSubscription(sub.id, { active: !sub.active });
+      toast.success(sub.active ? "Paused" : "Activated");
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to update");
+    }
   }
 
   async function handleDeleteSubscription(id: string) {
     if (!requireEdit()) return;
-    await apiDeleteSubscription(id);
-    toast.success("Removed");
-    await reload();
+    try {
+      await apiDeleteSubscription(id);
+      toast.success("Removed");
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to remove");
+    }
   }
 
   async function handleSaveSubscriptionNote(id: string) {
     if (!requireEdit()) return;
-    await apiUpdateSubscription(id, { note: editingSubNote.trim() || null });
-    setEditingSubNoteId(null);
-    setEditingSubNote("");
-    toast.success("Note updated");
-    await reload();
+    try {
+      await apiUpdateSubscription(id, { note: editingSubNote.trim() || null });
+      setEditingSubNoteId(null);
+      setEditingSubNote("");
+      toast.success("Note updated");
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save the note");
+    }
   }
 
   // ─── Bill now ─────────────────────────────────────────────────────
@@ -641,11 +662,16 @@ export default function SubscriptionPage() {
   // ─── Subscriber actions ───────────────────────────────────────────
   async function handleAddSubscriber() {
     if (!requireEdit()) return;
-    if (!newSubscriberName.trim()) return;
-    await apiAddSubscriber(newSubscriberName.trim());
-    setNewSubscriberName("");
-    toast.success(`Added ${newSubscriberName.trim()}`);
-    await reload();
+    const name = newSubscriberName.trim();
+    if (!name) return;
+    try {
+      await apiAddSubscriber(name);
+      setNewSubscriberName("");
+      toast.success(`Added ${name}`);
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to add");
+    }
   }
   async function handleRenameSubscriber(id: string) {
     if (!requireEdit()) return;
@@ -677,14 +703,18 @@ export default function SubscriptionPage() {
     if (!requireEdit()) return;
     if (!editingService) return;
     const exists = data!.services.find((s) => s.id === editingService.id);
-    if (exists) {
-      await apiUpdateService(editingService.id, { name: editingService.name, monthly_cost: editingService.monthly_cost, currency: editingService.currency });
-      toast.success("Updated");
-    } else {
-      await apiAddService({ name: editingService.name, monthly_cost: editingService.monthly_cost, currency: editingService.currency });
-      toast.success(`Added ${editingService.name}`);
+    try {
+      if (exists) {
+        await apiUpdateService(editingService.id, { name: editingService.name, monthly_cost: editingService.monthly_cost, currency: editingService.currency });
+        toast.success("Updated");
+      } else {
+        await apiAddService({ name: editingService.name, monthly_cost: editingService.monthly_cost, currency: editingService.currency });
+        toast.success(`Added ${editingService.name}`);
+      }
+      setEditServiceOpen(false); setEditingService(null); await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save");
     }
-    setEditServiceOpen(false); setEditingService(null); await reload();
   }
   async function handleRemoveService(id: string) {
     if (!requireEdit()) return;
@@ -820,7 +850,7 @@ export default function SubscriptionPage() {
       toast.success("Charge removed", {
         action: { label: "Undo", onClick: async () => {
           try { await apiRestoreCharge(id); await reload(); toast.success("Restored"); }
-          catch { toast.error("Could not restore"); }
+          catch (err: unknown) { toast.error(err instanceof Error ? err.message : "Could not restore"); }
         } },
         duration: 8000,
       });
@@ -830,8 +860,14 @@ export default function SubscriptionPage() {
   }
   async function handleSaveChargeNote(chargeId: string) {
     if (!requireEdit()) return;
-    await apiUpdateCharge(chargeId, { note: editingChargeNote || undefined });
-    setEditingChargeId(null); toast.success("Note updated"); await reload();
+    try {
+      // null, not undefined, to clear it: JSON drops an undefined key, so an
+      // emptied note used to arrive as no change at all and stay as it was.
+      await apiUpdateCharge(chargeId, { note: editingChargeNote.trim() || null });
+      setEditingChargeId(null); toast.success("Note updated"); await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save the note");
+    }
   }
 
   // ─── Payment method actions ──────────────────────────────────────
@@ -872,25 +908,39 @@ export default function SubscriptionPage() {
 
   async function handleDeletePaymentMethod(id: string) {
     if (!requireEdit()) return;
-    await apiDeletePaymentMethod(id);
-    toast.success("Payment method removed");
-    await reload();
+    try {
+      await apiDeletePaymentMethod(id);
+      toast.success("Payment method removed");
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to remove");
+    }
   }
 
-  async function handleSetChargePaymentMethod(chargeId: string, pmId: string | undefined) {
+  // null is what "None" sends. It was undefined, which JSON drops, so choosing
+  // None arrived as an empty update and the card stayed attached.
+  async function handleSetChargePaymentMethod(chargeId: string, pmId: string | null) {
     if (!requireEdit()) return;
-    await apiUpdateCharge(chargeId, { payment_method_id: pmId || undefined });
-    setPayChargeMethodOpen(null);
-    toast.success("Payment method updated");
-    await reload();
+    try {
+      await apiUpdateCharge(chargeId, { payment_method_id: pmId });
+      setPayChargeMethodOpen(null);
+      toast.success("Payment method updated");
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to update");
+    }
   }
 
-  async function handleSetSubPaymentMethod(subId: string, pmId: string | undefined) {
+  async function handleSetSubPaymentMethod(subId: string, pmId: string | null) {
     if (!requireEdit()) return;
-    await apiUpdateSubscription(subId, { payment_method_id: pmId || undefined });
-    setSubPayMethodOpen(null);
-    toast.success("Payment method updated");
-    await reload();
+    try {
+      await apiUpdateSubscription(subId, { payment_method_id: pmId });
+      setSubPayMethodOpen(null);
+      toast.success("Payment method updated");
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to update");
+    }
   }
 
   // ─── Per-subscriber helpers ───────────────────────────────────────
@@ -1322,7 +1372,7 @@ export default function SubscriptionPage() {
                               {canEdit && subPayMethodOpen === sub.id ? (
                                 <select
                                   value={sub.payment_method_id ?? ""}
-                                  onChange={(e) => handleSetSubPaymentMethod(sub.id, e.target.value || undefined)}
+                                  onChange={(e) => handleSetSubPaymentMethod(sub.id, e.target.value || null)}
                                   className="h-6 rounded border border-input bg-background px-1.5 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                   autoFocus
                                   onBlur={() => setSubPayMethodOpen(null)}
@@ -1475,7 +1525,7 @@ export default function SubscriptionPage() {
                                     <div className="flex items-center gap-1">
                                       <select
                                         value={charge.payment_method_id ?? ""}
-                                        onChange={(e) => handleSetChargePaymentMethod(charge.id, e.target.value || undefined)}
+                                        onChange={(e) => handleSetChargePaymentMethod(charge.id, e.target.value || null)}
                                         className="h-7 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                         autoFocus
                                         onBlur={() => setPayChargeMethodOpen(null)}
@@ -1768,7 +1818,16 @@ export default function SubscriptionPage() {
                           <Tooltip>
                             <TooltipTrigger render={
                               <button
-                                onClick={async () => { if (!requireEdit()) return; await apiUpdatePaymentMethod(pm.id, { is_default: true }); toast.success("Set as default"); await reload(); }}
+                                onClick={async () => {
+                                  if (!requireEdit()) return;
+                                  try {
+                                    await apiUpdatePaymentMethod(pm.id, { is_default: true });
+                                    toast.success("Set as default");
+                                    await reload();
+                                  } catch (err: unknown) {
+                                    toast.error(err instanceof Error ? err.message : "Failed to set as default");
+                                  }
+                                }}
                                 className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"
                               />
                             }>

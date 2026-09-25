@@ -45,7 +45,8 @@ export interface Subscription {
   exchange_rate?: number; // legacy, now set at charge time
   active: boolean;
   note?: string | null;
-  payment_method_id?: string;
+  /** null detaches the card; undefined would be dropped from the request. */
+  payment_method_id?: string | null;
   created_at?: string;
   /** Null until the row is edited; set by a trigger on every update. */
   updated_at?: string | null;
@@ -70,8 +71,10 @@ export interface ChargeRecord {
   paid_date?: string | null;
   /** Exact moment payment was marked; the database sets it, not the client. */
   paid_at?: string | null;
-  payment_method_id?: string;
-  note?: string;
+  /** null detaches the card and clears the note; undefined would be dropped
+   *  from the request and leave either one as it was. */
+  payment_method_id?: string | null;
+  note?: string | null;
   created_at?: string;
   /** Null until the row is edited; set by a trigger on every update. */
   updated_at?: string | null;
@@ -427,8 +430,12 @@ export async function addPaymentMethod(pm: Omit<PaymentMethod, "id" | "created_a
     writeLocal(data);
     return newPm;
   }
+  // Not caught. Clearing the old default failed silently for as long as this
+  // existed, and every card made default kept the flag. If it fails now the save
+  // should fail with it; the database's one-default index would refuse the
+  // second default anyway, only less legibly.
   if (pm.is_default) {
-    await serverWrite("update", "payment_methods", { id: "__all__", updates: { is_default: false } }).catch(() => {});
+    await serverWrite("update", "payment_methods", { id: "__all__", updates: { is_default: false } });
   }
   return await serverWrite("insert", "payment_methods", { data: pm }) as PaymentMethod;
 }
@@ -441,8 +448,9 @@ export async function updatePaymentMethod(id: string, updates: Partial<PaymentMe
     writeLocal(data);
     return;
   }
+  // Not caught, for the reason given in addPaymentMethod.
   if (updates.is_default) {
-    await serverWrite("update", "payment_methods", { id: "__all__", updates: { is_default: false } }).catch(() => {});
+    await serverWrite("update", "payment_methods", { id: "__all__", updates: { is_default: false } });
   }
   await serverWrite("update", "payment_methods", { id, updates });
 }
