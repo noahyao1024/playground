@@ -579,27 +579,42 @@ export default function SubscriptionPage() {
     }
   }
 
+  // Every write below catches. One that does not has nowhere to report a
+  // failure -- the rejection leaves the click handler unseen, and the page just
+  // sits there as if nothing had been asked of it.
   async function handleToggleSubscription(sub: Subscription) {
     if (!requireEdit()) return;
-    await apiUpdateSubscription(sub.id, { active: !sub.active });
-    toast.success(sub.active ? "Paused" : "Activated");
-    await reload();
+    try {
+      await apiUpdateSubscription(sub.id, { active: !sub.active });
+      toast.success(sub.active ? "Paused" : "Activated");
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to update");
+    }
   }
 
   async function handleDeleteSubscription(id: string) {
     if (!requireEdit()) return;
-    await apiDeleteSubscription(id);
-    toast.success("Removed");
-    await reload();
+    try {
+      await apiDeleteSubscription(id);
+      toast.success("Removed");
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to remove");
+    }
   }
 
   async function handleSaveSubscriptionNote(id: string) {
     if (!requireEdit()) return;
-    await apiUpdateSubscription(id, { note: editingSubNote.trim() || null });
-    setEditingSubNoteId(null);
-    setEditingSubNote("");
-    toast.success("Note updated");
-    await reload();
+    try {
+      await apiUpdateSubscription(id, { note: editingSubNote.trim() || null });
+      setEditingSubNoteId(null);
+      setEditingSubNote("");
+      toast.success("Note updated");
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save the note");
+    }
   }
 
   // ─── Bill now ─────────────────────────────────────────────────────
@@ -647,11 +662,16 @@ export default function SubscriptionPage() {
   // ─── Subscriber actions ───────────────────────────────────────────
   async function handleAddSubscriber() {
     if (!requireEdit()) return;
-    if (!newSubscriberName.trim()) return;
-    await apiAddSubscriber(newSubscriberName.trim());
-    setNewSubscriberName("");
-    toast.success(`Added ${newSubscriberName.trim()}`);
-    await reload();
+    const name = newSubscriberName.trim();
+    if (!name) return;
+    try {
+      await apiAddSubscriber(name);
+      setNewSubscriberName("");
+      toast.success(`Added ${name}`);
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to add");
+    }
   }
   async function handleRenameSubscriber(id: string) {
     if (!requireEdit()) return;
@@ -683,14 +703,18 @@ export default function SubscriptionPage() {
     if (!requireEdit()) return;
     if (!editingService) return;
     const exists = data!.services.find((s) => s.id === editingService.id);
-    if (exists) {
-      await apiUpdateService(editingService.id, { name: editingService.name, monthly_cost: editingService.monthly_cost, currency: editingService.currency });
-      toast.success("Updated");
-    } else {
-      await apiAddService({ name: editingService.name, monthly_cost: editingService.monthly_cost, currency: editingService.currency });
-      toast.success(`Added ${editingService.name}`);
+    try {
+      if (exists) {
+        await apiUpdateService(editingService.id, { name: editingService.name, monthly_cost: editingService.monthly_cost, currency: editingService.currency });
+        toast.success("Updated");
+      } else {
+        await apiAddService({ name: editingService.name, monthly_cost: editingService.monthly_cost, currency: editingService.currency });
+        toast.success(`Added ${editingService.name}`);
+      }
+      setEditServiceOpen(false); setEditingService(null); await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save");
     }
-    setEditServiceOpen(false); setEditingService(null); await reload();
   }
   async function handleRemoveService(id: string) {
     if (!requireEdit()) return;
@@ -826,7 +850,7 @@ export default function SubscriptionPage() {
       toast.success("Charge removed", {
         action: { label: "Undo", onClick: async () => {
           try { await apiRestoreCharge(id); await reload(); toast.success("Restored"); }
-          catch { toast.error("Could not restore"); }
+          catch (err: unknown) { toast.error(err instanceof Error ? err.message : "Could not restore"); }
         } },
         duration: 8000,
       });
@@ -836,8 +860,14 @@ export default function SubscriptionPage() {
   }
   async function handleSaveChargeNote(chargeId: string) {
     if (!requireEdit()) return;
-    await apiUpdateCharge(chargeId, { note: editingChargeNote || undefined });
-    setEditingChargeId(null); toast.success("Note updated"); await reload();
+    try {
+      // null, not undefined, to clear it: JSON drops an undefined key, so an
+      // emptied note used to arrive as no change at all and stay as it was.
+      await apiUpdateCharge(chargeId, { note: editingChargeNote.trim() || null });
+      setEditingChargeId(null); toast.success("Note updated"); await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to save the note");
+    }
   }
 
   // ─── Payment method actions ──────────────────────────────────────
@@ -878,25 +908,39 @@ export default function SubscriptionPage() {
 
   async function handleDeletePaymentMethod(id: string) {
     if (!requireEdit()) return;
-    await apiDeletePaymentMethod(id);
-    toast.success("Payment method removed");
-    await reload();
+    try {
+      await apiDeletePaymentMethod(id);
+      toast.success("Payment method removed");
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to remove");
+    }
   }
 
-  async function handleSetChargePaymentMethod(chargeId: string, pmId: string | undefined) {
+  // null is what "None" sends. It was undefined, which JSON drops, so choosing
+  // None arrived as an empty update and the card stayed attached.
+  async function handleSetChargePaymentMethod(chargeId: string, pmId: string | null) {
     if (!requireEdit()) return;
-    await apiUpdateCharge(chargeId, { payment_method_id: pmId || undefined });
-    setPayChargeMethodOpen(null);
-    toast.success("Payment method updated");
-    await reload();
+    try {
+      await apiUpdateCharge(chargeId, { payment_method_id: pmId });
+      setPayChargeMethodOpen(null);
+      toast.success("Payment method updated");
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to update");
+    }
   }
 
-  async function handleSetSubPaymentMethod(subId: string, pmId: string | undefined) {
+  async function handleSetSubPaymentMethod(subId: string, pmId: string | null) {
     if (!requireEdit()) return;
-    await apiUpdateSubscription(subId, { payment_method_id: pmId || undefined });
-    setSubPayMethodOpen(null);
-    toast.success("Payment method updated");
-    await reload();
+    try {
+      await apiUpdateSubscription(subId, { payment_method_id: pmId });
+      setSubPayMethodOpen(null);
+      toast.success("Payment method updated");
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to update");
+    }
   }
 
   // ─── Per-subscriber helpers ───────────────────────────────────────
@@ -1328,7 +1372,7 @@ export default function SubscriptionPage() {
                               {canEdit && subPayMethodOpen === sub.id ? (
                                 <select
                                   value={sub.payment_method_id ?? ""}
-                                  onChange={(e) => handleSetSubPaymentMethod(sub.id, e.target.value || undefined)}
+                                  onChange={(e) => handleSetSubPaymentMethod(sub.id, e.target.value || null)}
                                   className="h-6 rounded border border-input bg-background px-1.5 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                   autoFocus
                                   onBlur={() => setSubPayMethodOpen(null)}
@@ -1481,7 +1525,7 @@ export default function SubscriptionPage() {
                                     <div className="flex items-center gap-1">
                                       <select
                                         value={charge.payment_method_id ?? ""}
-                                        onChange={(e) => handleSetChargePaymentMethod(charge.id, e.target.value || undefined)}
+                                        onChange={(e) => handleSetChargePaymentMethod(charge.id, e.target.value || null)}
                                         className="h-7 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                                         autoFocus
                                         onBlur={() => setPayChargeMethodOpen(null)}
@@ -1774,7 +1818,16 @@ export default function SubscriptionPage() {
                           <Tooltip>
                             <TooltipTrigger render={
                               <button
-                                onClick={async () => { if (!requireEdit()) return; await apiUpdatePaymentMethod(pm.id, { is_default: true }); toast.success("Set as default"); await reload(); }}
+                                onClick={async () => {
+                                  if (!requireEdit()) return;
+                                  try {
+                                    await apiUpdatePaymentMethod(pm.id, { is_default: true });
+                                    toast.success("Set as default");
+                                    await reload();
+                                  } catch (err: unknown) {
+                                    toast.error(err instanceof Error ? err.message : "Failed to set as default");
+                                  }
+                                }}
                                 className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-muted transition-colors"
                               />
                             }>
