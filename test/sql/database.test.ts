@@ -170,6 +170,78 @@ describe.skipIf(!SERVER)("database", () => {
     });
   });
 
+  describe("finance", () => {
+    const ACCOUNT = "00000000-0000-0000-0000-0000000000f1";
+    const account = (currency = "SGD") => c.query(
+      `insert into finance_accounts (id, name, region, currency, kind, category) values ($1, 'DBS', 'SG', $2, 'asset', 'cash')`,
+      [ACCOUNT, currency],
+    );
+    const balance = (as_of: string, currency = "SGD", amount = 1000) => c.query(
+      `insert into finance_balances (account_id, as_of, currency, amount, cny_rate, sgd_rate, rate_date)
+       values ($1, $2, $3, $4, 5.3, 1, $2) returning *`,
+      [ACCOUNT, as_of, currency, amount],
+    );
+
+    it("is private: neither the anon key nor a signed-in session can read or write it, the service role can", async () => {
+      await account();
+      await balance("2026-09-30");
+      for (const role of ["anon", "authenticated"]) {
+        await c.query(`set local role ${role}`);
+        for (const sql of [
+          `select * from finance_accounts`,
+          `select * from finance_balances`,
+          `insert into finance_accounts (name, region, currency, kind, category) values ('x', 'CN', 'CNY', 'asset', 'cash')`,
+          `update finance_balances set amount = 0`,
+          `delete from finance_balances`,
+        ]) {
+          expect((await failure(c, sql)).code, `${role}: ${sql}`).toBe("42501");
+        }
+        // The contrast: the split-bill tables stay readable, as designed.
+        await c.query(`select count(*) from charges`);
+        await c.query(`reset role`);
+      }
+      await c.query(`set local role service_role`);
+      expect((await c.query(`select count(*)::int as n from finance_balances`)).rows[0].n).toBe(1);
+      await c.query(`reset role`);
+    });
+
+    it("pins a balance to its account's currency, and the account's currency to its balances", async () => {
+      await account("SGD");
+      expect((await failure(c, `insert into finance_balances (account_id, as_of, currency, amount, cny_rate, sgd_rate, rate_date)
+        values ($1, '2026-09-30', 'CNY', 1, 1, 0.19, '2026-09-30')`, [ACCOUNT])).code).toBe("23503");
+      await balance("2026-09-30");
+      expect((await failure(c, `update finance_accounts set currency = 'CNY' where id = $1`, [ACCOUNT])).code).toBe("23503");
+      expect((await failure(c, `delete from finance_accounts where id = $1`, [ACCOUNT])).code).toBe("23503");
+    });
+
+    it("keeps one balance per account per day; recording the day again replaces it and stamps the edit", async () => {
+      await account();
+      await balance("2026-09-30", "SGD", 1000);
+      expect((await failure(c, `insert into finance_balances (account_id, as_of, currency, amount, cny_rate, sgd_rate, rate_date)
+        values ($1, '2026-09-30', 'SGD', 2000, 5.3, 1, '2026-09-30')`, [ACCOUNT])).code).toBe("23505");
+      await c.query(`insert into finance_balances (account_id, as_of, currency, amount, cny_rate, sgd_rate, rate_date)
+        values ($1, '2026-09-30', 'SGD', 2000, 5.31, 1, '2026-09-30')
+        on conflict (account_id, as_of) do update set amount = excluded.amount, cny_rate = excluded.cny_rate`, [ACCOUNT]);
+      const rows = (await c.query(`select amount, cny_rate, updated_at from finance_balances`)).rows;
+      expect(rows).toHaveLength(1);
+      expect([Number(rows[0].amount), Number(rows[0].cny_rate)]).toEqual([2000, 5.31]);
+      expect(rows[0].updated_at).not.toBeNull();
+    });
+
+    it("refuses nonsense: an unknown region or kind, a lowercase currency, a zero rate", async () => {
+      const bad = [
+        `insert into finance_accounts (name, region, currency, kind, category) values ('x', 'US', 'USD', 'asset', 'cash')`,
+        `insert into finance_accounts (name, region, currency, kind, category) values ('x', 'SG', 'SGD', 'debt', 'loan')`,
+        `insert into finance_accounts (name, region, currency, kind, category) values ('x', 'SG', 'sgd', 'asset', 'cash')`,
+        `insert into finance_accounts (name, region, currency, kind, category) values ('  ', 'SG', 'SGD', 'asset', 'cash')`,
+      ];
+      for (const sql of bad) expect((await failure(c, sql)).code, sql).toBe("23514");
+      await account();
+      expect((await failure(c, `insert into finance_balances (account_id, as_of, currency, amount, cny_rate, sgd_rate, rate_date)
+        values ($1, '2026-09-30', 'SGD', 1, 0, 1, '2026-09-30')`, [ACCOUNT])).code).toBe("23514");
+    });
+  });
+
   describe("the damage report in 20260925_settle_skips_deleted_charges", () => {
     it("counts settlements posted against an already-deleted charge, until they are reversed", async () => {
       await seed(c);

@@ -148,9 +148,18 @@ export async function startPostgrest(tables: Record<string, Row[]>, options: Opt
           }
           case "POST": {
             const incomingRows = (Array.isArray(req.body) ? req.body : [req.body]) as Row[];
-            const inserted = incomingRows.map((row) => ({ id: randomUUID(), ...row }));
-            rows.push(...inserted);
-            return representation || single ? answer(inserted) : send({ status: 201 });
+            // An upsert: on_conflict names the unique columns, and a row matching
+            // an existing one on all of them is merged into it instead of added.
+            const conflict = req.params.get("on_conflict")?.split(",");
+            const merge = conflict && String(incoming.headers.prefer ?? "").includes("resolution=merge-duplicates");
+            const written = incomingRows.map((row) => {
+              const existing = merge ? rows.find((r) => conflict.every((col) => r[col] === row[col])) : undefined;
+              if (existing) return Object.assign(existing, row);
+              const inserted = { id: randomUUID(), ...row };
+              rows.push(inserted);
+              return inserted;
+            });
+            return representation || single ? answer(written) : send({ status: 201 });
           }
           case "PATCH": {
             const hit = filtered(rows, req.params);

@@ -17,6 +17,11 @@
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
+  --color-series-1: var(--series-1);
+  --color-series-2: var(--series-2);
+  --color-series-3: var(--series-3);
+  --color-delta-up: var(--delta-up);
+  --color-delta-down: var(--delta-down);
   --color-chart-5: var(--chart-5);
   --color-chart-4: var(--chart-4);
   --color-chart-3: var(--chart-3);
@@ -72,6 +77,15 @@
   --chart-4: oklch(0.488 0.243 264.376);
   --chart-5: oklch(0.424 0.199 265.638);
   --radius: 0.625rem;
+  /* Series colours for /finance's charts: the first three slots of a palette
+     checked for colour-blind separation, stepped separately for each theme --
+     the dark ones are not an inversion of these. Text never wears them. */
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  /* A change's direction, always beside an arrow and a sign. */
+  --delta-up: #006300;
+  --delta-down: #d03b3b;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.12 0 0);
   --sidebar-primary: oklch(0.12 0 0);
@@ -106,6 +120,11 @@
   --chart-3: oklch(0.546 0.245 262.881);
   --chart-4: oklch(0.488 0.243 264.376);
   --chart-5: oklch(0.424 0.199 265.638);
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --delta-up: #0ca30c;
+  --delta-down: #e66767;
   --sidebar: oklch(0.14 0 0);
   --sidebar-foreground: oklch(0.93 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);

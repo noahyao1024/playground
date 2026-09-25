@@ -1,15 +1,18 @@
 "use client";
 
 import Link from "next/link";
+import { useSession } from "next-auth/react";
 import {
   Receipt,
   Server,
+  Wallet,
   ArrowUpRight,
   ShieldCheck,
   UserRoundCheck,
   FileText,
 } from "lucide-react";
 import { motion } from "framer-motion";
+import { isFinanceOwner } from "@/lib/access";
 
 const tools = [
   {
@@ -27,6 +30,15 @@ const tools = [
     href: "/machines",
   },
 ];
+
+// Private to its owner, so shown only to them; everything above is public.
+const finance = {
+  title: "Finance",
+  subtitle: "资产负债",
+  description: "Balances across China and Singapore in CNY and SGD, with assets, debts and net worth over time.",
+  icon: Wallet,
+  href: "/finance",
+};
 
 const overview = [
   {
@@ -50,6 +62,9 @@ const overview = [
 ];
 
 export default function HomePage() {
+  const { data: session } = useSession();
+  const visibleTools = isFinanceOwner(session?.user?.email) ? [...tools, finance] : tools;
+
   return (
     <div className="space-y-12">
       <motion.div
@@ -127,7 +142,7 @@ export default function HomePage() {
           </p>
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
-        {tools.map((tool, i) => (
+        {visibleTools.map((tool, i) => (
           <motion.div
             key={tool.href}
             initial={{ opacity: 0, y: 12 }}

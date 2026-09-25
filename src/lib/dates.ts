@@ -10,9 +10,16 @@
  */
 export const SG_TZ = "Asia/Singapore";
 
+const sgDay = new Intl.DateTimeFormat("en-CA", { timeZone: SG_TZ });
+
 /** Today in Singapore, as YYYY-MM-DD. */
 export function todayInSG(): string {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: SG_TZ }).format(new Date());
+  return sgDay.format(new Date());
+}
+
+/** The day a moment fell on in Singapore, as YYYY-MM-DD. */
+export function dayInSG(at: Date | string): string {
+  return sgDay.format(new Date(at));
 }
 
 /** The current month in Singapore, as YYYY-MM. */
