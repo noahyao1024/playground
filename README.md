@@ -7,6 +7,10 @@ Personal tools, deployed on Vercel.
   rate that held in the month being billed. Charges are settled from per-person
   wallets.
 - **SRE Machine Delivery** — server deliveries from order to deployment.
+- **Finance / 资产负债** — private to its owner. Accounts in China and Singapore,
+  each kept in its own currency and recorded as a balance whenever the owner
+  chooses; each balance is valued in CNY and SGD at the rates of its own day.
+  Net worth, assets, debts, and how all three moved.
 
 ## Stack
 
@@ -30,6 +34,32 @@ that yields a session object without a user still returns 401.
 
 `/api/charges/today` is read-only and open. Set `READONLY_TOKEN` to require a
 bearer token; no code change needed.
+
+**Finance is the exception to all of the above.** `finance_accounts` and
+`finance_balances` have RLS on and *no* policy, and every privilege is revoked
+from `anon` and `authenticated`: the public key reads nothing there, and only the
+service role, server-side, reaches them. `/api/finance` answers one address —
+`FINANCE_OWNER` in [`src/lib/access.ts`](src/lib/access.ts), narrower than the
+split bill's allowlist — with 401 for anyone else, and marks every response
+`private, no-store`. `/finance` shows a sign-in prompt when signed out and a 404
+to anyone else signed in. The navbar item and home-page card appear only for the
+owner, but they are conveniences; the page and the route are the gate.
+
+## Finance: how the numbers work
+
+- A **balance** is what one account held on one day, in the account's own
+  currency. A liability's balance is what is owed, as a positive number.
+- Each balance is stored with `cny_rate` and `sgd_rate` — what one unit of its
+  currency was worth on `rate_date` (mid-market, ECB via Frankfurter, no markup;
+  a weekend takes the last published day). History is never re-priced: a month
+  already recorded keeps its value when rates move. Nothing is recorded when the
+  rates cannot be fetched.
+- An account not recorded on a day **carries forward** its last balance before
+  it. Recording a day again replaces that day's balances; there is one per
+  account per day.
+- **Archiving** an account takes it off the books from the next day (Singapore
+  time) and keeps its history. An account with balances cannot be deleted, and
+  its currency cannot change — the database refuses both.
 
 ## Environment
 

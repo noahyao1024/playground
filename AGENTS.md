@@ -103,6 +103,14 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   took lint from zero errors to eight.
 - `.claude/hooks/session-start.sh` — runs `npm install` when a Claude Code on the web session
   starts, so the checks work there from the first command. A no-op on your machine.
+- `/finance` and `/api/finance` — the owner's accounts and balances, answering only
+  `FINANCE_OWNER` in `src/lib/access.ts`. `finance_accounts` and `finance_balances` are the one
+  private corner of the database: RLS with no policy, privileges revoked from `anon` and
+  `authenticated`. Do not give them a `select` policy to match the other tables — that publishes
+  the owner's balances to anyone holding the public key. The arithmetic (carry-forward, archive
+  cut-off, stored rates) lives in `src/lib/finance.ts`; the page only draws it.
+- Chart colours are `--series-1` to `--series-3` in `globals.css`, a palette checked for
+  colour-blind separation with separate dark steps. Marks wear them; text never does.
 
 Two conventions worth knowing before adding code:
 

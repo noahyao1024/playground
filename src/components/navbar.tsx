@@ -3,10 +3,11 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Moon, Sun, LogOut } from "lucide-react";
+import { Moon, Sun, LogOut, Wallet } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useSession, signOut } from "next-auth/react";
 import { Button } from "@/components/ui/button";
+import { isFinanceOwner } from "@/lib/access";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,6 +18,7 @@ import {
 const pageNames: Record<string, string> = {
   "/split-bill": "Split Bill",
   "/machines": "Machines",
+  "/finance": "Finance",
 };
 
 export function Navbar() {
@@ -80,6 +82,13 @@ export function Navbar() {
                   <p className="text-sm font-medium">{session.user.name}</p>
                   <p className="text-xs text-muted-foreground truncate">{session.user.email}</p>
                 </div>
+                {/* Only the owner is shown the way in; the page and its API check again. */}
+                {isFinanceOwner(session.user.email) && (
+                  <DropdownMenuItem render={<Link href="/finance" />} className="gap-2">
+                    <Wallet className="h-3.5 w-3.5" />
+                    Finance
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuItem onClick={() => signOut()} className="gap-2 text-destructive">
                   <LogOut className="h-3.5 w-3.5" />
                   Sign out

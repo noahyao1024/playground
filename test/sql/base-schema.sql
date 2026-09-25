@@ -8,6 +8,27 @@
 -- is what the tests exercise. If a migration ever needs something missing here,
 -- it fails loudly while building the test database, not quietly in a test.
 
+-- Supabase's API roles, which migrations grant to and revoke from. Roles belong
+-- to the whole server, not one database, so each is created only once however
+-- many test databases come and go.
+do $$
+begin
+  if not exists (select from pg_roles where rolname = 'anon') then
+    create role anon nologin;
+  end if;
+  if not exists (select from pg_roles where rolname = 'authenticated') then
+    create role authenticated nologin;
+  end if;
+  if not exists (select from pg_roles where rolname = 'service_role') then
+    create role service_role nologin bypassrls;
+  end if;
+end $$;
+
+-- As on Supabase: everything created in public is granted to all three, and RLS
+-- is what stands between the anon key and the rows.
+grant usage on schema public to anon, authenticated, service_role;
+alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
+
 create table subscribers (
   id uuid primary key default gen_random_uuid(),
   name text not null,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { monthInSG, todayInSG } from "@/lib/dates";
+import { dayInSG, monthInSG, todayInSG } from "@/lib/dates";
 
 describe("dates in Singapore", () => {
   afterEach(() => { vi.useRealTimers(); });
@@ -18,6 +18,11 @@ describe("dates in Singapore", () => {
     vi.setSystemTime(new Date("2026-09-30T08:00:00Z"));
     expect(todayInSG()).toBe("2026-09-30");
     expect(monthInSG()).toBe("2026-09");
+  });
+
+  it("places a stored moment on its Singapore day", () => {
+    expect(dayInSG("2026-09-15T20:00:00Z")).toBe("2026-09-16");
+    expect(dayInSG("2026-09-15T15:59:59Z")).toBe("2026-09-15");
   });
 
   it("turns the year in Singapore first", () => {
