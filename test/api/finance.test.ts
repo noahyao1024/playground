@@ -194,6 +194,63 @@ describe("accounts", () => {
     expect(db.tables.finance_accounts.map((a) => a.id)).not.toContain(ICBC);
   });
 
+  it("keeps whose it is, how liquid it is, and whether a debt is long-term", async () => {
+    const { status, body } = await post({
+      action: "createAccount",
+      account: { ...valid, category: "investment", owner: " Daisy ", liquidity: 0.6 },
+    });
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ owner: "Daisy", liquidity: 0.6 });
+    expect((await post({ action: "updateAccount", id: DBS, updates: { owner: "", long_term: true } })).status).toBe(200);
+    expect(db.tables.finance_accounts[0]).toMatchObject({ owner: null, long_term: true });
+  });
+
+  const loan = { loan_principal: 1_000_000, loan_rate: 4.9, loan_start: "2020-01-15", loan_term_months: 360, loan_method: "annuity" };
+  const mortgage = { ...valid, kind: "liability", category: "mortgage", currency: "CNY", region: "CN" };
+
+  it("takes a loan's terms whole, on a liability", async () => {
+    const { status, body } = await post({ action: "createAccount", account: { ...mortgage, ...loan } });
+    expect(status).toBe(200);
+    expect(body).toMatchObject(loan);
+    // And takes them away whole.
+    const cleared = Object.fromEntries(Object.keys(loan).map((k) => [k, null]));
+    expect((await post({ action: "updateAccount", id: body.id, updates: cleared })).status).toBe(200);
+    expect(db.tables.finance_accounts.at(-1)).toMatchObject(cleared);
+  });
+
+  it("refuses terms that do not make a loan, or a loan on an asset, and says what is wrong", async () => {
+    const bad: Array<[Row, RegExp]> = [
+      [{ ...mortgage, loan_principal: 1000 }, /missing loan_rate, loan_start, loan_term_months, loan_method/],
+      [{ ...valid, ...loan }, /Only a liability/],
+      [{ ...mortgage, ...loan, loan_rate: 120 }, /loan_rate/],
+      [{ ...mortgage, ...loan, loan_term_months: 12.5 }, /loan_term_months/],
+      [{ ...mortgage, ...loan, loan_method: "balloon" }, /loan_method/],
+      [{ ...mortgage, ...loan, loan_start: "2020-02-30" }, /loan_start/],
+      [{ ...mortgage, ...loan, loan_principal: -5 }, /loan_principal/],
+      [{ ...valid, liquidity: 1.5 }, /liquidity/],
+      [{ ...valid, liquidity: "0.5" }, /liquidity/],
+      [{ ...mortgage, long_term: "yes" }, /long_term/],
+    ];
+    for (const [account, message] of bad) {
+      const { status, body } = await post({ action: "createAccount", account });
+      expect(status, JSON.stringify(account)).toBe(400);
+      expect(body.error).toMatch(message);
+    }
+    expect(db.tables.finance_accounts).toHaveLength(3);
+  });
+
+  it("checks a loan's terms against what the account already has", async () => {
+    const { body } = await post({ action: "createAccount", account: mortgage });
+    // One term at a time does not make a loan.
+    expect((await post({ action: "updateAccount", id: body.id, updates: { loan_rate: 3.1 } })).status).toBe(400);
+    expect((await post({ action: "updateAccount", id: body.id, updates: loan })).status).toBe(200);
+    // Now any one of them may change alone.
+    expect((await post({ action: "updateAccount", id: body.id, updates: { loan_rate: 3.1 } })).status).toBe(200);
+    // It cannot become an asset still carrying them.
+    const toAsset = { kind: "asset", category: "property" };
+    expect((await post({ action: "updateAccount", id: body.id, updates: toAsset })).body.error).toMatch(/Only a liability/);
+  });
+
   it("asks for a new category when the kind changes and the old one does not fit", async () => {
     expect((await post({ action: "updateAccount", id: ICBC, updates: { kind: "liability" } })).status).toBe(400);
     expect((await post({ action: "updateAccount", id: ICBC, updates: { kind: "liability", category: "loan" } })).status).toBe(200);
@@ -311,5 +368,44 @@ describe("the summary", () => {
     const s = await (await SUMMARY(get({}, "/api/finance/summary"))).json();
     expect(s).toMatchObject({ as_of: null, change: null, history: [], net: { cny: 0, sgd: 0 } });
     expect(s.accounts.every((a: { latest: unknown; counted: boolean }) => a.latest === null && !a.counted)).toBe(true);
+  });
+});
+
+describe("the summary's filters", () => {
+  const balance = (id: string, account_id: string, amount: number, currency = "SGD"): Row => ({
+    id, account_id, as_of: "2026-09-30", currency, amount, cny_rate: currency === "SGD" ? 5 : 1, sgd_rate: currency === "SGD" ? 1 : 0.2,
+    rate_date: "2026-09-30", note: null, created_at: "2026-09-30T10:00:00Z", updated_at: null,
+  });
+  const summary = async (query: string) => (await SUMMARY(get({}, `/api/finance/summary${query}`))).json();
+
+  beforeEach(() => {
+    db.tables.finance_accounts.push(
+      account("stocks", { owner: "Daisy", category: "investment", liquidity: 0.5 }),
+      account("home", { kind: "liability", category: "mortgage", region: "CN", currency: "CNY" }),
+    );
+    db.tables.finance_accounts[0].owner = "Noah";
+    db.tables.finance_balances.push(
+      balance("b1", DBS, 1000),
+      balance("b2", "stocks", 2000),
+      balance("b3", "home", 5000, "CNY"),
+    );
+  });
+
+  it("counts everything when asked nothing", async () => {
+    const s = await summary("");
+    expect(s.lens).toEqual({ exclude_long_term: false, liquid_only: false, owner: null });
+    expect(s.net.sgd).toBe(1000 + 2000 - 1000);
+  });
+
+  it("leaves out long-term debt, counts liquid shares, and keeps one owner's accounts, as the page does", async () => {
+    expect((await summary("?exclude_long_term=1")).net.sgd).toBe(3000);
+    expect((await summary("?liquid_only=true")).net.sgd).toBe(1000 + 1000 - 1000);
+    expect((await summary("?owner=Daisy")).net.sgd).toBe(2000);
+    // Nobody in particular: the mortgage, with no owner.
+    expect((await summary("?owner=")).net.sgd).toBe(-1000);
+    const all = await summary("?exclude_long_term=1&liquid_only=1&owner=Daisy");
+    expect(all.lens).toEqual({ exclude_long_term: true, liquid_only: true, owner: "Daisy" });
+    expect(all.net.sgd).toBe(1000);
+    expect(all.accounts.find((a: { id: string }) => a.id === "home")).toMatchObject({ is_long_term: true, weight: 0, counted: false });
   });
 });

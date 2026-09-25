@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { todayInSG } from "@/lib/dates";
 import { isFinanceCurrency, ratesOn } from "@/lib/fx";
-import { isCategory, isKind, isRegion, type FinanceAccount, type Kind } from "@/lib/finance";
+import { isCategory, isKind, isLoanMethod, isRegion, type FinanceAccount, type Kind } from "@/lib/finance";
 import { financeDatabase, financeJson as json, isFinanceRequest, readFinance, reason } from "@/lib/finance-server";
 
 /** The owner's money. Every request is checked -- the owner's session, or the
@@ -71,7 +71,27 @@ export async function POST(req: NextRequest) {
   }
 }
 
-type AccountFields = Partial<Pick<FinanceAccount, "name" | "institution" | "region" | "currency" | "kind" | "category" | "note" | "sort_order">>;
+type AccountFields = Partial<Pick<FinanceAccount,
+  | "name" | "institution" | "owner" | "region" | "currency" | "kind" | "category" | "note" | "sort_order"
+  | "liquidity" | "long_term" | "loan_principal" | "loan_rate" | "loan_start" | "loan_term_months" | "loan_method">>;
+
+/** A number that may also be cleared: null, or a number `ok` accepts. */
+function nullableNumber(value: unknown, field: string, ok: (n: number) => boolean, what: string): number | null {
+  if (value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value) || !ok(value)) throw new Invalid(`${field} must be ${what}`);
+  return value;
+}
+
+const LOAN_FIELDS = ["loan_principal", "loan_rate", "loan_start", "loan_term_months", "loan_method"] as const;
+
+/** A loan's terms go in whole or not at all, and only on a liability. The
+ *  database insists on the same, but this says which part is missing. */
+function checkLoanTerms(account: Record<string, unknown>) {
+  const missing = LOAN_FIELDS.filter((f) => account[f] == null);
+  if (missing.length === LOAN_FIELDS.length) return;
+  if (missing.length > 0) throw new Invalid(`Loan terms need all five of ${LOAN_FIELDS.join(", ")}; missing ${missing.join(", ")}`);
+  if (account.kind !== "liability") throw new Invalid("Only a liability has loan terms");
+}
 
 /** The fields of an account a request may set, checked. `kind` is the kind the
  *  account will have, which is what its category has to belong to. */
@@ -83,6 +103,7 @@ function accountFields(input: Record<string, unknown>, kind: Kind): AccountField
     out.name = name;
   }
   if ("institution" in input) out.institution = optionalText(input.institution, "Institution", 80) ?? null;
+  if ("owner" in input) out.owner = optionalText(input.owner, "Owner", 40) ?? null;
   if ("note" in input) out.note = optionalText(input.note, "Note", 500) ?? null;
   if ("region" in input) {
     if (!isRegion(input.region)) throw new Invalid("Region must be CN, SG or OTHER");
@@ -101,6 +122,32 @@ function accountFields(input: Record<string, unknown>, kind: Kind): AccountField
     if (!Number.isInteger(input.sort_order)) throw new Invalid("sort_order must be a whole number");
     out.sort_order = input.sort_order as number;
   }
+  if ("liquidity" in input) {
+    out.liquidity = nullableNumber(input.liquidity, "liquidity", (n) => n >= 0 && n <= 1, "a share from 0 to 1, or null");
+  }
+  if ("long_term" in input) {
+    if (input.long_term !== null && typeof input.long_term !== "boolean") throw new Invalid("long_term must be true, false or null");
+    out.long_term = input.long_term;
+  }
+  // Each loan term alone here; together, and against the kind, in checkLoanTerms.
+  if ("loan_principal" in input) {
+    out.loan_principal = nullableNumber(input.loan_principal, "loan_principal", (n) => n > 0, "a positive amount");
+  }
+  if ("loan_rate" in input) {
+    out.loan_rate = nullableNumber(input.loan_rate, "loan_rate", (n) => n >= 0 && n < 100, "an annual percentage, from 0 to under 100");
+  }
+  if ("loan_start" in input) {
+    if (input.loan_start !== null && !isRealDay(input.loan_start)) throw new Invalid("loan_start must be a date, YYYY-MM-DD");
+    out.loan_start = input.loan_start;
+  }
+  if ("loan_term_months" in input) {
+    out.loan_term_months = nullableNumber(input.loan_term_months, "loan_term_months",
+      (n) => Number.isInteger(n) && n >= 1 && n <= 600, "a whole number of months, 1 to 600");
+  }
+  if ("loan_method" in input) {
+    if (input.loan_method !== null && !isLoanMethod(input.loan_method)) throw new Invalid("loan_method must be annuity or equal_principal");
+    out.loan_method = input.loan_method;
+  }
   return out;
 }
 
@@ -111,6 +158,7 @@ async function createAccount(db: SupabaseClient, input: unknown) {
     if (!(field in a)) throw new Invalid(`${field} is required`);
   }
   const fields = accountFields(a, a.kind);
+  checkLoanTerms(fields);
   const { data, error } = await db.from("finance_accounts").insert(fields).select().single();
   if (error) throw error;
   return data;
@@ -136,6 +184,7 @@ async function updateAccount(db: SupabaseClient, id: unknown, input: unknown) {
     throw new Invalid("Choose a category for the new kind");
   }
   const fields: Record<string, unknown> = accountFields(updates, kind);
+  checkLoanTerms({ ...current, ...fields });
   if ("archived" in updates) {
     if (typeof updates.archived !== "boolean") throw new Invalid("archived must be true or false");
     fields.archived_at = updates.archived ? new Date().toISOString() : null;

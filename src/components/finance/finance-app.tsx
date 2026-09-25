@@ -6,8 +6,8 @@ import { ArrowDownRight, ArrowUpRight, Minus, PenLine, Plus, RotateCw } from "lu
 import { Button } from "@/components/ui/button";
 import { todayInSG } from "@/lib/dates";
 import {
-  CATEGORIES, REGIONS, REGION_LABELS, changeBetween, historyOf, lastBalances,
-  type Change, type FinanceAccount, type FinanceBalance, type Kind, type Position, type Region, type Unit,
+  CATEGORIES, REGIONS, REGION_LABELS, changeBetween, displayName, historyOf, isLongTerm, lastBalances, liquidityOf, positionOn,
+  type Change, type FinanceAccount, type FinanceBalance, type Kind, type Lens, type Position, type Region, type Unit,
 } from "@/lib/finance";
 import { UNIT_CODE, compactMoney, dayLabel, dayTime, money, percent } from "@/lib/finance-format";
 import { cn } from "@/lib/utils";
@@ -15,12 +15,15 @@ import { financeAction, loadFinance, messageOf, type FinanceData } from "./api";
 import { AccountDialog } from "./account-dialog";
 import { AccountsCard } from "./accounts-card";
 import { ConfirmDialog, type Confirmation } from "./confirm-dialog";
+import { LensBar, describeLens } from "./lens-bar";
+import { LoansCard } from "./loans-card";
 import { RecordDialog } from "./record-dialog";
 import { RecordsCard } from "./records-card";
 import { Segmented } from "./segmented";
 import { TrendChart, type TrendRow, type TrendSeries } from "./trend-chart";
 
 const UNIT_KEY = "finance.unit";
+const LENS_KEY = "finance.lens";
 const UNIT_OPTIONS = [{ value: "cny", label: "CNY" }, { value: "sgd", label: "SGD" }] as const;
 const VIEW_OPTIONS = [
   { value: "net", label: "Net worth" },
@@ -44,6 +47,21 @@ function storedUnit(): Unit {
   }
 }
 
+/** The filters last chosen here, read the same way as the unit. */
+function storedLens(): Lens {
+  try {
+    const raw = typeof window !== "undefined" ? window.localStorage.getItem(LENS_KEY) : null;
+    const saved = raw ? JSON.parse(raw) : {};
+    return {
+      excludeLongTerm: saved.excludeLongTerm === true,
+      liquidOnly: saved.liquidOnly === true,
+      owner: typeof saved.owner === "string" ? saved.owner : null,
+    };
+  } catch {
+    return {};
+  }
+}
+
 // Fixed per entity, whichever of them are on screen: assets are the second
 // colour in every view, China the first whether or not anything is elsewhere.
 const NET_SERIES: TrendSeries[] = [{ key: "net", label: "Net worth", color: "var(--series-1)", lead: true }];
@@ -59,6 +77,7 @@ export function FinanceApp() {
   const [data, setData] = useState<FinanceData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [unit, setUnitState] = useState<Unit>(storedUnit);
+  const [chosenLens, setLensState] = useState<Lens>(storedLens);
   const [view, setView] = useState<View>("net");
   const [recordDay, setRecordDay] = useState<string | null>(null);
   const [editing, setEditing] = useState<FinanceAccount | "new" | null>(null);
@@ -89,12 +108,33 @@ export function FinanceApp() {
     try { window.localStorage.setItem(UNIT_KEY, next); } catch { /* private mode: it just is not remembered */ }
   }
 
+  function setLens(next: Lens) {
+    setLensState(next);
+    try { window.localStorage.setItem(LENS_KEY, JSON.stringify(next)); } catch { /* as above */ }
+  }
+
   const accounts = useMemo(() => data?.accounts ?? [], [data]);
   const balances = useMemo(() => data?.balances ?? [], [data]);
-  const history = useMemo(() => historyOf(accounts, balances), [accounts, balances]);
+  const owners = useMemo(() => [...new Set(accounts.map((a) => a.owner?.trim()).filter((o): o is string => !!o))].sort(), [accounts]);
+  const hasUnowned = accounts.some((a) => !a.owner);
+  const hasLongTerm = accounts.some((a) => !a.archived_at && isLongTerm(a));
+  const hasIlliquid = accounts.some((a) => !a.archived_at && a.kind === "asset" && liquidityOf(a) < 1);
+  // A filter that no longer changes anything is dropped rather than claimed:
+  // an owner since renamed, a long-term switch with no long-term debt left.
+  const lens: Lens = useMemo(() => ({
+    excludeLongTerm: !!chosenLens.excludeLongTerm && hasLongTerm,
+    liquidOnly: !!chosenLens.liquidOnly && hasIlliquid,
+    owner: chosenLens.owner != null && (chosenLens.owner === "" ? hasUnowned && owners.length > 0 : owners.includes(chosenLens.owner))
+      ? chosenLens.owner
+      : null,
+  }), [chosenLens, hasLongTerm, hasIlliquid, hasUnowned, owners]);
+  const history = useMemo(() => historyOf(accounts, balances, lens), [accounts, balances, lens]);
   const last = useMemo(() => lastBalances(balances), [balances]);
   const latest = history.at(-1);
   const previous = history.at(-2);
+  // The accounts list shows what each account holds, whatever the filters count.
+  const unfiltered = useMemo(() => (latest ? positionOn(accounts, balances, latest.day) : undefined), [accounts, balances, latest]);
+  const filtered = describeLens(lens);
   const regions = REGIONS.filter((r) => accounts.some((a) => a.region === r));
   const openAccounts = accounts.filter((a) => !a.archived_at);
 
@@ -158,9 +198,21 @@ export function FinanceApp() {
         </section>
       ) : (
         <>
+          <LensBar
+            lens={lens}
+            onChange={setLens}
+            owners={owners}
+            hasUnowned={hasUnowned}
+            hasLongTerm={hasLongTerm}
+            hasIlliquid={hasIlliquid}
+          />
+
           <section className="rounded-2xl bg-card p-5 ring-1 ring-foreground/10 sm:p-6">
             <div className="flex items-start justify-between gap-4">
-              <p className="text-sm text-muted-foreground">Net worth</p>
+              <div>
+                <p className="text-sm text-muted-foreground">Net worth</p>
+                {filtered && <p className="text-xs text-muted-foreground">{filtered}</p>}
+              </div>
               <Segmented label="Show figures in" value={unit} onChange={setUnit} options={UNIT_OPTIONS} />
             </div>
             {latest ? (
@@ -215,7 +267,8 @@ export function FinanceApp() {
           <AccountsCard
             accounts={accounts}
             last={last}
-            position={latest}
+            position={unfiltered}
+            lens={lens}
             unit={unit}
             actions={{
               onAdd: () => setEditing("new"),
@@ -223,16 +276,18 @@ export function FinanceApp() {
               onArchive: (a, archived) => act(
                 "updateAccount",
                 { id: a.id, updates: { archived } },
-                archived ? `Archived ${a.name}. Its history stays.` : `Restored ${a.name}`,
+                archived ? `Archived ${displayName(a)}. Its history stays.` : `Restored ${displayName(a)}`,
               ),
               onDelete: (a) => setConfirmation({
-                title: `Delete ${a.name}?`,
+                title: `Delete ${displayName(a)}?`,
                 description: "It has no balances recorded, so nothing else goes with it.",
                 action: "Delete",
-                run: () => act("deleteAccount", { id: a.id }, `Deleted ${a.name}`),
+                run: () => act("deleteAccount", { id: a.id }, `Deleted ${displayName(a)}`),
               }),
             }}
           />
+
+          <LoansCard accounts={accounts} last={last} today={todayInSG()} />
 
           {latest && <Breakdown position={latest} unit={unit} />}
 
@@ -245,7 +300,7 @@ export function FinanceApp() {
               onEditDay={setRecordDay}
               onDeleteBalance={(b: FinanceBalance, a) => setConfirmation({
                 title: "Delete this balance?",
-                description: `${a?.name ?? "The account"} on ${dayLabel(b.as_of)}. Later days that carried it forward will carry the balance before it instead.`,
+                description: `${a ? displayName(a) : "The account"} on ${dayLabel(b.as_of)}. Later days that carried it forward will carry the balance before it instead.`,
                 action: "Delete",
                 run: () => act("deleteBalance", { id: b.id }, "Balance deleted"),
               })}
@@ -259,6 +314,7 @@ export function FinanceApp() {
         open={editing !== null}
         account={editing === "new" ? null : editing}
         hasBalances={editing !== null && editing !== "new" && last.has(editing.id)}
+        owners={owners}
         onClose={() => setEditing(null)}
         onSaved={reload}
       />

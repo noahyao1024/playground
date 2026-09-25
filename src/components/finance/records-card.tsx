@@ -4,11 +4,12 @@ import { Fragment, useState } from "react";
 import { ChevronRight, Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
-  changeBetween, sortAccounts, valueOf,
+  changeBetween, displayName, sortAccounts, valueOf,
   type FinanceAccount, type FinanceBalance, type Position, type Unit,
 } from "@/lib/finance";
 import { UNIT_CODE, UNIT_SYMBOL, dayLabel, money, original, rate } from "@/lib/finance-format";
 import { cn } from "@/lib/utils";
+import { AccountName } from "./account-name";
 
 /** Every recorded day, newest first: the chart's numbers, for reading rather
  *  than hovering. A day opens onto the balances recorded on it, each with the
@@ -118,9 +119,9 @@ function DayDetail({ day, accounts, balances, onEdit, onDelete }: {
           return (
             <li key={b.id} className="flex items-start gap-2 py-2 text-xs">
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm">
-                  {a.name}
-                  {a.kind === "liability" && <span className="ml-1.5 text-xs text-muted-foreground">owed</span>}
+                <p className="flex min-w-0 items-center gap-1.5 text-sm">
+                  <AccountName account={a} />
+                  {a.kind === "liability" && <span className="shrink-0 text-xs text-muted-foreground">owed</span>}
                 </p>
                 <p className="meta-row flex flex-wrap gap-x-1.5 text-muted-foreground">
                   <span>{rates} per {a.currency}</span>
@@ -134,7 +135,7 @@ function DayDetail({ day, accounts, balances, onEdit, onDelete }: {
                   {money(value.cny, "cny")} {"·"} {money(value.sgd, "sgd")}
                 </p>
               </div>
-              <Button variant="ghost" size="icon-xs" aria-label={`Delete ${a.name}'s balance for ${dayLabel(day)}`} onClick={() => onDelete(b, a)} className="shrink-0 text-muted-foreground hover:text-destructive">
+              <Button variant="ghost" size="icon-xs" aria-label={`Delete ${displayName(a)}'s balance for ${dayLabel(day)}`} onClick={() => onDelete(b, a)} className="shrink-0 text-muted-foreground hover:text-destructive">
                 <Trash2 />
               </Button>
             </li>

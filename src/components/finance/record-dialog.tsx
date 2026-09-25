@@ -8,9 +8,13 @@ import { Label } from "@/components/ui/label";
 import { NumberInput } from "@/components/ui/number-input";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { todayInSG } from "@/lib/dates";
-import { KINDS, REGION_LABELS, draftFor, sortAccounts, type Draft, type FinanceAccount, type FinanceBalance } from "@/lib/finance";
+import {
+  KINDS, REGION_LABELS, displayName, draftFor, loanStatus, loanTermsOf, sortAccounts,
+  type Draft, type FinanceAccount, type FinanceBalance,
+} from "@/lib/finance";
 import { dayLabel, original } from "@/lib/finance-format";
 import { financeAction, messageOf } from "./api";
+import { AccountName } from "./account-name";
 
 /** Recording what every open account holds on one day. `day` null is closed. */
 export function RecordDialog({ day, accounts, balances, onClose, onSaved }: {
@@ -112,6 +116,10 @@ function RecordForm({ initialDay, accounts, balances, onClose, onSaved }: {
               </h3>
               {ofKind.map((a) => {
                 const draft = drafts.get(a.id);
+                // A loan with terms can fill itself in: what its schedule has
+                // owing on the day, to the cent.
+                const terms = loanTermsOf(a);
+                const scheduled = terms ? Math.round(loanStatus(terms, day).principal_left * 100) / 100 : null;
                 const hint = !draft
                   ? "No balance yet"
                   : draft.from === day
@@ -120,10 +128,22 @@ function RecordForm({ initialDay, accounts, balances, onClose, onSaved }: {
                 return (
                   <div key={a.id} className="flex items-center gap-3 py-1.5">
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{a.name}</p>
+                      <AccountName account={a} className="text-sm font-medium" />
                       <p className="meta-row flex min-w-0 flex-wrap gap-x-1.5 text-xs text-muted-foreground">
                         <span>{REGION_LABELS[a.region]}</span>
                         <span className="truncate">{hint}</span>
+                        {scheduled !== null && amounts[a.id] !== scheduled && (
+                          <button
+                            type="button"
+                            className="underline underline-offset-2 hover:text-foreground"
+                            onClick={() => {
+                              setAmounts((current) => ({ ...current, [a.id]: scheduled }));
+                              setTouched((t) => new Set(t).add(a.id));
+                            }}
+                          >
+                            Use schedule, {original(scheduled, a.currency)}
+                          </button>
+                        )}
                       </p>
                     </div>
                     <div className="flex shrink-0 items-center gap-1.5">
@@ -132,7 +152,7 @@ function RecordForm({ initialDay, accounts, balances, onClose, onSaved }: {
                         emptyValue={Number.NaN}
                         step="any"
                         inputMode="decimal"
-                        aria-label={`${a.name}, in ${a.currency}`}
+                        aria-label={`${displayName(a)}, in ${a.currency}`}
                         className="h-9 w-32 text-right tabular-nums sm:w-36"
                         onValueChange={(v) => {
                           setAmounts((current) => ({ ...current, [a.id]: v }));

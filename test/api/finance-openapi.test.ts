@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { NextRequest } from "next/server";
 import { GET } from "@/app/api/finance/openapi/route";
 import { FINANCE_ACTIONS } from "@/lib/finance-openapi";
-import { CATEGORIES, KINDS, REGIONS } from "@/lib/finance";
+import { CATEGORIES, KINDS, LOAN_METHODS, REGIONS } from "@/lib/finance";
 import { FINANCE_CURRENCIES } from "@/lib/fx";
 
 type Spec = {
@@ -71,5 +71,6 @@ describe("the OpenAPI description", () => {
     expect(account.kind.enum).toEqual([...KINDS]);
     expect(account.currency.enum).toEqual([...FINANCE_CURRENCIES]);
     expect(new Set(account.category.enum)).toEqual(new Set(KINDS.flatMap((k) => Object.keys(CATEGORIES[k]))));
+    expect(account.loan_method.enum).toEqual([...LOAN_METHODS, null]);
   });
 });

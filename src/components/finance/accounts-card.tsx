@@ -5,12 +5,14 @@ import { Archive, ArchiveRestore, ChevronDown, MoreHorizontal, Pencil, Plus, Tra
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import {
-  CATEGORIES, KINDS, REGIONS, REGION_LABELS, sortAccounts, valueOf,
-  type FinanceAccount, type FinanceBalance, type Position, type Unit,
+  CATEGORIES, KINDS, LOAN_METHOD_LABELS, REGIONS, REGION_LABELS, displayName, isLongTerm, liquidityOf, loanStatus, loanTermsOf,
+  sortAccounts, valueOf, weightOf,
+  type FinanceAccount, type FinanceBalance, type Lens, type Position, type Unit,
 } from "@/lib/finance";
 import { UNIT_CODE, dayLabel, money, original } from "@/lib/finance-format";
-import { dayInSG } from "@/lib/dates";
+import { dayInSG, todayInSG } from "@/lib/dates";
 import { cn } from "@/lib/utils";
+import { AccountName } from "./account-name";
 
 const UNITS: Unit[] = ["cny", "sgd"];
 
@@ -22,13 +24,15 @@ export type AccountActions = {
 };
 
 /** Every account, by kind and then region, each with its last balance as kept
- *  and what that is in CNY and SGD. */
-export function AccountsCard({ accounts, last, position, unit, actions }: {
+ *  and what that is in CNY and SGD. What it holds, whatever the filters count:
+ *  an account they leave out is dimmed, not hidden. */
+export function AccountsCard({ accounts, last, position, lens, unit, actions }: {
   accounts: FinanceAccount[];
   /** Each account's newest balance. */
   last: Map<string, FinanceBalance>;
-  /** The latest recorded day, for the group totals. */
+  /** The latest recorded day, unfiltered, for the group totals. */
   position: Position | undefined;
+  lens: Lens;
   unit: Unit;
   actions: AccountActions;
 }) {
@@ -65,7 +69,7 @@ export function AccountsCard({ accounts, last, position, unit, actions }: {
                   </div>
                   <ul className="divide-y divide-border/60">
                     {group.map((a) => (
-                      <AccountRow key={a.id} account={a} balance={last.get(a.id)} latestDay={position?.day} unit={unit} actions={actions} />
+                      <AccountRow key={a.id} account={a} balance={last.get(a.id)} latestDay={position?.day} lens={lens} unit={unit} actions={actions} />
                     ))}
                   </ul>
                 </div>
@@ -89,7 +93,7 @@ export function AccountsCard({ accounts, last, position, unit, actions }: {
           {showArchived && (
             <ul className="mt-1 divide-y divide-border/60 opacity-70">
               {archived.map((a) => (
-                <AccountRow key={a.id} account={a} balance={last.get(a.id)} latestDay={position?.day} unit={unit} actions={actions} />
+                <AccountRow key={a.id} account={a} balance={last.get(a.id)} latestDay={position?.day} lens={lens} unit={unit} actions={actions} />
               ))}
             </ul>
           )}
@@ -99,24 +103,44 @@ export function AccountsCard({ accounts, last, position, unit, actions }: {
   );
 }
 
-function AccountRow({ account: a, balance: b, latestDay, unit, actions }: {
+/** What the meta line says about liquidity, debt length and a loan's schedule. */
+function traits(a: FinanceAccount): string[] {
+  const out: string[] = [];
+  if (a.kind === "asset") {
+    const share = liquidityOf(a);
+    if (share === 0) out.push("not liquid");
+    else if (share < 1) out.push(`${Math.round(share * 1000) / 10}% liquid`);
+  } else {
+    if (isLongTerm(a)) out.push("long-term");
+    const terms = loanTermsOf(a);
+    if (terms) {
+      const s = loanStatus(terms, todayInSG());
+      out.push(`${terms.rate}% ${LOAN_METHOD_LABELS[terms.method]}`, s.payments_left ? `${s.payments_left} of ${terms.months} left` : "repaid");
+    }
+  }
+  return out;
+}
+
+function AccountRow({ account: a, balance: b, latestDay, lens, unit, actions }: {
   account: FinanceAccount;
   balance: FinanceBalance | undefined;
   latestDay: string | undefined;
+  lens: Lens;
   unit: Unit;
   actions: AccountActions;
 }) {
   const value = b ? valueOf(b) : undefined;
+  const leftOut = !a.archived_at && weightOf(a, lens) === 0;
   // Worth in whichever of CNY and SGD the account is not already kept in: both,
   // for any other currency. The chosen unit first.
   const others = (unit === "cny" ? UNITS : [...UNITS].reverse()).filter((u) => UNIT_CODE[u] !== a.currency);
   return (
-    <li className="flex items-start gap-2 py-2.5">
+    <li className={cn("flex items-start gap-2 py-2.5", leftOut && "opacity-50")} title={leftOut ? "Left out by the filters above" : undefined}>
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm">{a.name}</p>
+        <AccountName account={a} className="text-sm" />
         <p className="meta-row flex min-w-0 flex-wrap gap-x-1.5 text-xs text-muted-foreground">
-          {a.institution && <span>{a.institution}</span>}
           <span>{CATEGORIES[a.kind][a.category] ?? a.category}</span>
+          {traits(a).map((t) => <span key={t}>{t}</span>)}
           {a.archived_at && <span>archived {dayLabel(dayInSG(a.archived_at))}</span>}
           {/* Carried forward: it was not recorded on the latest day. */}
           {b && !a.archived_at && latestDay && b.as_of !== latestDay && <span>as of {dayLabel(b.as_of)}</span>}
@@ -132,7 +156,7 @@ function AccountRow({ account: a, balance: b, latestDay, unit, actions }: {
         {!b && <p className="text-xs text-muted-foreground">No balance yet</p>}
       </div>
       <DropdownMenu>
-        <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label={`Actions for ${a.name}`} className="-mr-1.5 shrink-0" />}>
+        <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label={`Actions for ${displayName(a)}`} className="-mr-1.5 shrink-0" />}>
           <MoreHorizontal />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-40">
