@@ -43,6 +43,7 @@ import { ALLOWED_EMAILS } from "@/lib/auth";
 import { SG_TZ, todayInSG } from "@/lib/dates";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/ui/number-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -1203,7 +1204,7 @@ export default function SubscriptionPage() {
                             <div className="grid gap-3 sm:grid-cols-2">
                               <div className="grid gap-1.5">
                                 <Label className="text-xs text-muted-foreground">Amount</Label>
-                                <Input type="number" step="0.01" className="h-9" value={chargeForm.amount || ""} onChange={(e) => setChargeForm({ ...chargeForm, amount: Number(e.target.value) })} placeholder="0.00" />
+                                <NumberInput step="0.01" className="h-9" value={chargeForm.amount} onValueChange={(amount) => setChargeForm({ ...chargeForm, amount })} placeholder="0.00" />
                               </div>
                               <div className="grid gap-1.5">
                                 <Label className="text-xs text-muted-foreground">Currency</Label>
@@ -1229,7 +1230,7 @@ export default function SubscriptionPage() {
                         <div className="grid gap-3 sm:grid-cols-2">
                           <div className="grid gap-1.5">
                             <Label className="text-xs text-muted-foreground">Exchange rate (to CNY) {liveRates && <span className="text-emerald-600 dark:text-emerald-400">Live</span>}</Label>
-                            <Input type="number" step="any" className="h-9" value={chargeForm.exchangeRate} onChange={(e) => setChargeForm({ ...chargeForm, exchangeRate: Number(e.target.value) })} />
+                            <NumberInput step="any" className="h-9" value={chargeForm.exchangeRate} onValueChange={(exchangeRate) => setChargeForm({ ...chargeForm, exchangeRate })} />
                           </div>
                           <div className="grid gap-1.5">
                             <Label className="text-xs text-muted-foreground">Note</Label>
@@ -1946,7 +1947,7 @@ export default function SubscriptionPage() {
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Monthly cost</Label>
-                  <Input type="number" step="0.01" className="h-9" value={editingService.monthly_cost} onChange={(e) => setEditingService({ ...editingService, monthly_cost: Number(e.target.value) })} />
+                  <NumberInput step="0.01" className="h-9" value={editingService.monthly_cost} onValueChange={(monthly_cost) => setEditingService({ ...editingService, monthly_cost })} />
                 </div>
                 <div className="grid gap-1.5">
                   <Label className="text-xs text-muted-foreground">Currency</Label>
@@ -2211,8 +2212,8 @@ export default function SubscriptionPage() {
               </div>
               <div className="grid gap-1.5">
                 <Label className="text-xs text-muted-foreground">Amount (CNY)</Label>
-                <Input type="number" step="0.01" className="h-9" value={walletForm.amount || ""} placeholder="0.00"
-                  onChange={(e) => setWalletForm({ ...walletForm, amount: Number(e.target.value) })} autoFocus />
+                <NumberInput step="0.01" className="h-9" value={walletForm.amount} placeholder="0.00"
+                  onValueChange={(amount) => setWalletForm({ ...walletForm, amount })} autoFocus />
               </div>
             </div>
             <div className="grid gap-1.5">
