@@ -65,9 +65,9 @@ the **Apply Migration** workflow, which takes a filename and, unless you tick
 real schema rather than a printout.
 
 It applies one named file rather than `supabase db push`, because these went in
-one at a time through the MCP server and the remote's `schema_migrations` table
-does not list them; a push would replay all thirteen, seven of which are not
-idempotent.
+one at a time, through the MCP server at first and this workflow since, and the
+remote's `schema_migrations` table lists none of them; a push would replay every
+one, and seven are not idempotent.
 
 That also means a file sitting in the directory is not proof it is live. The
 workflow lists `charges`' indexes from `pg_indexes` on every run as its last
@@ -88,3 +88,7 @@ Push to `main`; Vercel deploys it. There is no deploy command.
 `npm install && npm run dev` starts the app, but without a `.env.local` holding
 real values it runs in localStorage mode with sign-in disabled. Verification for
 this project happens against the deployed site — see [AGENTS.md](AGENTS.md).
+
+`npm test` runs the tests, against stand-ins rather than Supabase. The database
+suite in `test/sql/` also needs `TEST_DATABASE_URL`, pointing at any Postgres it
+may create databases on; CI provides one.

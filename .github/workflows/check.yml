@@ -1,11 +1,13 @@
 name: Check
 
-# Typecheck and lint, on every pull request and every push to main: the two
-# checks AGENTS.md asks for before a push, run where a reviewer can see them.
-# Until this, a pull request's only check was Vercel's preview build.
+# Typecheck, lint and the tests, on every pull request and every push to main.
+# Agents may merge their own pull requests without asking (see AGENTS.md), and
+# this is what that trust rests on: nothing is merged while it is red.
 #
-# No secrets, and nothing here talks to Supabase or Vercel, which is also what
-# makes it safe to run on a pull request from a fork.
+# The database tests need a real Postgres, so the job runs one beside it. Its
+# password is a throwaway for that container, not a secret. Nothing here talks
+# to Supabase or Vercel, which is also what makes it safe to run on a pull
+# request from a fork.
 
 on:
   pull_request:
@@ -22,6 +24,18 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -31,3 +45,6 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
+      - run: npm test
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres

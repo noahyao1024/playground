@@ -4,9 +4,9 @@ name: Apply Migration
 #
 # Deliberately not `supabase db push`. That replays every migration the remote's
 # schema_migrations table does not already list, and this project's were applied
-# one at a time through the Supabase MCP server, which did not record them.
-# Seven of the thirteen are not idempotent -- they would error or double-apply on
-# a replay. Naming one file is the honest operation here.
+# one at a time -- through the Supabase MCP server at first, this workflow since --
+# and neither records them. Seven are not idempotent; they would error or
+# double-apply on a replay. Naming one file is the honest operation here.
 #
 # workflow_dispatch only. This repo is public: nothing that can run DDL may be
 # reachable from a push or a fork's pull request.

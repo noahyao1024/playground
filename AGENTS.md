@@ -29,20 +29,45 @@ A Claude Code on the web session may have neither `gh` nor `vercel`, and its net
 may not reach the live site or Supabase. The repo is public, so which commit is live still
 answers without either: `curl -s 'https://api.github.com/repos/noahyao1024/playground/deployments?per_page=1'`.
 
-Type-level checks that need no server or secrets are fine and expected:
+Checks that need no server of the app's and no secrets are fine and expected:
 
 ```bash
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint
+npm test            # vitest
 ```
 
 Check their output, not their exit code through a pipe — `npx eslint src | head` reports
 success because `head` succeeded.
 
+The tests never start the app. They call route handlers and library functions directly,
+against `test/helpers/postgrest.ts`, a stand-in for Supabase's REST API that filters, orders
+and caps pages at 1000 rows the way the real one does. `test/sql/` is the exception: it
+builds the schema from `supabase/migrations/` on a real Postgres and tests what lives there —
+the settle functions and their locking, the unique indexes, the append-only ledger. It needs
+`TEST_DATABASE_URL` pointing at a server it may create databases on, skips without one
+locally, and fails without one in CI. Any throwaway Postgres will do:
+`TEST_DATABASE_URL=postgresql://postgres@localhost:5432/postgres npm test`.
+
+A fix comes with a test that fails without it. Revert the fix, watch the test go red, put
+it back — a test that passes either way guards nothing.
+
 ## Deploying
 
 Push to `main`. Vercel auto-deploys it — there is no deploy command. Confirm local and
 remote `main` agree before pushing.
+
+**Deploys are pre-approved** (the owner's decision, 2026-09-25): an agent need not ask
+before merging its own pull request to `main`, provided that
+
+- the Check workflow — typecheck, lint and the tests — is green on the pull request's head,
+- the Vercel preview build succeeded, and
+- the change carries tests for what it fixes or adds.
+
+After merging, confirm the production deployment of the merge commit reaches `success`, and
+say what went out. A migration still follows the process below: rehearse it first, apply it
+only once the code that depends on it is live, and ask before one that drops or rewrites
+data.
 
 Vercel writes each deployment back as a GitHub Deployment, so `gh api .../deployments`
 tells you which commit is live and whether it succeeded.
@@ -65,8 +90,8 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   project doesn't get paused. Occasional 504s from upstream are noise; it retries.
 - `.github/workflows/unpaid-alert.yml` — daily, emails whoever owes more than
   `UNPAID_THRESHOLD_CNY`. Silent when nobody is over it, which is the common case.
-- `.github/workflows/check.yml` — typecheck and lint on every pull request and push to
-  `main`, the same two commands as above.
+- `.github/workflows/check.yml` — typecheck, lint and tests on every pull request and push
+  to `main`, with a Postgres service for `test/sql/`. The gate pre-approved deploys rest on.
 - `vercel.json` — monthly cron hitting `/api/cron/bill` on the 1st
 - `.github/dependabot.yml` — grouped weekly updates, split into production and development,
   with majors excluded. Not because majors are unwelcome, but because they want someone able
@@ -74,7 +99,7 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   *minor* has broken the build here too: eslint-plugin-react-hooks 7.1.1 added two rules and
   took lint from zero errors to eight.
 - `.claude/hooks/session-start.sh` — runs `npm install` when a Claude Code on the web session
-  starts, so typecheck and lint work there from the first command. A no-op on your machine.
+  starts, so the checks work there from the first command. A no-op on your machine.
 
 Two conventions worth knowing before adding code:
 
@@ -104,8 +129,9 @@ resetting it, which breaks nothing here — nothing in this project connects to 
 directly.
 
 Not `supabase db push`. That replays whatever the remote's `schema_migrations` table does
-not list, and these migrations went in one at a time through the MCP server, which did not
-record them — seven of the thirteen are not idempotent and would error or double-apply.
+not list, and none of these is listed there: they went in one at a time, through the MCP
+server at first and this workflow since, and neither records them. Seven of them are not
+idempotent and would error or double-apply.
 
 A file in `supabase/migrations/` is therefore still not proof it is live. Check before
 assuming. The workflow's last step lists `charges`' indexes from `pg_indexes` on every run,
