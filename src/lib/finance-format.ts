@@ -35,9 +35,10 @@ function digitsOf(currency: string): number {
   return digits;
 }
 
-/** An amount as it is kept, in its own currency: "12,345.67 SGD", "80,000 JPY". */
-export function original(amount: number, currency: string): string {
-  const digits = digitsOf(currency);
+/** An amount as it is kept, in its own currency: "12,345.67 SGD", "80,000 JPY".
+ *  `whole` drops the cents, for sums large enough that they are noise. */
+export function original(amount: number, currency: string, { whole = false } = {}): string {
+  const digits = whole ? 0 : digitsOf(currency);
   const body = Math.abs(amount).toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits });
   return `${signed(amount, body, false)} ${currency}`;
 }

@@ -240,6 +240,48 @@ describe.skipIf(!SERVER)("database", () => {
       expect((await failure(c, `insert into finance_balances (account_id, as_of, currency, amount, cny_rate, sgd_rate, rate_date)
         values ($1, '2026-09-30', 'SGD', 1, 0, 1, '2026-09-30')`, [ACCOUNT])).code).toBe("23514");
     });
+
+    it("starts an account held by nobody in particular, its liquidity and debt-length left to its category", async () => {
+      await account();
+      const row = (await c.query(`select owner, liquidity, long_term, loan_principal from finance_accounts`)).rows[0];
+      expect(row).toEqual({ owner: null, liquidity: null, long_term: null, loan_principal: null });
+    });
+
+    const loanColumns = `loan_principal, loan_rate, loan_start, loan_term_months, loan_method`;
+    const liability = (terms: string) =>
+      `insert into finance_accounts (name, region, currency, kind, category, ${loanColumns})
+       values ('Mortgage', 'CN', 'CNY', 'liability', 'mortgage', ${terms})`;
+
+    it("takes a loan's terms all together, on a liability, or not at all", async () => {
+      await c.query(liability(`1000000, 4.9, '2020-01-15', 360, 'annuity'`));
+      await c.query(liability(`null, null, null, null, null`));
+      for (const terms of [
+        `1000000, null, null, null, null`,
+        `1000000, 4.9, '2020-01-15', 360, null`,
+        `null, 4.9, '2020-01-15', 360, 'annuity'`,
+      ]) {
+        const err = await failure(c, liability(terms));
+        expect([err.code, err.constraint], terms).toEqual(["23514", "finance_accounts_loan_terms"]);
+      }
+      const onAnAsset = await failure(c, `insert into finance_accounts (name, region, currency, kind, category, ${loanColumns})
+        values ('x', 'CN', 'CNY', 'asset', 'property', 1000, 3, '2020-01-01', 12, 'annuity')`);
+      expect([onAnAsset.code, onAnAsset.constraint]).toEqual(["23514", "finance_accounts_loan_terms"]);
+    });
+
+    it("refuses a liquidity outside 0 to 1, a blank owner, and loan terms no loan has", async () => {
+      await account();
+      for (const sql of [
+        `update finance_accounts set liquidity = 1.2`,
+        `update finance_accounts set liquidity = -0.1`,
+        `update finance_accounts set owner = '  '`,
+        liability(`0, 4.9, '2020-01-15', 360, 'annuity'`),
+        liability(`1000, 100, '2020-01-15', 360, 'annuity'`),
+        liability(`1000, 4.9, '2020-01-15', 0, 'annuity'`),
+        liability(`1000, 4.9, '2020-01-15', 360, 'balloon'`),
+      ]) {
+        expect((await failure(c, sql)).code, sql).toBe("23514");
+      }
+    });
   });
 
   describe("the damage report in 20260925_settle_skips_deleted_charges", () => {

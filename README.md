@@ -61,6 +61,18 @@ other way in is `FINANCE_API_TOKEN`, below.
 - **Archiving** an account takes it off the books from the next day (Singapore
   time) and keeps its history. An account with balances cannot be deleted, and
   its currency cannot change — the database refuses both.
+- An account may name its **owner** — the money is a family's — and is shown by
+  its institution and name together, the owner beside them: *Daisy 微信余额*.
+- **Liquidity** is the share of an asset that could be spent now. Unset, CPF /
+  公积金 and property count as none of it and anything else as all; set it lower
+  for shares partly under water.
+- A **long-term** debt is a mortgage, unless marked otherwise, or anything
+  marked so. The page's filters leave those out, count only liquid shares, or
+  keep one owner's accounts; every total, the chart and the records follow them.
+- A liability may carry **loan terms** — amount, annual rate, first repayment,
+  term, 等额本息 or 等额本金 — from which the page works out the monthly payment,
+  the payments left, and the principal and interest still to repay. The
+  schedule is the plan; the balance recorded for the loan is the truth.
 
 ## Finance API, for agents
 
@@ -83,7 +95,7 @@ curl -s https://playground.noahyao.me/api/finance/summary \
 | | |
 |---|---|
 | `GET /api/finance/openapi` | OpenAPI 3.1 description of all of this. Public. |
-| `GET /api/finance/summary` | Where things stand, worked out: totals, change since the last record, each account's newest balance, history. |
+| `GET /api/finance/summary` | Where things stand, worked out: totals, change since the last record, each account's newest balance and loan schedule, history. Takes the page's filters: `?exclude_long_term=1&liquid_only=1&owner=Daisy`. |
 | `GET /api/finance` | Every account and balance, as stored. |
 | `POST /api/finance` | `{"action": …}`: `createAccount`, `updateAccount`, `deleteAccount`, `recordBalances`, `deleteBalance`. |
 

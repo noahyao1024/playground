@@ -27,6 +27,7 @@ describe("original", () => {
     expect(original(12345.6, "SGD")).toBe("12,345.60 SGD");
     expect(original(80000, "JPY")).toBe("80,000 JPY");
     expect(original(-20.5, "CNY")).toBe("−20.50 CNY");
+    expect(original(1_480_000.49, "CNY", { whole: true })).toBe("1,480,000 CNY");
   });
 });
 

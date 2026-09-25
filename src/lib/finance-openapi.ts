@@ -1,4 +1,4 @@
-import { CATEGORIES, KINDS, REGIONS } from "./finance";
+import { CATEGORIES, KINDS, LOAN_METHODS, REGIONS } from "./finance";
 import { FINANCE_CURRENCIES } from "./fx";
 
 /** The actions POST /api/finance takes. The route's switch is what handles them;
@@ -29,7 +29,22 @@ const accountFields = {
   },
   note: nullable("string", { maxLength: 500 }),
   sort_order: { type: "integer", description: "Order within its region; lower first." },
+  owner: nullable("string", { maxLength: 40, description: "Who in the family holds it. Blank or null: nobody in particular." }),
+  liquidity: nullable("number", {
+    minimum: 0, maximum: 1,
+    description: "The share of an asset that could be spent or sold now: 1 all of it, 0 none, 0.6 for shares partly under water. Null follows the category: retirement and property 0, anything else 1. Ignored on a liability.",
+  }),
+  long_term: nullable("boolean", { description: "Whether a liability is long-term debt, which exclude_long_term leaves out. Null follows the category: a mortgage is." }),
+  loan_principal: nullable("number", { exclusiveMinimum: 0, description: "Loan terms go all five together, on a liability, or none. The amount borrowed, in the account's currency." }),
+  loan_rate: nullable("number", { minimum: 0, exclusiveMaximum: 100, description: "Annual interest, in percent: 3.95 is 3.95%." }),
+  loan_start: nullable("string", { format: "date", description: "The first repayment; each later one falls on the same day of the month." }),
+  loan_term_months: nullable("integer", { minimum: 1, maximum: 600, description: "How many monthly repayments in all: 360 for thirty years." }),
+  loan_method: nullable("string", { enum: [...LOAN_METHODS, null], description: "annuity is 等额本息 (a level payment); equal_principal is 等额本金 (level principal, falling payments)." }),
 };
+
+const flagParameter = (name: string, description: string) => ({
+  name, in: "query", required: false, description, schema: { type: "string", enum: ["1", "true", "0", "false"] },
+});
 
 /** What /api/finance takes and returns, as OpenAPI 3.1, served at `origin`. */
 export function financeOpenApi(origin: string) {
@@ -43,6 +58,7 @@ export function financeOpenApi(origin: string) {
         "**Auth.** `Authorization: Bearer <FINANCE_API_TOKEN>`, reading and writing as the owner; or the owner's signed-in session. Anything else is 401. Every answer is `Cache-Control: private, no-store`.",
         "**Money.** A balance is kept in its account's own currency, with `cny_rate` and `sgd_rate`: what one unit was worth in CNY and SGD on `rate_date` (ECB mid-market; a weekend or a day not yet published takes the last published day). Totals multiply by those stored rates, so history never re-prices. A liability's balance is what is owed, as a positive number.",
         "**Days.** An account not recorded on a day carries its last balance before it forward. Recording a day again replaces that day's balance for each account sent. An archived account stops counting the day after it was archived, in Singapore (UTC+8), which is also the timezone `as_of` may not be later than today in.",
+        "**Family.** Each account may name its `owner`; an asset's `liquidity` says how much of it could be spent now; a liability may carry loan terms, from which the summary works out its repayment schedule.",
         "For where things stand, read `GET /api/finance/summary` rather than recomputing it from `GET /api/finance`.",
       ].join("\n\n"),
     },
@@ -53,7 +69,15 @@ export function financeOpenApi(origin: string) {
         get: {
           operationId: "getSummary",
           summary: "Where things stand, worked out",
-          description: "Totals on the latest recorded day, the change since the record before it, every account with its newest balance, and one point per recorded day.",
+          description: "Totals on the latest recorded day, the change since the record before it, every account with its newest balance, and one point per recorded day. The filters apply to every total and to the history, as the page's do.",
+          parameters: [
+            flagParameter("exclude_long_term", "Leave out long-term debt: mortgages, and anything marked long_term."),
+            flagParameter("liquid_only", "Count only each asset's liquid share."),
+            {
+              name: "owner", in: "query", required: false, schema: { type: "string" },
+              description: "Only this person's accounts. Present but empty: accounts nobody in particular holds.",
+            },
+          ],
           responses: { 200: ok("The summary", ref("Summary")), 401: error("Not the owner") },
         },
       },
@@ -147,6 +171,21 @@ export function financeOpenApi(origin: string) {
             updated_at: nullable("string", { format: "date-time" }),
           },
         },
+        LoanStatus: {
+          type: "object",
+          description: "Where a loan's schedule stands today, in its own currency. A prepaid loan owes less than principal_left: its recorded balance is the truth, this is the plan.",
+          properties: {
+            payment: { type: "number", description: "This month's payment: level under annuity, the next and falling one under equal_principal. 0 once repaid." },
+            payments_made: { type: "integer" },
+            payments_left: { type: "integer" },
+            principal_left: { type: "number" },
+            interest_left: { type: "number", description: "Interest in the payments still to come." },
+            total_left: { type: "number", description: "Principal and interest still to pay." },
+            total_interest: { type: "number", description: "Interest over the life of the loan." },
+            next_payment: nullable("string", { format: "date" }),
+            last_payment: day,
+          },
+        },
         Recorded: {
           type: "object",
           required: ["balances", "rate_date"],
@@ -154,8 +193,13 @@ export function financeOpenApi(origin: string) {
         },
         Summary: {
           type: "object",
-          required: ["as_of", "assets", "liabilities", "net", "change", "by_region", "by_category", "accounts", "history"],
+          required: ["lens", "as_of", "assets", "liabilities", "net", "change", "by_region", "by_category", "accounts", "history"],
           properties: {
+            lens: {
+              type: "object",
+              description: "The filters these totals were worked out through.",
+              properties: { exclude_long_term: { type: "boolean" }, liquid_only: { type: "boolean" }, owner: nullable("string") },
+            },
             as_of: nullable("string", { format: "date", description: "The latest recorded day; null before the first record. The totals are for it." }),
             assets: ref("Money"),
             liabilities: ref("Money"),
@@ -173,9 +217,13 @@ export function financeOpenApi(origin: string) {
                   ref("Account"),
                   {
                     type: "object",
-                    required: ["counted", "latest"],
+                    required: ["display_name", "is_long_term", "weight", "counted", "latest", "loan"],
                     properties: {
-                      counted: { type: "boolean", description: "Whether it is in as_of's totals: open then, and recorded by then." },
+                      display_name: { type: "string", description: "Institution and name, as the page shows them: 微信余额, DBS Multiplier." },
+                      is_long_term: { type: "boolean", description: "long_term, with the category's default applied." },
+                      weight: { type: "number", description: "The share of its balance the filters count: 1, 0, or its liquidity." },
+                      counted: { type: "boolean", description: "Whether it is in as_of's totals: open then, recorded by then, and not filtered out." },
+                      loan: { oneOf: [ref("LoanStatus"), { type: "null" }], description: "For a liability with loan terms." },
                       latest: {
                         oneOf: [
                           {
