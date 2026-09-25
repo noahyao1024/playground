@@ -151,16 +151,19 @@ jobs:
           psql "$PGURL" --no-psqlrc -v ON_ERROR_STOP=1 --single-transaction -f "$MIG"
           echo "Applied." >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Show the indexes and policies that now exist on charges
+      - name: List the indexes that now exist on charges
         if: ${{ always() }}
         env:
           PGURL: ${{ secrets.SUPABASE_DB_URL }}
         run: |
           set -euo pipefail
           [ -z "${PGURL:-}" ] && exit 0
-          {
-            echo; echo "### charges — indexes"; echo '```'
-            psql "$PGURL" --no-psqlrc -At -c \
-              "select indexname from pg_indexes where schemaname='public' and tablename='charges' order by 1;"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          # To stdout as well as the summary. The summary is nicer to look at and
+          # unreadable from `gh run view --log`, which is where you end up when
+          # checking this from a terminal -- the first time this step ran, its
+          # answer was invisible for exactly that reason.
+          psql "$PGURL" --no-psqlrc -At -c \
+            "select indexname from pg_indexes where schemaname='public' and tablename='charges' order by 1;" \
+            | tee /tmp/indexes.txt
+          { echo; echo "### charges — indexes"; echo '```'; cat /tmp/indexes.txt; echo '```'; } \
+            >> "$GITHUB_STEP_SUMMARY"

@@ -69,8 +69,15 @@ one at a time through the MCP server and the remote's `schema_migrations` table
 does not list them; a push would replay all thirteen, seven of which are not
 idempotent.
 
-That also means a file sitting in the directory is not proof it is live. Check
-rather than assume.
+That also means a file sitting in the directory is not proof it is live. The
+workflow lists `charges`' indexes from `pg_indexes` on every run as its last
+step — that is the direct answer. Do not try to infer an index's existence
+through PostgREST's `on_conflict`: it cannot match a *partial* index, so it
+reports one missing whether or not it is there.
+
+The workflow reads `SUPABASE_DB_URL`. Use the **Connection pooling** string
+(session mode, port 5432); the Direct connection host is IPv6-only and no
+GitHub runner can reach it.
 
 ## Deploying
 
