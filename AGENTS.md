@@ -59,10 +59,29 @@ evidence it is broken; check `gh run list --workflow=<name>` for `event=schedule
 `apply` off first: it executes the file inside a transaction and rolls back, so syntax,
 permissions and conflicts surface without keeping anything.
 
+It needs the `SUPABASE_DB_URL` secret, and only one of the two connection strings Supabase
+shows will do. Take the **Connection pooling** one, session mode, port 5432 —
+`postgresql://postgres.<ref>:<password>@aws-<region>.pooler.supabase.com:5432/postgres`.
+The Direct connection (`db.<ref>.supabase.co`, user `postgres`) is IPv6-only and no GitHub
+runner can reach it. Both mistakes are now caught before any SQL runs, with the reason
+named; the database password is not viewable after creation, so changing this means
+resetting it, which breaks nothing here — nothing in this project connects to Postgres
+directly.
+
 Not `supabase db push`. That replays whatever the remote's `schema_migrations` table does
 not list, and these migrations went in one at a time through the MCP server, which did not
 record them — seven of the thirteen are not idempotent and would error or double-apply.
 
 A file in `supabase/migrations/` is therefore still not proof it is live. Check before
-assuming: aim PostgREST's `on_conflict` at the index you expect and read the error code —
-`42P10` means no such constraint, and the probe writes nothing.
+assuming. The workflow's last step lists `charges`' indexes from `pg_indexes` on every run,
+pass or fail, and prints them to the log as well as the summary — that is the direct answer.
+
+Failing that, rehearse the migration: these are written `if not exists`, so an object that
+is already there comes back as `NOTICE: relation "…" already exists, skipping` rather than
+`CREATE INDEX`, and the rehearsal rolls back either way.
+
+Do **not** use PostgREST's `on_conflict` as an existence probe. It cannot infer a *partial*
+index — `on_conflict=` emits no `WHERE`, and Postgres will not match `ON CONFLICT (cols)`
+to an index with a predicate — so it answers `42P10` whether or not the index exists.
+`charges_one_per_service_month` is partial. This probe was used here for a week and read as
+"not applied" the whole time, including after it had been applied.
