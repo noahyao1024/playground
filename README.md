@@ -43,7 +43,8 @@ service role, server-side, reaches them. `/api/finance` answers one address —
 split bill's allowlist — with 401 for anyone else, and marks every response
 `private, no-store`. `/finance` shows a sign-in prompt when signed out and a 404
 to anyone else signed in. The navbar item and home-page card appear only for the
-owner, but they are conveniences; the page and the route are the gate.
+owner, but they are conveniences; the page and the route are the gate. The one
+other way in is `FINANCE_API_TOKEN`, below.
 
 ## Finance: how the numbers work
 
@@ -60,6 +61,34 @@ owner, but they are conveniences; the page and the route are the gate.
 - **Archiving** an account takes it off the books from the next day (Singapore
   time) and keeps its history. An account with balances cannot be deleted, and
   its currency cannot change — the database refuses both.
+
+## Finance API, for agents
+
+An agent or a script can work on the finance data as the owner — read it and
+record balances — with a bearer token. It opens `/api/finance/*` and nothing
+else: the split bill does not know it.
+
+1. Generate one: `openssl rand -hex 32` (or `python3 -c "import secrets;
+   print(secrets.token_hex(32))"`). Shorter than 32 characters is ignored.
+2. Set it in Vercel as `FINANCE_API_TOKEN` for Production, then redeploy: an
+   environment change reaches only deployments made after it.
+3. Give the agent the same value in its own environment. Never in this repo —
+   it is public.
+
+```bash
+curl -s https://playground.noahyao.me/api/finance/summary \
+  -H "Authorization: Bearer $FINANCE_API_TOKEN"
+```
+
+| | |
+|---|---|
+| `GET /api/finance/openapi` | OpenAPI 3.1 description of all of this. Public. |
+| `GET /api/finance/summary` | Where things stand, worked out: totals, change since the last record, each account's newest balance, history. |
+| `GET /api/finance` | Every account and balance, as stored. |
+| `POST /api/finance` | `{"action": …}`: `createAccount`, `updateAccount`, `deleteAccount`, `recordBalances`, `deleteBalance`. |
+
+To revoke it, replace the value and redeploy; the old one stops working with
+that deployment.
 
 ## Environment
 
