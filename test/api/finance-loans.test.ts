@@ -21,9 +21,10 @@ const account = (id: string, extra: Row = {}): Row => ({
   id, name: id, institution: null, region: "SG", currency: "SGD", kind: "asset", category: "cash",
   note: null, sort_order: 0, archived_at: null, created_at: "2026-01-01T00:00:00Z", ...extra,
 });
-// A 建设银行 mortgage, as its repayment plan states it.
+// A 建设银行 mortgage, as its repayment plan states it; its first repayment's
+// interest as the bank carried it, to a fraction of a cent.
 const terms = { loan_principal: 1_439_520.79, loan_rate: 3.2, loan_start: "2026-11-01", loan_term_months: 195, loan_method: "annuity" };
-const stated = { loan_payment: 9476.9, loan_first_interest: 3836.22, loan_maturity: "2043-01-16" };
+const stated = { loan_payment: 9476.9, loan_first_interest: 3836.2239, loan_maturity: "2043-01-16" };
 const mortgage = { name: "房贷", institution: "建设银行", region: "CN", currency: "CNY", kind: "liability", category: "mortgage" };
 
 let db: StandIn;
@@ -63,7 +64,7 @@ describe("the bank's stated payment and first interest", () => {
     expect(body).toMatchObject({ ...terms, ...stated, rate_changes: [] });
     const { periods } = (await schedule(body.id)).body;
     expect(periods[0]).toEqual({ n: 1, date: "2026-11-01", rate: 3.2, payment: 9476.9, principal: 5640.68, interest: 3836.22, balance: 1_433_880.11 });
-    expect(periods.at(-1)).toMatchObject({ n: 195, date: "2043-01-16", interest: 37.63, balance: 0 });
+    expect(periods.at(-1)).toEqual({ n: 195, date: "2043-01-16", rate: 3.2, payment: 9444.09, principal: 9406.46, interest: 37.63, balance: 0 });
   });
 
   it("are each optional, and go on and off with the terms", async () => {
@@ -81,6 +82,8 @@ describe("the bank's stated payment and first interest", () => {
       [{ ...mortgage, ...terms, loan_payment: 0 }, /loan_payment must be a positive amount/],
       [{ ...mortgage, ...terms, loan_payment: "9476.90" }, /loan_payment/],
       [{ ...mortgage, ...terms, loan_first_interest: -1 }, /loan_first_interest must be an amount of 0 or more/],
+      [{ ...mortgage, ...terms, loan_first_interest: 3836.22388 }, /loan_first_interest must be an amount of 0 or more, to at most 4 decimal places/],
+      [{ ...mortgage, ...terms, loan_method: "balloon" }, /loan_method must be annuity, equal_principal, flat, interest_only or null/],
       [{ ...mortgage, ...terms, loan_maturity: "2043-02-30" }, /loan_maturity must be a date/],
       // The last monthly repayment is 2043-01-01: the contract ends in the month from it.
       [{ ...mortgage, ...terms, loan_maturity: "2042-12-31" }, /from the last monthly one, 2043-01-01, to before 2043-02-01/],
@@ -301,8 +304,8 @@ describe("GET /api/finance/loan-schedule", () => {
       [5653.22, 3823.68, 1_428_226.89],
       [5668.29, 3808.61, 1_422_558.6],
     ]);
-    // 0.06 under the bank's 1,847,962.69 and 408,441.90: see test/lib/finance.test.ts.
-    expect(body.totals).toEqual({ payment: 1_847_962.63, principal: 1_439_520.79, interest: 408_441.84 });
+    // The bank's, to the cent: see test/lib/finance.test.ts.
+    expect(body.totals).toEqual({ payment: 1_847_962.69, principal: 1_439_520.79, interest: 408_441.9 });
     const loan = db.tables.finance_accounts[1] as unknown as FinanceAccount;
     expect(body).toEqual({ account_id: LOAN, currency: "CNY", method: "annuity", ...loanSchedule(loanTermsOf({ ...loan, rate_changes: [] })!) });
     // Only this loan's rate changes are read, on a unique order.

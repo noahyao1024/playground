@@ -3,7 +3,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { todayInSG } from "@/lib/dates";
 import { isFinanceCurrency, ratesOn } from "@/lib/fx";
 import {
-  addMonths, hasLevelPayment, isCategory, isKind, isLoanDayCount, isLoanMethod, isPrepaymentMode, isRegion, loanStatus, loanTermsOf,
+  addMonths, decimalPlaces, FIRST_INTEREST_PLACES, hasLevelPayment, isCategory, isKind, isLoanDayCount, isLoanMethod, isPrepaymentMode, isRegion,
+  LOAN_METHODS, loanStatus, loanTermsOf,
   type FinanceAccount, type Kind, type LoanTerms,
 } from "@/lib/finance";
 import {
@@ -179,14 +180,17 @@ function accountFields(input: Record<string, unknown>, kind: Kind): AccountField
       (n) => Number.isInteger(n) && n >= 1 && n <= 600, "a whole number of months, 1 to 600");
   }
   if ("loan_method" in input) {
-    if (input.loan_method !== null && !isLoanMethod(input.loan_method)) throw new Invalid("loan_method must be annuity or equal_principal");
+    if (input.loan_method !== null && !isLoanMethod(input.loan_method)) throw new Invalid(`loan_method must be ${LOAN_METHODS.join(", ")} or null`);
     out.loan_method = input.loan_method;
   }
   if ("loan_payment" in input) {
     out.loan_payment = nullableNumber(input.loan_payment, "loan_payment", (n) => n > 0, "a positive amount, or null");
   }
   if ("loan_first_interest" in input) {
-    out.loan_first_interest = nullableNumber(input.loan_first_interest, "loan_first_interest", (n) => n >= 0, "an amount of 0 or more, or null");
+    out.loan_first_interest = nullableNumber(
+      input.loan_first_interest, "loan_first_interest", (n) => n >= 0 && decimalPlaces(n) <= FIRST_INTEREST_PLACES,
+      `an amount of 0 or more, to at most ${FIRST_INTEREST_PLACES} decimal places, or null`,
+    );
   }
   if ("loan_maturity" in input) {
     if (input.loan_maturity !== null && !isRealDay(input.loan_maturity)) throw new Invalid("loan_maturity must be a date, YYYY-MM-DD, or null");

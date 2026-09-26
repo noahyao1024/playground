@@ -126,11 +126,16 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   cut-off, stored rates, the filters, loan schedules) lives in `src/lib/finance.ts`; the page
   only draws it. `liquidity` and `long_term` are null until set, meaning "as the category
   says" — read them through `liquidityOf` and `isLongTerm`, never directly.
-  A loan is scheduled period by period in whole cents, as the bank's 还款计划 is
-  (`loanSchedule`), and everything else about it is read off that schedule (`loanStatus`,
+  A loan is scheduled period by period, as the bank's 还款计划 is (`loanSchedule`), and
+  everything else about it is read off that schedule (`loanStatus`,
   `/api/finance/loan-schedule`). Don't bring back a closed form: it drifts from the bank by
-  cents a month. Four methods (`LOAN_METHODS`: 等额本息, 等额本金, 等本等息, 先息后本) and three
-  day counts (`loan_day_count`: 30/360, the default, or by the day, actual/365 or actual/360);
+  cents a month. Each month's interest is rounded to the cent, but for 等额本息 at a stated
+  `loan_payment`: its balance is carried exactly, a BigInt fraction, as 建设银行 carries it,
+  and shown to the cent, the principal what the shown balance fell by and the interest the
+  rest of the payment. That matches the bank's plan to the cent where rounding each month
+  drifted six fen; `loan_first_interest` takes four decimal places for it. Four methods
+  (`LOAN_METHODS`: 等额本息, 等额本金, 等本等息, 先息后本) and three day counts
+  (`loan_day_count`: 30/360, the default, or by the day, actual/365 or actual/360);
   interest is always balance × days, so a prepayment inside a period weights it by the day.
   `loan_payment`, `loan_first_interest` and `loan_maturity` are the bank's stated figures, null
   meaning "worked out" (a last repayment on the contract's end date is charged by the day).
