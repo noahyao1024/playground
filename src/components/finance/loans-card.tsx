@@ -1,11 +1,16 @@
 "use client";
 
+import { useState } from "react";
+import { TableProperties } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
-  LOAN_METHOD_LABELS, loanStatus, loanTermsOf, sortAccounts,
+  LOAN_METHOD_LABELS, displayName, loanStatus, loanTermsOf, sortAccounts,
   type FinanceAccount, type FinanceBalance, type LoanTerms,
 } from "@/lib/finance";
 import { dayLabel, original } from "@/lib/finance-format";
 import { AccountName } from "./account-name";
+import { LoanScheduleTable } from "./loan-schedule-table";
 
 /** How long a term reads best: whole years as years, anything else in months. */
 function termLabel(months: number): string {
@@ -21,6 +26,7 @@ export function LoansCard({ accounts, last, today }: {
   last: Map<string, FinanceBalance>;
   today: string;
 }) {
+  const [plan, setPlan] = useState<{ account: FinanceAccount; terms: LoanTerms } | null>(null);
   const loans = sortAccounts(accounts.filter((a) => !a.archived_at))
     .map((account) => ({ account, terms: loanTermsOf(account) }))
     .filter((l): l is { account: FinanceAccount; terms: LoanTerms } => l.terms !== null);
@@ -48,7 +54,7 @@ export function LoansCard({ accounts, last, today }: {
                 </p>
               </div>
               <p className="meta-row mt-0.5 flex flex-wrap gap-x-1.5 text-xs text-muted-foreground">
-                <span>{terms.rate}% a year</span>
+                <span>{s.rate}% a year</span>
                 <span>{LOAN_METHOD_LABELS[terms.method]}</span>
                 <span>{original(terms.principal, a.currency, { whole: true })} over {termLabel(terms.months)}</span>
               </p>
@@ -75,10 +81,29 @@ export function LoansCard({ accounts, last, today }: {
                   {drift < 0 ? "below" : "above"} the schedule&rsquo;s principal. Prepaid? These figures follow the original schedule.
                 </p>
               )}
+              <Button variant="outline" size="sm" className="mt-3" onClick={() => setPlan({ account: a, terms })}>
+                <TableProperties /> Repayment plan
+              </Button>
             </li>
           );
         })}
       </ul>
+
+      <Dialog open={plan !== null} onOpenChange={(o) => { if (!o) setPlan(null); }}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-2xl">
+          {plan && (
+            <>
+              <DialogHeader>
+                <DialogTitle>{displayName(plan.account)}: repayment plan</DialogTitle>
+                <DialogDescription>
+                  Every repayment to the cent, in {plan.account.currency}, as the bank&rsquo;s 还款计划 lists them. The next is marked.
+                </DialogDescription>
+              </DialogHeader>
+              <LoanScheduleTable terms={plan.terms} currency={plan.account.currency} today={today} />
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

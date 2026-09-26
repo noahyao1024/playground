@@ -126,6 +126,15 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   cut-off, stored rates, the filters, loan schedules) lives in `src/lib/finance.ts`; the page
   only draws it. `liquidity` and `long_term` are null until set, meaning "as the category
   says" — read them through `liquidityOf` and `isLongTerm`, never directly.
+  A loan is scheduled period by period in whole cents, as the bank's 还款计划 is
+  (`loanSchedule`), and everything else about it is read off that schedule (`loanStatus`,
+  `/api/finance/loan-schedule`). Don't bring back a closed form: it drifts from the bank by
+  cents a month. `loan_payment`, `loan_first_interest` and `loan_maturity` are the bank's stated
+  figures, null meaning "worked out" (a last repayment on the contract's end date is charged by
+  the day, 30/360); rate changes live in the private `finance_loan_rate_changes`, never
+  written over `loan_rate`, so the months before one keep their rate. Read a loan through
+  `loanTermsOf`, which gathers all of it. The code runs before that table's migration is
+  applied — no rate changes, the new columns never sent empty — so merge first, then apply.
   The owner's own agents get in as the owner with a bearer token: one made on the page
   (/finance → API access, `/api/finance/tokens`), stored only as its SHA-256 in the private
   `finance_api_tokens`, or `FINANCE_API_TOKEN` (`src/lib/finance-server.ts`). Tokens are made

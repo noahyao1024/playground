@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import {
-  financeDatabase, financeJson as json, isFinanceOwnerSession, newFinanceToken, reason, sha256Hex,
+  financeDatabase, financeJson as json, isFinanceOwnerSession, isUuid, newFinanceToken, reason, sha256Hex,
 } from "@/lib/finance-server";
 
 /** The tokens the owner's agents use on /api/finance/*: listed, made and revoked
@@ -12,7 +12,6 @@ const NAME_MAX = 60;
 // What may be said about a token: never its hash, whatever the query asked for.
 type Row = { id: string; name: string; created_at?: string };
 const shown = ({ id, name, created_at }: Row) => ({ id, name, created_at });
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function GET() {
   if (!(await isFinanceOwnerSession())) return json({ error: "Unauthorized" }, 401);
@@ -42,7 +41,7 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   if (!(await isFinanceOwnerSession())) return json({ error: "Unauthorized" }, 401);
   const id = req.nextUrl.searchParams.get("id") ?? "";
-  if (!UUID.test(id)) return json({ error: "Which token? Give its id as ?id=" }, 400);
+  if (!isUuid(id)) return json({ error: "Which token? Give its id as ?id=" }, 400);
   const db = financeDatabase();
   if (!db) return json({ error: "Supabase not configured" }, 500);
   const { data, error } = await db.from("finance_api_tokens").delete().eq("id", id).select("id");

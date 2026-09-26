@@ -4,7 +4,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { auth } from "@/lib/auth";
 import { isFinanceOwner } from "@/lib/access";
 import { fetchAllRows, pagesOf } from "@/lib/paginate";
-import type { FinanceAccount, FinanceBalance } from "@/lib/finance";
+import type { FinanceAccount, FinanceBalance, LoanRateChange } from "@/lib/finance";
 
 /** The server side of /api/finance/*: who may ask, and where the answers come
  *  from. Server-only -- it reads the service-role key and node:crypto. */
@@ -21,6 +21,11 @@ export function reason(err: unknown): string {
   return JSON.stringify(err);
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Whether an id could be one: checked before a query, which Postgres would
+ *  otherwise fail as a server error. */
+export const isUuid = (value: unknown): value is string => typeof value === "string" && UUID.test(value);
+
 /** The service role only. Elsewhere the anon key is a fallback; here it would
  *  read nothing, since the finance tables grant it nothing. */
 export function financeDatabase(): SupabaseClient | null {
@@ -29,11 +34,54 @@ export function financeDatabase(): SupabaseClient | null {
   return url && key ? createClient(url, key, { auth: { persistSession: false } }) : null;
 }
 
-/** Every account. A family's are few, but a read that trusted one request to
- *  return them all would lose some silently past PostgREST's row cap. */
-export function readAccounts(db: SupabaseClient): Promise<FinanceAccount[]> {
-  return fetchAllRows<FinanceAccount>((from, to) =>
-    db.from("finance_accounts").select("*").order("created_at").order("id").range(from, to));
+/** How PostgREST says a table is not there: Postgres's own code, or its own
+ *  when the table is missing from its schema cache. */
+const MISSING_TABLE = new Set(["42P01", "PGRST205"]);
+
+/** Loans' rate changes, oldest first -- every account's, or one account's.
+ *  Before 20260926_finance_loan_schedule is applied the table is not there,
+ *  and there are none: the loans are scheduled on their terms alone. */
+export function readRateChanges(db: SupabaseClient, accountId?: string): Promise<LoanRateChange[]> {
+  return fetchAllRows<LoanRateChange>(async (from, to) => {
+    let query = db.from("finance_loan_rate_changes").select("*");
+    if (accountId) query = query.eq("account_id", accountId);
+    const page = await query.order("account_id").order("effective_date").range(from, to);
+    return page.error && MISSING_TABLE.has(page.error.code) ? { data: [], error: null } : page;
+  });
+}
+
+/** Accounts with each one's rate changes on it, as the API hands them out. */
+export function withRateChanges<T extends FinanceAccount>(accounts: T[], changes: LoanRateChange[]): T[] {
+  const byAccount = new Map<string, LoanRateChange[]>();
+  for (const change of changes) {
+    const list = byAccount.get(change.account_id);
+    if (list) list.push(change);
+    else byAccount.set(change.account_id, [change]);
+  }
+  return accounts.map((a) => ({ ...a, rate_changes: byAccount.get(a.id) ?? [] }));
+}
+
+/** Every account, with its rate changes. A family's are few, but a read that
+ *  trusted one request to return them all would lose some silently past
+ *  PostgREST's row cap. */
+export async function readAccounts(db: SupabaseClient): Promise<FinanceAccount[]> {
+  const [accounts, changes] = await Promise.all([
+    fetchAllRows<FinanceAccount>((from, to) =>
+      db.from("finance_accounts").select("*").order("created_at").order("id").range(from, to)),
+    readRateChanges(db),
+  ]);
+  return withRateChanges(accounts, changes);
+}
+
+/** One account as the API hands it out, with its rate changes; null if there
+ *  is no such account. */
+export async function readAccount(db: SupabaseClient, id: string): Promise<FinanceAccount | null> {
+  const [{ data, error }, changes] = await Promise.all([
+    db.from("finance_accounts").select("*").eq("id", id).maybeSingle(),
+    readRateChanges(db, id),
+  ]);
+  if (error) throw error;
+  return data ? withRateChanges([data as FinanceAccount], changes)[0] : null;
 }
 
 /** Every balance, a page at a time, oldest first. They grow by a row per

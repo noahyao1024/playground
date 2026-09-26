@@ -73,7 +73,35 @@ export interface FinanceAccount {
   loan_start?: string | null;
   loan_term_months?: number | null;
   loan_method?: LoanMethod | null;
+  /** The monthly payment as the bank states it, under 等额本息. Null works it
+   *  out from the terms, to the cent. */
+  loan_payment?: number | null;
+  /** The first repayment's interest as the bank charged it: after a rate reset
+   *  it covers a different stretch than a plain month. Null works it out. */
+  loan_first_interest?: number | null;
+  /** The contract's end date, YYYY-MM-DD, when it falls after the last monthly
+   *  repayment's day: the last repayment is then due on it, with interest for
+   *  the days since the one before. Null: the last falls on the monthly day. */
+  loan_maturity?: string | null;
+  /** Its loan's rate changes, oldest first. An account read from the API always
+   *  has the list, empty for most. */
+  rate_changes?: LoanRateChange[];
   archived_at: string | null;
+  created_at: string;
+}
+
+/** A change to a loan's rate, kept beside the terms rather than written over
+ *  them, so the months before it keep the rate they were charged at. */
+export interface LoanRateChange {
+  id: string;
+  account_id: string;
+  /** The first repayment charged at the new rate, YYYY-MM-DD. */
+  effective_date: string;
+  /** Annual, in percent. */
+  rate: number;
+  /** The payment from then on as the bank states it, under 等额本息. Null works
+   *  it out: what repays the balance then owed over the repayments left. */
+  payment: number | null;
   created_at: string;
 }
 
@@ -322,13 +350,43 @@ export function sortAccounts(accounts: FinanceAccount[]): FinanceAccount[] {
     || a.id.localeCompare(b.id));
 }
 
-export type LoanTerms = { principal: number; rate: number; start: string; months: number; method: LoanMethod };
+export type LoanRateChangeTerms = Pick<LoanRateChange, "effective_date" | "rate" | "payment">;
 
-/** A loan's terms, if all of them are set. */
+export type LoanTerms = {
+  principal: number;
+  /** Annual, in percent. */
+  rate: number;
+  start: string;
+  months: number;
+  method: LoanMethod;
+  /** The bank's stated monthly payment, under 等额本息; absent or null works it out. */
+  payment?: number | null;
+  /** The first repayment's interest as the bank charged it; absent or null works it out. */
+  firstInterest?: number | null;
+  /** The contract's end date; absent or null, the last repayment is a monthly one. */
+  maturity?: string | null;
+  /** Changes to the rate, in any order. */
+  rateChanges?: LoanRateChangeTerms[];
+};
+
+const numberOrNull = (value: number | null | undefined) => (value == null ? null : Number(value));
+
+/** A loan's terms, if all five are set, with whatever else is known of how the
+ *  bank schedules it. PostgREST may hand numerics over as strings. */
 export function loanTermsOf(a: FinanceAccount): LoanTerms | null {
   const { loan_principal: principal, loan_rate: rate, loan_start: start, loan_term_months: months, loan_method: method } = a;
   if (principal == null || rate == null || !start || months == null || !method) return null;
-  return { principal: Number(principal), rate: Number(rate), start, months: Number(months), method };
+  return {
+    principal: Number(principal),
+    rate: Number(rate),
+    start,
+    months: Number(months),
+    method,
+    payment: numberOrNull(a.loan_payment),
+    firstInterest: numberOrNull(a.loan_first_interest),
+    maturity: a.loan_maturity ?? null,
+    rateChanges: (a.rate_changes ?? []).map((c) => ({ effective_date: c.effective_date, rate: Number(c.rate), payment: numberOrNull(c.payment) })),
+  };
 }
 
 /** Days in a month, `month` counted from 1. */
@@ -345,20 +403,144 @@ export function addMonths(day: string, months: number): string {
   return `${year}-${String(month).padStart(2, "0")}-${String(date).padStart(2, "0")}`;
 }
 
-/** How many repayments have fallen due by the end of `day`. */
-export function paymentsMade(terms: LoanTerms, day: string): number {
-  const [sy, sm, sd] = terms.start.split("-").map(Number);
-  const [y, m, d] = day.split("-").map(Number);
-  let made = (y - sy) * 12 + (m - sm);
-  if (d >= Math.min(sd, daysIn(y, m))) made += 1;
-  return Math.max(0, Math.min(terms.months, made));
+/** Days from one day to another in a 360-day year, every month thirty days
+ *  and a 31st counted as the 30th -- the way a Chinese bank counts a broken
+ *  period: 1 December to 16 January is 45. */
+export function days360(from: string, to: string): number {
+  const [y1, m1, d1] = from.split("-").map(Number);
+  const [y2, m2, d2] = to.split("-").map(Number);
+  return (y2 - y1) * 360 + (m2 - m1) * 30 + Math.min(d2, 30) - Math.min(d1, 30);
+}
+
+/** How many of the repayments have fallen due by the end of `day`: they are
+ *  in date order, the last on the contract's end date if it has one. */
+export function repaymentsMade(periods: Array<{ date: string }>, day: string): number {
+  let made = 0;
+  while (made < periods.length && periods[made].date <= day) made++;
+  return made;
+}
+
+/** One repayment of a loan, in the loan's currency. */
+export type LoanPeriod = {
+  /** Which repayment: 1 for the first. */
+  n: number;
+  date: string;
+  /** Annual, in percent: what this repayment's interest ran at. */
+  rate: number;
+  /** principal + interest. */
+  payment: number;
+  principal: number;
+  interest: number;
+  /** Principal still owed once it is paid. */
+  balance: number;
+};
+
+export type LoanSchedule = {
+  periods: LoanPeriod[];
+  /** The repayments added up: principal and interest make the payment. */
+  totals: { payment: number; principal: number; interest: number };
+};
+
+// A bank keeps a repayment plan in whole cents (分), and so does the schedule:
+// below, every amount is a whole number of cents until it is handed out.
+const toCents = (amount: number) => Math.round(amount * 100);
+
+/** a / b to the nearest whole number, halves up, for whole a ≥ 0 and b > 0 --
+ *  exactly, which floating-point division is not at a half. */
+function divideHalfUp(a: number, b: number): number {
+  const n = 2 * a + b, d = 2 * b;
+  return (n - (n % d)) / d;
+}
+
+// 360 days × 100 percent × the 10^9 a rate is scaled by to make it whole.
+const RATE_DAY_SCALE = BigInt(36_000_000_000_000);
+/** A month, in a 360-day year: a month's interest is the balance times rate / 12. */
+const MONTH = 30;
+
+/** Interest on `balance` cents at `rate` percent a year for `days` of a
+ *  360-day year, rounded to the cent with halves up. In floating point a half
+ *  cent can land a hair under and round down, so one that lands near a half is
+ *  settled in whole numbers; anywhere else the float cannot be wrong by enough
+ *  to matter. */
+function interestFor(balance: number, rate: number, days: number): number {
+  const approx = (balance * rate * days) / 36000;
+  if (Math.abs(approx - Math.floor(approx) - 0.5) > 1e-9 * Math.max(1, approx)) return Math.round(approx);
+  const twice = BigInt(balance) * BigInt(Math.round(rate * 1e9)) * BigInt(days) * BigInt(2);
+  return Number((twice + RATE_DAY_SCALE) / (RATE_DAY_SCALE * BigInt(2)));
+}
+
+/** The level payment, in cents, that repays `balance` cents over `months` at
+ *  `rate` percent a year: P·i(1+i)^n / ((1+i)^n − 1), to the cent. */
+function levelPayment(balance: number, rate: number, months: number): number {
+  if (rate === 0) return divideHalfUp(balance, months);
+  const i = rate / 1200;
+  const growth = (1 + i) ** months;
+  return Math.round((balance * i * growth) / (growth - 1));
+}
+
+/** loanSchedule's repayments, in cents. */
+function repayments(terms: LoanTerms): LoanPeriod[] {
+  const { months: n } = terms;
+  const annuity = terms.method === "annuity";
+  const changes = [...(terms.rateChanges ?? [])].sort((a, b) => (a.effective_date < b.effective_date ? -1 : a.effective_date > b.effective_date ? 1 : 0));
+  let balance = toCents(terms.principal);
+  // 等额本金's principal each month, fixed from the start.
+  const part = divideHalfUp(balance, n);
+  let rate = terms.rate;
+  let payment = annuity ? (terms.payment != null ? toCents(terms.payment) : levelPayment(balance, rate, n)) : 0;
+  // A contract ending after the last monthly day moves the last repayment to its end.
+  const maturity = terms.maturity && terms.maturity > addMonths(terms.start, n - 1) ? terms.maturity : null;
+  const periods: LoanPeriod[] = [];
+  for (let k = 1, next = 0; k <= n && balance > 0; k++) {
+    const date = k === n && maturity ? maturity : addMonths(terms.start, k - 1);
+    // Every change in force by this repayment; of two, the later decides.
+    let change: LoanRateChangeTerms | undefined;
+    while (next < changes.length && changes[next].effective_date <= date) change = changes[next++];
+    if (change) {
+      rate = change.rate;
+      if (annuity) payment = change.payment != null ? toCents(change.payment) : levelPayment(balance, rate, n - k + 1);
+    }
+    // Charged by the day, 30/360, for the stretch from the repayment before to the contract's end.
+    const days = k === n && maturity ? days360(addMonths(terms.start, k - 2), maturity) : MONTH;
+    const interest = k === 1 && terms.firstInterest != null ? toCents(terms.firstInterest) : interestFor(balance, rate, days);
+    // The last repayment clears what is left, and so does one that would repay more.
+    const principal = k === n ? balance : Math.min(annuity ? payment - interest : part, balance);
+    balance -= principal;
+    periods.push({ n: k, date, rate, payment: principal + interest, principal, interest, balance });
+  }
+  return periods;
+}
+
+const sumOf = (periods: LoanPeriod[], key: "payment" | "principal" | "interest") => periods.reduce((sum, p) => sum + p[key], 0);
+
+/** A loan's every repayment, to the cent, the way a bank's repayment plan
+ *  (还款计划) has it. Each month's interest is the balance owed times the
+ *  monthly rate, rounded to the cent. 等额本息 takes it out of a level payment
+ *  and repays the rest; 等额本金 repays the same principal each month, P/n to
+ *  the cent. The last repayment clears what is left, taking up the cents the
+ *  rounding moved.
+ *
+ *  The level payment is the bank's stated one when given, else the formula's
+ *  to the cent. A rate change sets the rate from its first repayment, and the
+ *  payment to the one given, or to what repays the balance then owed over the
+ *  repayments left. A contract that ends after the last monthly day has its
+ *  last repayment on that day, charged interest by the day, 30/360, from the
+ *  repayment before. */
+export function loanSchedule(terms: LoanTerms): LoanSchedule {
+  const periods = repayments(terms);
+  return {
+    periods: periods.map((p) => ({ ...p, payment: p.payment / 100, principal: p.principal / 100, interest: p.interest / 100, balance: p.balance / 100 })),
+    totals: { payment: sumOf(periods, "payment") / 100, principal: sumOf(periods, "principal") / 100, interest: sumOf(periods, "interest") / 100 },
+  };
 }
 
 /** Where a loan's schedule stands, in its own currency. */
 export type LoanStatus = {
-  /** This month's payment: level under 等额本息, the next, falling one under
-   *  等额本金. 0 once it is repaid. */
+  /** The next repayment: level under 等额本息 but for the last, which clears
+   *  what is left; falling under 等额本金. 0 once it is repaid. */
   payment: number;
+  /** Annual, in percent: what the next repayment runs at, or the last did. */
+  rate: number;
   payments_made: number;
   payments_left: number;
   /** Principal the schedule still has owing. A prepaid loan owes less: the
@@ -374,43 +556,25 @@ export type LoanStatus = {
   last_payment: string;
 };
 
-// Float residue left after the last payment, a millionth of a cent.
-const settled = (n: number) => (Math.abs(n) < 0.005 ? 0 : n);
-
-/** A loan's schedule on `day`. 等额本息 pays P·i(1+i)^n / ((1+i)^n − 1) each
- *  month; 等额本金 pays P/n of principal plus a month's interest on what is left. */
+/** A loan's schedule on `day`, read off its repayments. */
 export function loanStatus(terms: LoanTerms, day: string): LoanStatus {
-  const { principal, months: n } = terms;
-  const i = terms.rate / 100 / 12;
-  const k = paymentsMade(terms, day);
-  let payment: number, principalLeft: number, interestLeft: number, totalInterest: number;
-  if (terms.method === "annuity") {
-    const growth = (1 + i) ** n;
-    const level = i === 0 ? principal / n : (principal * i * growth) / (growth - 1);
-    const grown = (1 + i) ** k;
-    principalLeft = i === 0 ? principal - level * k : principal * grown - (level * (grown - 1)) / i;
-    interestLeft = level * (n - k) - principalLeft;
-    totalInterest = level * n - principal;
-    payment = k < n ? level : 0;
-  } else {
-    const part = principal / n;
-    principalLeft = principal - part * k;
-    interestLeft = (i * part * (n - k) * (n - k + 1)) / 2;
-    totalInterest = (i * part * n * (n + 1)) / 2;
-    payment = k < n ? part + principalLeft * i : 0;
-  }
-  principalLeft = settled(principalLeft);
-  interestLeft = settled(interestLeft);
+  const periods = repayments(terms);
+  const made = repaymentsMade(periods, day);
+  const next = periods[made];
+  const last = periods.at(-1);
+  const principalLeft = made === 0 ? toCents(terms.principal) : periods[made - 1].balance;
+  const interestLeft = sumOf(periods.slice(made), "interest");
   return {
-    payment,
-    payments_made: k,
-    payments_left: n - k,
-    principal_left: principalLeft,
-    interest_left: interestLeft,
-    total_left: principalLeft + interestLeft,
-    total_interest: totalInterest,
-    next_payment: k < n ? addMonths(terms.start, k) : null,
-    last_payment: addMonths(terms.start, n - 1),
+    payment: next ? next.payment / 100 : 0,
+    rate: (next ?? last)?.rate ?? terms.rate,
+    payments_made: made,
+    payments_left: periods.length - made,
+    principal_left: principalLeft / 100,
+    interest_left: interestLeft / 100,
+    total_left: (principalLeft + interestLeft) / 100,
+    total_interest: sumOf(periods, "interest") / 100,
+    next_payment: next?.date ?? null,
+    last_payment: last?.date ?? terms.start,
   };
 }
 
@@ -418,14 +582,6 @@ const cents = (n: number) => Math.round(n * 100) / 100;
 const rounded = (m: Money): Money => ({ cny: cents(m.cny), sgd: cents(m.sgd) });
 const roundedTotals = (t: Totals): Totals => ({ assets: rounded(t.assets), liabilities: rounded(t.liabilities), net: rounded(t.net) });
 const minus = (a: Money, b: Money): Money => ({ cny: a.cny - b.cny, sgd: a.sgd - b.sgd });
-const roundedLoan = (l: LoanStatus): LoanStatus => ({
-  ...l,
-  payment: cents(l.payment),
-  principal_left: cents(l.principal_left),
-  interest_left: cents(l.interest_left),
-  total_left: cents(l.total_left),
-  total_interest: cents(l.total_interest),
-});
 
 export type AccountSummary = FinanceAccount & {
   /** Institution and name, as the page shows them. */
@@ -501,7 +657,7 @@ export function summarize(accounts: FinanceAccount[], balances: FinanceBalance[]
             value: rounded(valueOf(b)),
           }
           : null,
-        loan: terms ? roundedLoan(loanStatus(terms, today)) : null,
+        loan: terms ? loanStatus(terms, today) : null,
       };
     }),
     history: history.map((p) => ({ day: p.day, ...roundedTotals(p) })),

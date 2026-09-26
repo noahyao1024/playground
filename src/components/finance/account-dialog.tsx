@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { toast } from "sonner";
+import { ChevronRight, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,12 +12,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { todayInSG } from "@/lib/dates";
 import {
-  CATEGORIES, ILLIQUID_CATEGORIES, LOAN_METHODS, LOAN_METHOD_LABELS, REGIONS, REGION_LABELS, displayName, isCategory, loanStatus, loanTermsOf,
-  type FinanceAccount, type Kind, type LoanMethod, type Region,
+  CATEGORIES, ILLIQUID_CATEGORIES, LOAN_METHODS, LOAN_METHOD_LABELS, REGIONS, REGION_LABELS, addMonths, displayName, isCategory, loanSchedule,
+  loanStatus, loanTermsOf,
+  type FinanceAccount, type Kind, type LoanMethod, type LoanPeriod, type LoanRateChange, type LoanTerms, type Region,
 } from "@/lib/finance";
 import { dayLabel, original } from "@/lib/finance-format";
 import { FINANCE_CURRENCIES } from "@/lib/fx";
+import { cn } from "@/lib/utils";
 import { financeAction, messageOf } from "./api";
+import { LoanScheduleTable } from "./loan-schedule-table";
 import { Segmented } from "./segmented";
 
 type Form = {
@@ -39,9 +43,16 @@ type Form = {
   start: string;
   months: number;
   method: LoanMethod;
+  /** What the bank states, where it differs from the formula; NaN or "" when not given. */
+  statedPayment: number;
+  firstInterest: number;
+  maturity: string;
 };
 
-const NO_LOAN = { loan_principal: null, loan_rate: null, loan_start: null, loan_term_months: null, loan_method: null };
+const NO_LOAN = {
+  loan_principal: null, loan_rate: null, loan_start: null, loan_term_months: null, loan_method: null,
+  loan_payment: null, loan_first_interest: null, loan_maturity: null,
+};
 const TERM_YEARS = [10, 15, 20, 25, 30];
 const METHOD_OPTIONS = LOAN_METHODS.map((m) => ({ value: m, label: LOAN_METHOD_LABELS[m] }));
 
@@ -53,7 +64,10 @@ const KIND_OPTIONS = [
 /** A new account's currency follows its region until chosen by hand. */
 const HOME_CURRENCY: Record<Region, string> = { CN: "CNY", SG: "SGD", OTHER: "USD" };
 
-const blankLoan = { hasLoan: false, principal: Number.NaN, rate: Number.NaN, start: "", months: 360, method: "annuity" as LoanMethod };
+const blankLoan = {
+  hasLoan: false, principal: Number.NaN, rate: Number.NaN, start: "", months: 360, method: "annuity" as LoanMethod,
+  statedPayment: Number.NaN, firstInterest: Number.NaN, maturity: "",
+};
 
 function formOf(account: FinanceAccount | null): Form {
   if (!account) {
@@ -75,7 +89,10 @@ function formOf(account: FinanceAccount | null): Form {
     liquidity: account.liquidity == null ? null : Number(account.liquidity),
     longTerm: account.long_term ?? null,
     ...(terms
-      ? { hasLoan: true, principal: terms.principal, rate: terms.rate, start: terms.start, months: terms.months, method: terms.method }
+      ? {
+        hasLoan: true, principal: terms.principal, rate: terms.rate, start: terms.start, months: terms.months, method: terms.method,
+        statedPayment: terms.payment ?? Number.NaN, firstInterest: terms.firstInterest ?? Number.NaN, maturity: terms.maturity ?? "",
+      }
       : blankLoan),
   };
 }
@@ -86,7 +103,25 @@ function loanProblem(f: Form): string | null {
   if (!(f.rate >= 0 && f.rate < 100)) return "Enter the annual rate, in percent";
   if (!f.start) return "Enter the first repayment date";
   if (!(Number.isInteger(f.months) && f.months >= 1 && f.months <= 600)) return "Enter the term, in whole months";
+  if (Number.isFinite(f.statedPayment) && !(f.statedPayment > 0)) return "The bank's monthly payment has to be above zero";
+  if (Number.isFinite(f.firstInterest) && !(f.firstInterest >= 0)) return "The first repayment's interest cannot be below zero";
+  const last = addMonths(f.start, f.months - 1), after = addMonths(f.start, f.months);
+  if (f.maturity && (f.maturity < last || f.maturity >= after)) {
+    return `The contract's end date falls from the last monthly repayment, ${dayLabel(last)}, to before ${dayLabel(after)}`;
+  }
   return null;
+}
+
+/** The loan the form describes: what the bank states only where given, and
+ *  a stated payment only under 等额本息, which alone has a level one. */
+function termsOf(f: Form, rateChanges: LoanRateChange[]): LoanTerms {
+  return {
+    principal: f.principal, rate: f.rate, start: f.start, months: f.months, method: f.method,
+    payment: f.method === "annuity" && Number.isFinite(f.statedPayment) ? f.statedPayment : null,
+    firstInterest: Number.isFinite(f.firstInterest) ? f.firstInterest : null,
+    maturity: f.maturity || null,
+    rateChanges,
+  };
 }
 
 /** Adding an account, or changing one. `account` null adds. */
@@ -138,15 +173,27 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
   const [form, setForm] = useState<Form>(() => formOf(account));
   const [currencyChosen, setCurrencyChosen] = useState(account !== null);
   const [saving, setSaving] = useState(false);
+  // Saved as each is added or taken back, not with the rest of the form.
+  const [rateChanges, setRateChanges] = useState<LoanRateChange[]>(account?.rate_changes ?? []);
+  const [showPlan, setShowPlan] = useState(false);
   const set = (patch: Partial<Form>) => setForm((f) => ({ ...f, ...patch }));
   const categories = CATEGORIES[form.kind];
   // What the switches show when nothing was chosen: the category's default.
   const liquidShare = form.liquidity ?? (ILLIQUID_CATEGORIES.has(form.category) ? 0 : 1);
   const longTerm = form.longTerm ?? form.category === "mortgage";
   const problem = form.hasLoan ? loanProblem(form) : null;
-  const preview = form.kind === "liability" && form.hasLoan && !problem
-    ? loanStatus({ principal: form.principal, rate: form.rate, start: form.start, months: form.months, method: form.method }, todayInSG())
-    : null;
+  const today = todayInSG();
+  const terms = form.kind === "liability" && form.hasLoan && !problem ? termsOf(form, rateChanges) : null;
+  const preview = terms ? loanStatus(terms, today) : null;
+  // What the formula alone makes of the first repayment: what an empty field means.
+  const worked = terms ? loanSchedule({ ...terms, payment: null, firstInterest: null, rateChanges: [] }).periods[0] : undefined;
+  // Rate changes go onto a loan already saved: the server checks them against its terms.
+  const savedLoan = account && loanTermsOf(account) ? account : null;
+
+  function rateChangesSaved(saved: FinanceAccount) {
+    setRateChanges(saved.rate_changes ?? []);
+    onSaved(saved);
+  }
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -171,7 +218,12 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
             liquidity: null,
             long_term: form.longTerm,
             ...(form.hasLoan
-              ? { loan_principal: form.principal, loan_rate: form.rate, loan_start: form.start, loan_term_months: form.months, loan_method: form.method }
+              ? {
+                loan_principal: form.principal, loan_rate: form.rate, loan_start: form.start, loan_term_months: form.months, loan_method: form.method,
+                loan_payment: form.method === "annuity" && Number.isFinite(form.statedPayment) ? form.statedPayment : null,
+                loan_first_interest: Number.isFinite(form.firstInterest) ? form.firstInterest : null,
+                loan_maturity: form.maturity || null,
+              }
               : NO_LOAN),
           }),
       };
@@ -367,12 +419,71 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
                     ? "等额本息: the same payment every month, mostly interest at first."
                     : "等额本金: the same principal every month, so the payment falls as the interest does."}
                 </p>
-                {preview ? (
-                  <p className="rounded-md bg-muted/60 px-2.5 py-2 text-xs">
-                    <span className="font-medium tabular-nums">{original(preview.payment, form.currency)}</span> a month now
-                    {" · "}{preview.payments_left} payments left, the last on {dayLabel(preview.last_payment)}
-                    {" · "}<span className="tabular-nums">{original(preview.total_interest, form.currency, { whole: true })}</span> interest over the loan
+
+                <div className="grid gap-1">
+                  <p className="text-xs text-muted-foreground">
+                    As the bank&rsquo;s repayment plan states them, where they differ from what the terms work out to &mdash; the first
+                    repayment after a rate reset often does, and the last when the contract ends after the monthly day. Empty, they are
+                    worked out.
                   </p>
+                  <div className="grid grid-cols-2 items-end gap-3">
+                    {form.method === "annuity" && (
+                      <div className="grid gap-1.5">
+                        <Label htmlFor="loan-payment">Monthly payment</Label>
+                        <NumberInput
+                          id="loan-payment" value={form.statedPayment} emptyValue={Number.NaN} step="any" inputMode="decimal"
+                          placeholder={worked ? original(worked.payment, form.currency, { code: false }) : undefined}
+                          className="h-9 text-right tabular-nums" onValueChange={(v) => set({ statedPayment: v })}
+                        />
+                      </div>
+                    )}
+                    <div className="grid gap-1.5">
+                      <Label htmlFor="loan-first-interest">First repayment&rsquo;s interest</Label>
+                      <NumberInput
+                        id="loan-first-interest" value={form.firstInterest} emptyValue={Number.NaN} step="any" inputMode="decimal"
+                        placeholder={worked ? original(worked.interest, form.currency, { code: false }) : undefined}
+                        className="h-9 text-right tabular-nums" onValueChange={(v) => set({ firstInterest: v })}
+                      />
+                    </div>
+                  </div>
+                  <div className="mt-2 grid gap-1.5">
+                    <Label htmlFor="loan-maturity">
+                      Contract end date
+                      {form.start && Number.isInteger(form.months) && form.months >= 1 && (
+                        <span className="font-normal text-muted-foreground">
+                          (if after {dayLabel(addMonths(form.start, form.months - 1))})
+                        </span>
+                      )}
+                    </Label>
+                    <Input id="loan-maturity" type="date" value={form.maturity} onChange={(e) => set({ maturity: e.target.value })} className="h-9" />
+                  </div>
+                </div>
+                {preview && terms ? (
+                  <>
+                    <p className="rounded-md bg-muted/60 px-2.5 py-2 text-xs">
+                      <span className="font-medium tabular-nums">{original(preview.payment, form.currency)}</span> a month now
+                      {" · "}{preview.payments_left} payments left, the last on {dayLabel(preview.last_payment)}
+                      {" · "}<span className="tabular-nums">{original(preview.total_interest, form.currency, { whole: true })}</span> interest over the loan
+                    </p>
+                    <RateChanges
+                      account={savedLoan}
+                      changes={rateChanges}
+                      schedule={loanSchedule(terms).periods}
+                      method={form.method}
+                      currency={form.currency}
+                      onSaved={rateChangesSaved}
+                    />
+                    <button
+                      type="button"
+                      aria-expanded={showPlan}
+                      onClick={() => setShowPlan((v) => !v)}
+                      className="-ml-1 flex items-center gap-1 justify-self-start rounded px-1 text-left text-xs font-medium hover:bg-muted"
+                    >
+                      <ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", showPlan && "rotate-90")} />
+                      Every repayment
+                    </button>
+                    {showPlan && <LoanScheduleTable terms={terms} currency={form.currency} today={today} />}
+                  </>
                 ) : (
                   <p className="text-xs text-muted-foreground">{problem}.</p>
                 )}
@@ -392,6 +503,141 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
         <Button type="submit" disabled={saving}>{saving ? "Saving…" : account ? "Save" : "Add account"}</Button>
       </DialogFooter>
     </form>
+  );
+}
+
+/** A loan's rate changes: each from the first repayment charged at the new
+ *  rate, with the payment the bank states or else one worked out. Saved the
+ *  moment each is added or taken back -- a loan not saved yet has none. */
+function RateChanges({ account, changes, schedule, method, currency, onSaved }: {
+  /** The loan as saved; null until it has been. */
+  account: FinanceAccount | null;
+  changes: LoanRateChange[];
+  /** The schedule as the form has it, to read each change's payment off. */
+  schedule: LoanPeriod[];
+  method: LoanMethod;
+  currency: string;
+  onSaved: (account: FinanceAccount) => void;
+}) {
+  const [day, setDay] = useState("");
+  const [rate, setRate] = useState(Number.NaN);
+  const [payment, setPayment] = useState(Number.NaN);
+  const [busy, setBusy] = useState(false);
+  // The change whose removal is waiting to be confirmed.
+  const [removing, setRemoving] = useState<string | null>(null);
+
+  async function add() {
+    if (!account) return;
+    if (!day) { toast.error("Enter the first repayment charged at the new rate"); return; }
+    if (!(rate >= 0 && rate < 100)) { toast.error("Enter the new annual rate, in percent"); return; }
+    setBusy(true);
+    try {
+      onSaved(await financeAction<FinanceAccount>("addLoanRateChange", {
+        account_id: account.id,
+        effective_date: day,
+        rate,
+        payment: method === "annuity" && Number.isFinite(payment) ? payment : null,
+      }));
+      setDay("");
+      setRate(Number.NaN);
+      setPayment(Number.NaN);
+      toast.success(`${rate}% from ${dayLabel(day)}`);
+    } catch (err) {
+      toast.error(messageOf(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(change: LoanRateChange) {
+    try {
+      onSaved(await financeAction<FinanceAccount>("deleteLoanRateChange", { id: change.id }));
+      toast.success(`Took back ${change.rate}% from ${dayLabel(change.effective_date)}`);
+    } catch (err) {
+      toast.error(messageOf(err));
+    } finally {
+      setRemoving(null);
+    }
+  }
+
+  // Enter in these fields adds the change; it must not save and close the account form around them.
+  const addOnEnter = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void add();
+    }
+  };
+
+  return (
+    <div className="grid gap-2 border-t pt-3">
+      <div>
+        <p className="text-sm font-medium">Rate changes</p>
+        <p className="text-xs text-muted-foreground">
+          From the first repayment charged at the new rate; the months before keep theirs. Saved as soon as added.
+        </p>
+      </div>
+      {changes.length > 0 && (
+        <ul className="divide-y divide-border/60 text-sm">
+          {changes.map((c) => {
+            const first = schedule.find((p) => p.date >= c.effective_date);
+            return (
+              <li key={c.id} className="flex items-center gap-2 py-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="tabular-nums">{Number(c.rate)}% from {dayLabel(c.effective_date)}</p>
+                  {first && (
+                    <p className="text-xs text-muted-foreground tabular-nums">
+                      {original(first.payment, currency)} a month{c.payment == null && method === "annuity" ? ", worked out" : ""}
+                    </p>
+                  )}
+                </div>
+                {removing === c.id ? (
+                  <>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setRemoving(null)}>Keep</Button>
+                    <Button type="button" variant="destructive" size="sm" onClick={() => remove(c)}>Remove</Button>
+                  </>
+                ) : (
+                  <Button
+                    type="button" variant="ghost" size="sm" aria-label={`Remove ${c.rate}% from ${dayLabel(c.effective_date)}`}
+                    onClick={() => setRemoving(c.id)} className="text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 />
+                  </Button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {account ? (
+        <div className="grid grid-cols-2 items-end gap-2">
+          <div className="grid gap-1.5">
+            <Label htmlFor="change-day" className="text-xs">First at the new rate</Label>
+            <Input id="change-day" type="date" value={day} onChange={(e) => setDay(e.target.value)} onKeyDown={addOnEnter} className="h-9" />
+          </div>
+          <div className="grid gap-1.5">
+            <Label htmlFor="change-rate" className="text-xs">Rate, %</Label>
+            <NumberInput
+              id="change-rate" value={rate} emptyValue={Number.NaN} step="any" inputMode="decimal"
+              onValueChange={setRate} onKeyDown={addOnEnter} className="h-9 text-right tabular-nums"
+            />
+          </div>
+          {method === "annuity" && (
+            <div className="grid gap-1.5">
+              <Label htmlFor="change-payment" className="text-xs">Payment <span className="font-normal text-muted-foreground">(optional)</span></Label>
+              <NumberInput
+                id="change-payment" value={payment} emptyValue={Number.NaN} step="any" inputMode="decimal" placeholder="Worked out"
+                onValueChange={setPayment} onKeyDown={addOnEnter} className="h-9 text-right tabular-nums"
+              />
+            </div>
+          )}
+          <Button type="button" variant="outline" disabled={busy} onClick={() => void add()} className="h-9 self-end">
+            <Plus /> {busy ? "Adding…" : "Add"}
+          </Button>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">Save the loan first; then its rate changes go here.</p>
+      )}
+    </div>
   );
 }
 
