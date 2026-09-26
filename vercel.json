@@ -5,8 +5,8 @@
       "schedule": "0 0 1-3 * *"
     },
     {
-      "path": "/api/cron/daily",
-      "schedule": "23 1 * * *"
+      "path": "/api/cron/keepalive",
+      "schedule": "23 13 * * *"
     }
   ]
 }

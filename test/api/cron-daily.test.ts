@@ -46,15 +46,20 @@ afterEach(async () => {
   await db.close();
 });
 
-const run = async (auth = "Bearer cron-secret") => {
-  const res = await GET(new NextRequest("http://localhost/api/cron/daily", { headers: auth ? { authorization: auth } : {} }));
+const run = async (auth = "Bearer cron-secret", query = "") => {
+  const res = await GET(new NextRequest(`http://localhost/api/cron/daily${query}`, { headers: auth ? { authorization: auth } : {} }));
   return { status: res.status, body: await res.json() };
+};
+const smtp = () => {
+  vi.stubEnv("SMTP_USERNAME", "me@example.com");
+  vi.stubEnv("SMTP_PASSWORD", "app-password");
 };
 
 describe("the daily job", () => {
-  it("runs for Vercel Cron alone", async () => {
+  it("answers only a caller holding CRON_SECRET", async () => {
     expect((await run("Bearer wrong")).status).toBe(401);
     expect((await run("")).status).toBe(401);
+    expect((await run("cron-secret")).status).toBe(401);
     vi.stubEnv("CRON_SECRET", undefined);
     expect((await run()).status).toBe(500);
     expect(db.requests).toHaveLength(0);
@@ -113,7 +118,7 @@ describe("the daily job", () => {
     expect(sent.mails).toHaveLength(0);
   });
 
-  it("answers as a failed run when the mail does not go, so Vercel's cron log shows it", async () => {
+  it("answers as a failed run when the mail does not go, so the workflow calling it fails too", async () => {
     vi.stubEnv("SMTP_USERNAME", "me@example.com");
     vi.stubEnv("SMTP_PASSWORD", "wrong");
     sent.fail = new Error("535 Username and Password not accepted");
@@ -124,9 +129,47 @@ describe("the daily job", () => {
   });
 });
 
-describe("vercel.json", () => {
-  it("runs the daily job once a day -- the most the Hobby plan allows; more fails the deploy", () => {
+describe("a test run", () => {
+  it("mails even when nobody is over the line, to check the setup end to end", async () => {
+    vi.stubEnv("UNPAID_THRESHOLD_CNY", "10000");
+    smtp();
+    const { status, body } = await run(undefined, "?test=1");
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ over: [], email: "sent" });
+    expect(sent.mails).toEqual([expect.objectContaining({ subject: "Split bill: unpaid alert test", text: expect.stringContaining("¥10,000") })]);
+  });
+
+  it("sends the real alert when somebody is over it", async () => {
+    smtp();
+    await run(undefined, "?test=1");
+    expect(sent.mails).toEqual([expect.objectContaining({ subject: "Split bill: 1 over the unpaid threshold" })]);
+  });
+
+  it("says so when there is no mail setup to test", async () => {
+    vi.stubEnv("UNPAID_THRESHOLD_CNY", "10000");
+    const { body } = await run(undefined, "?test=1");
+    expect(body).toMatchObject({ over: [], email: "not configured" });
+  });
+
+  it("is only ?test=1: anything else is an ordinary run", async () => {
+    vi.stubEnv("UNPAID_THRESHOLD_CNY", "10000");
+    smtp();
+    expect((await run(undefined, "?test=0")).body.email).toBe("not needed");
+    expect(sent.mails).toHaveLength(0);
+  });
+});
+
+describe("who calls it", () => {
+  it("is the Daily jobs workflow, every day, with the secret", () => {
+    const workflow = readFileSync(".github/workflows/daily-jobs.yml", "utf8");
+    expect(workflow).toContain("- cron: '23 1 * * *'");
+    expect(workflow).toContain("node scripts/daily-jobs.mjs");
+    expect(workflow).toContain("CRON_SECRET: ${{ secrets.CRON_SECRET }}");
+    expect(readFileSync("scripts/daily-jobs.mjs", "utf8")).toContain("/api/cron/daily");
+  });
+
+  it("is not Vercel Cron as well: two callers would mean two mails", () => {
     const { crons } = JSON.parse(readFileSync("vercel.json", "utf8"));
-    expect(crons).toContainEqual({ path: "/api/cron/daily", schedule: "23 1 * * *" });
+    expect(crons.map((c: { path: string }) => c.path)).not.toContain("/api/cron/daily");
   });
 });

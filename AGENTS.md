@@ -86,18 +86,26 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
 
 - Next.js 16 App Router, TypeScript, Tailwind v4, shadcn/ui
 - Supabase (`@supabase/supabase-js`) for data; NextAuth v5 + Google OAuth for sign-in
-- `/api/cron/daily` (Vercel Cron, `vercel.json`) — daily: its reads keep the free-tier Supabase
-  project from being paused, and it emails `ALERT_TO` — the owner, not the people who owe — a
-  list of anyone owing more than `UNPAID_THRESHOLD_CNY`. Mails only once `SMTP_USERNAME` and
-  `SMTP_PASSWORD` are set in Vercel; silent when nobody is over the line, the common case.
-- `.github/workflows/supabase-keepalive.yml` and `unpaid-alert.yml` — the same two jobs, on
-  their way out: they stay until a Vercel run has mailed, then go with their GitHub secrets.
-  Configuration belongs in Vercel; GitHub keeps only `SUPABASE_DB_URL` for migrations.
+- `.github/workflows/daily-jobs.yml` — daily, runs `scripts/daily-jobs.mjs`, which calls
+  `/api/cron/bill` on the 1st–3rd in Singapore and `/api/cron/daily` every day, and fails the
+  run when a job did not do its work, so GitHub mails the owner. `/api/cron/daily` emails
+  `ALERT_TO` — the owner, not the people who owe — a list of anyone owing more than
+  `UNPAID_THRESHOLD_CNY`, once `SMTP_USERNAME` and `SMTP_PASSWORD` are set in Vercel. The run's
+  log is public: counts and states only, never names or amounts. Schedule here rather than on
+  Vercel because Vercel Cron on Hobby neither retries nor tells anyone and keeps an hour of
+  logs; the work stays on the site, next to its configuration. GitHub holds `CRON_SECRET` (the
+  value Vercel holds) and `SUPABASE_DB_URL`, nothing else.
+- `.github/workflows/supabase-keepalive.yml` and `unpaid-alert.yml` — the old way, with their
+  own copies of the Supabase and SMTP settings, on their way out: they stay until the Daily jobs
+  workflow has mailed, then go with those secrets.
 - `.github/workflows/check.yml` — typecheck, lint and tests on every pull request and push
   to `main`, with a Postgres service for `test/sql/`. The gate pre-approved deploys rest on.
-- `vercel.json` — cron hitting `/api/cron/bill` at 00:00 UTC on the 1st, 2nd and 3rd. The
-  last two are retries: billing fills only what has no charge yet, so they bill nothing when
-  the 1st worked.
+- `vercel.json` — cron hitting `/api/cron/bill` at 00:00 UTC on the 1st, 2nd and 3rd, and
+  `/api/cron/keepalive` daily. The billing runs after the first are retries: billing fills only
+  what has no charge yet, so they, and the workflow's call, bill nothing when the 1st worked.
+  These are the backstop for GitHub, which stops scheduling in a public repository after 60
+  days without a commit: bills still go out and the database stays awake. Never schedule
+  `/api/cron/daily` here too — two callers would mean two mails.
 - `.github/dependabot.yml` — grouped weekly updates, split into production and development,
   with majors excluded. Not because majors are unwelcome, but because they want someone able
   to look at the result; a green preview build does not catch a renamed icon. Note that a
