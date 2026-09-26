@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  addMonths, changeBetween, displayName, draftFor, historyOf, isCategory, isLongTerm, lastBalances, latestOn,
+  addMonths, decimalPlaces, changeBetween, displayName, draftFor, historyOf, isCategory, isLongTerm, lastBalances, latestOn,
   days360, loanSchedule, loanStatus, loanTermsOf, positionOn, sortAccounts, summarize, valueOf, weightOf, withAccount, withBalances,
-  type FinanceAccount, type FinanceBalance, type Lens, type LoanTerms, type Position,
+  type FinanceAccount, type FinanceBalance, type Lens, type LoanPeriod, type LoanTerms, type Position,
 } from "@/lib/finance";
 
 const account = (id: string, extra: Partial<FinanceAccount> = {}): FinanceAccount => ({
@@ -401,12 +401,15 @@ describe("a bank's repayment plan, to the cent", () => {
   // A 建设银行 plan: what was owed at a rate reset, lent on over the rest of the
   // term at the bank's stated payment, its first repayment's interest as
   // charged, and the contract ending on the 16th while repayments fall on the 1st.
+  // The bank carries the balance unrounded and shows it to the cent: the first
+  // repayment's interest it carried as 3,836.2239, and showed as 3,836.22.
   const ccb: LoanTerms = {
     principal: 1_439_520.79, rate: 3.2, start: "2026-11-01", months: 195, method: "annuity",
-    payment: 9476.9, firstInterest: 3836.22, maturity: "2043-01-16",
+    payment: 9476.9, firstInterest: 3836.2239, maturity: "2043-01-16",
   };
   const plan = loanSchedule(ccb);
   const at = (n: number) => plan.periods[n - 1];
+  const line = (p: LoanPeriod) => [p.n, p.date, p.principal, p.interest, p.balance];
 
   it("matches its first three repayments line by line", () => {
     expect(plan.periods.slice(0, 3)).toEqual([
@@ -417,49 +420,145 @@ describe("a bank's repayment plan, to the cent", () => {
     expect(loanStatus(ccb, "2027-01-01")).toMatchObject({ payments_made: 3, principal_left: 1_422_558.6, payment: 9476.9, next_payment: "2027-02-01" });
   });
 
-  it("matches the principal and interest of each of its last monthly repayments, 189 to 194", () => {
-    expect(plan.periods.slice(188, 194).map((p) => [p.n, p.date, p.principal, p.interest])).toEqual([
-      [189, "2042-07-01", 9301.99, 174.91],
-      [190, "2042-08-01", 9326.79, 150.11],
-      [191, "2042-09-01", 9351.67, 125.23],
-      [192, "2042-10-01", 9376.6, 100.3],
-      [193, "2042-11-01", 9401.61, 75.29],
-      [194, "2042-12-01", 9426.68, 50.22],
+  it("matches seven repayments from the middle of the term, 98 to 104", () => {
+    expect(plan.periods.slice(97, 104).map(line)).toEqual([
+      [98, "2034-12-01", 7300.07, 2176.83, 809_009.6],
+      [99, "2035-01-01", 7319.54, 2157.36, 801_690.06],
+      [100, "2035-02-01", 7339.06, 2137.84, 794_351],
+      [101, "2035-03-01", 7358.63, 2118.27, 786_992.37],
+      [102, "2035-04-01", 7378.26, 2098.64, 779_614.11],
+      [103, "2035-05-01", 7397.92, 2078.98, 772_216.19],
+      [104, "2035-06-01", 7417.66, 2059.24, 764_798.53],
     ]);
   });
 
+  it("matches its last monthly repayments, 189 to 194, balances and all", () => {
+    expect(plan.periods.slice(188, 194).map(line)).toEqual([
+      [189, "2042-07-01", 9301.99, 174.91, 56_289.81],
+      [190, "2042-08-01", 9326.79, 150.11, 46_963.02],
+      [191, "2042-09-01", 9351.67, 125.23, 37_611.35],
+      [192, "2042-10-01", 9376.6, 100.3, 28_234.75],
+      [193, "2042-11-01", 9401.61, 75.29, 18_833.14],
+      [194, "2042-12-01", 9426.68, 50.22, 9406.46],
+    ]);
+  });
+
+  it("shows a month's interest a cent off the balance times the rate, where the bank's plan does", () => {
+    // 786,992.37 × 3.2% / 12 = 2,098.6463, which rounds to 2,098.65; but the
+    // balance, carried unrounded, shows 7,378.26 less, and the payment's rest is 2,098.64.
+    expect(Math.round((at(101).balance * 100 * 3.2) / 1200)).toBe(209_865);
+    expect(at(102).interest).toBe(2098.64);
+  });
+
   it("falls due last on the contract's end date, charged by the day: 45 days, 30/360, from 1 December", () => {
-    const last = at(195);
     expect(plan.periods).toHaveLength(195);
-    expect(last).toMatchObject({ n: 195, date: "2043-01-16", interest: 37.63, principal: at(194).balance, balance: 0 });
-    // 9,406.40 × 3.2% / 360 × 45 = 37.6256 → 37.63. A plain month's would be 25.08.
+    // 9,406.46… × 3.2% / 360 × 45 = 37.6258 → 37.63, beside the 9,406.46 still owed. A plain month's would be 25.08.
+    expect(at(195)).toEqual({ n: 195, date: "2043-01-16", rate: 3.2, payment: 9444.09, principal: 9406.46, interest: 37.63, balance: 0 });
     expect(days360("2042-12-01", "2043-01-16")).toBe(45);
     expect(loanSchedule({ ...ccb, maturity: null }).periods.at(-1)).toMatchObject({ date: "2043-01-01", interest: 25.08 });
     // Made only on the day itself.
-    expect(loanStatus(ccb, "2043-01-10")).toMatchObject({ payments_made: 194, next_payment: "2043-01-16", payment: last.payment });
+    expect(loanStatus(ccb, "2043-01-10")).toMatchObject({ payments_made: 194, next_payment: "2043-01-16", payment: 9444.09 });
     expect(loanStatus(ccb, "2043-01-16")).toMatchObject({ payments_made: 195, next_payment: null, last_payment: "2043-01-16" });
   });
 
-  // The bank's balances from 189 on run 0.06 above these: its plan rounds one
-  // month's interest 6 fen higher somewhere in 4 to 188, lines not in hand, which
-  // no rounding rule tried reproduces. Every principal and interest seen matches
-  // to the cent, so the 0.06 rides along in the balance to the last repayment and
-  // the totals. Held to within 0.10 rather than exactly, until those lines are in.
-  const near = (got: number, bank: number) => expect(Math.abs(got - bank), `${got} against the bank's ${bank}`).toBeLessThanOrEqual(0.1);
+  it("adds up to the bank's totals", () => {
+    expect(plan.totals).toEqual({ payment: 1_847_962.69, principal: 1_439_520.79, interest: 408_441.9 });
+  });
 
-  it("comes within 0.10 of the bank's balances from 189 on, its last repayment, and its totals", () => {
-    const bank = [56_289.81, 46_963.02, 37_611.35, 28_234.75, 18_833.14, 9406.46];
-    plan.periods.slice(188, 194).forEach((p, i) => near(p.balance, bank[i]));
-    near(at(195).payment, 9444.09);
-    near(plan.totals.payment, 1_847_962.69);
-    near(plan.totals.interest, 408_441.9);
-    expect(plan.totals.principal).toBe(1_439_520.79);
+  it("needs the first repayment's interest as the bank carried it, not as it showed it", () => {
+    // 3,836.22 starts the balance 0.0039 short of the bank's, and by the 98th that has moved a cent.
+    const shown = loanSchedule({ ...ccb, firstInterest: 3836.22 }).periods;
+    expect(line(shown[97])).toEqual([98, "2034-12-01", 7300.08, 2176.82, 809_009.59]);
+  });
+
+  it("rounds a balance on half a cent up, exactly, where floating point would round it down", () => {
+    const t: LoanTerms = { principal: 200, rate: 4.8, start: "2026-01-01", months: 3, method: "annuity", payment: 100, firstInterest: 6.25 };
+    // 106.25 × (1 + 4.8% / 12) − 100 = 6.675, which floating point makes 6.67499….
+    expect(Math.round((106.25 * 1.004 - 100) * 100)).toBe(667);
+    expect(loanSchedule(t).periods[1]).toMatchObject({ principal: 99.57, interest: 0.43, balance: 6.68 });
   });
 
   it("is off from the first repayment without the stated payment and first interest: what the formula alone gives", () => {
     const [first] = loanSchedule({ ...ccb, payment: null, firstInterest: null }).periods;
     // 9,476.74 and 3,838.72: 0.16 a month short of the bank, and 2.66 owed too much after one repayment.
     expect(first).toMatchObject({ payment: 9476.74, interest: 3838.72, balance: 1_433_882.77 });
+  });
+});
+
+describe("a loan carried exactly, prepaid and repriced", () => {
+  // The 建设银行 plan, with 100,000 prepaid on 16 March 2027, halfway from the
+  // 5th repayment to the 6th. Worked out apart, in exact fractions.
+  const ccb: LoanTerms = {
+    principal: 1_439_520.79, rate: 3.2, start: "2026-11-01", months: 195, method: "annuity",
+    payment: 9476.9, firstInterest: 3836.2239, maturity: "2043-01-16",
+  };
+  const prepay = (amount: number, mode: "shorten" | "reduce", payment: number | null = null) =>
+    loanSchedule({ ...ccb, prepayments: [{ paid_on: "2027-03-16", amount, mode, payment }] }).periods;
+  const line = (p: LoanPeriod) => [p.n, p.date, p.payment, p.principal, p.interest, p.balance];
+  const prepaid = [{ paid_on: "2027-03-16", amount: 100_000 }];
+
+  it("runs the interest on the exact balance before it and after, and lowers the payment to what repays the rest", () => {
+    // 1,411,176.6227 owed for 15 days, then 1,311,176.6227 for 15, × 3.2% / 360:
+    // 3,629.8043 run up. The plan shows the payment's rest after what the shown balance fell by.
+    const periods = prepay(100_000, "reduce");
+    expect(periods[5]).toEqual({ n: 6, date: "2027-04-01", rate: 3.2, payment: 8805.17, principal: 5175.36, interest: 3629.81, balance: 1_306_001.26, prepaid });
+    expect(line(periods[6])).toEqual([7, "2027-05-01", 8805.17, 5322.5, 3482.67, 1_300_678.76]);
+    expect(periods).toHaveLength(195);
+    expect(line(periods[194])).toEqual([195, "2043-01-16", 9037.55, 9001.54, 36.01, 0]);
+  });
+
+  it("takes the payment the bank states from then on", () => {
+    const periods = prepay(100_000, "reduce", 9000);
+    expect(line(periods[5])).toEqual([6, "2027-04-01", 9000, 5370.19, 3629.81, 1_305_806.43]);
+    expect(line(periods[6])).toEqual([7, "2027-05-01", 9000, 5517.85, 3482.15, 1_300_288.58]);
+    // More than the rest needs: it is repaid by 1 August 2042.
+    expect(periods).toHaveLength(190);
+    expect(line(periods[189])).toEqual([190, "2042-08-01", 6375.82, 6358.86, 16.96, 0]);
+  });
+
+  it("keeps the payment and ends sooner", () => {
+    const periods = prepay(100_000, "shorten");
+    expect(line(periods[5])).toEqual([6, "2027-04-01", 9476.9, 5847.09, 3629.81, 1_305_329.53]);
+    expect(line(periods[6])).toEqual([7, "2027-05-01", 9476.9, 5996.02, 3480.88, 1_299_333.51]);
+    expect(periods).toHaveLength(178);
+    expect(line(periods[177])).toEqual([178, "2041-08-01", 8428.14, 8405.72, 22.42, 0]);
+  });
+
+  it("clears the loan when it pays what the plan shows owing, the fraction of a cent with it", () => {
+    // 1,411,176.6227 for 15 days: 1,881.5688 of interest, and nothing after.
+    const periods = prepay(5_000_000, "shorten");
+    expect(periods).toHaveLength(6);
+    expect(periods[5]).toEqual({
+      n: 6, date: "2027-03-16", rate: 3.2, payment: 1881.57, principal: 0, interest: 1881.57, balance: 0,
+      prepaid: [{ paid_on: "2027-03-16", amount: 1_411_176.62 }],
+    });
+    const exactly = { ...ccb, prepayments: [{ paid_on: "2027-03-16", amount: 1_411_176.62, mode: "shorten" as const, payment: null }] };
+    expect(loanSchedule(exactly).periods).toEqual(periods);
+    expect(loanStatus(exactly, "2027-03-16")).toMatchObject({ principal_left: 0, payments_left: 0, next_payment: null });
+  });
+
+  it("charges a payoff's interest on the balance carried, not the one shown", () => {
+    // 1,509.99 at 3.6% less 264.52 leaves 1,249.99997 carried, 1,250.00 shown. Paid off a
+    // day later: 0.1249…, where 1,250.00 would make it half a cent, and 0.13.
+    const t: LoanTerms = {
+      principal: 1509.99, rate: 3.6, start: "2026-01-01", months: 12, method: "annuity", payment: 264.52,
+      prepayments: [{ paid_on: "2026-01-02", amount: 1250, mode: "shorten", payment: null }],
+    };
+    expect(loanSchedule(t).periods[1]).toMatchObject({ n: 2, date: "2026-01-02", payment: 0.12, principal: 0, interest: 0.12, balance: 0 });
+  });
+
+  it("works a new payment out on the balance carried, not the one shown", () => {
+    // After 58 repayments the bank carries 1,086,366.6455…, shown as 1,086,366.65. Over the 137
+    // left at 3.45% that is 9,604.83497… → 9,604.83; the shown balance would make it 9,604.84.
+    const periods = loanSchedule({ ...ccb, rateChanges: [{ effective_date: "2031-09-01", rate: 3.45, payment: null }] }).periods;
+    expect(periods[57].balance).toBe(1_086_366.65);
+    expect(periods[58]).toMatchObject({ n: 59, date: "2031-09-01", rate: 3.45, payment: 9604.83 });
+  });
+});
+
+describe("decimalPlaces", () => {
+  it("counts the places a number is written with, exponents and all", () => {
+    expect([3836.2239, 3836.22388, 9476.9, 12, 0, 1e-7, 1.5e-7, 1e21].map(decimalPlaces)).toEqual([4, 5, 1, 0, 0, 7, 8, 0]);
   });
 });
 

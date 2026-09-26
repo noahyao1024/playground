@@ -405,6 +405,16 @@ export function sortAccounts(accounts: FinanceAccount[]): FinanceAccount[] {
     || a.id.localeCompare(b.id));
 }
 
+/** A first repayment's interest goes to four decimal places: a bank that
+ *  carries its balance unrounded charges it to a fraction of a cent. */
+export const FIRST_INTEREST_PLACES = 4;
+
+/** How many decimal places `n` is written with: 3836.2239 has four. */
+export function decimalPlaces(n: number): number {
+  const [digits, exponent = "0"] = String(n).split("e");
+  return Math.max(0, (digits.split(".")[1] ?? "").length - Number(exponent));
+}
+
 export type LoanRateChangeTerms = Pick<LoanRateChange, "effective_date" | "rate" | "payment">;
 export type LoanPrepaymentTerms = Pick<LoanPrepayment, "paid_on" | "amount" | "mode" | "payment">;
 
@@ -517,7 +527,8 @@ export type LoanSchedule = {
 };
 
 // A bank keeps a repayment plan in whole cents (分), and so does the schedule:
-// below, every amount is a whole number of cents until it is handed out.
+// below, every amount is a whole number of cents until it is handed out -- but
+// for a balance carried exactly, as 建设银行 carries one (see `repayments`).
 const toCents = (amount: number) => Math.round(amount * 100);
 
 /** a / b to the nearest whole number, halves up, for whole a ≥ 0 and b > 0 --
@@ -567,6 +578,48 @@ function repaymentsToClear(balance: number, method: LoanMethod, payment: number,
   return Math.max(1, Math.min(most, m));
 }
 
+/** Cents kept exactly, n / d with d > 0: a balance no rounding ever touched. */
+type Exact = { n: bigint; d: bigint };
+
+const ZERO: Exact = { n: BigInt(0), d: BigInt(1) };
+const tenTo = (k: number) => BigInt(`1${"0".repeat(k)}`);
+const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+
+/** An amount in the currency, as the decimal it is written as, in cents:
+ *  3836.2239 is 383,622.39 cents, where toCents would make it 383,622. */
+function exactCentsOf(amount: number): Exact {
+  const places = Math.max(2, decimalPlaces(amount));
+  return { n: BigInt(Math.round(amount * 10 ** places)), d: tenTo(places - 2) };
+}
+
+/** a + b, over the denominator the two share when one divides the other, as
+ *  they do below: a balance's grows by the rate's each month, never squares. */
+function plus(a: Exact, b: Exact): Exact {
+  if (b.d % a.d === BigInt(0)) return { n: a.n * (b.d / a.d) + b.n, d: b.d };
+  if (a.d % b.d === BigInt(0)) return { n: a.n + b.n * (a.d / b.d), d: a.d };
+  return { n: a.n * b.d + b.n * a.d, d: a.d * b.d };
+}
+
+const plusCents = (a: Exact, cents: number): Exact => ({ n: a.n + BigInt(cents) * a.d, d: a.d });
+const times = (a: Exact, days: number): Exact => ({ n: a.n * BigInt(days), d: a.d });
+
+/** To the nearest cent, halves away from zero. */
+function centsOf(a: Exact): number {
+  const two = BigInt(2), up = (n: bigint) => (two * n + a.d) / (two * a.d);
+  return Number(a.n < BigInt(0) ? -up(-a.n) : up(a.n));
+}
+
+/** Near enough for the formulas that work out a payment or a term. */
+const approxCents = (a: Exact) => Number((a.n * BigInt(1_000_000)) / a.d) / 1_000_000;
+
+/** interestOn, exactly and unrounded: on cents times days, or on cents owed
+ *  for `days` -- which keeps the fraction smaller, the month's rate reduced
+ *  whole: 3.2% for thirty days is 1/375. */
+function exactInterest(balanceDays: Exact, rate: number, basis: number, days = 1): Exact {
+  const scaled = Math.round(rate * 1e9) * days, whole = basis * 100_000_000_000, g = gcd(scaled, whole);
+  return { n: balanceDays.n * BigInt(scaled / g), d: balanceDays.d * BigInt(whole / g) };
+}
+
 const byKey = <T,>(items: T[], key: (item: T) => string) =>
   [...items].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
 
@@ -579,6 +632,16 @@ function repayments(terms: LoanTerms): LoanPeriod[] {
   const changes = byKey(terms.rateChanges ?? [], (c) => c.effective_date);
   const prepayments = byKey(terms.prepayments ?? [], (p) => p.paid_on);
   let balance = toCents(terms.principal);
+  // 等额本息 at the payment the bank states is carried the way 建设银行 carries
+  // it: the balance kept exactly, its interest never rounded, and the plan read
+  // off it -- the balance to the cent, the principal what that fell by, the
+  // interest the rest of the payment. `balance` is then `exact` to the cent.
+  // Checked against 17 of the bank's lines, to the cent. Where no payment is
+  // stated there is no plan to hold it to, and each month's interest is
+  // rounded into the balance.
+  const carried = method === "annuity" && terms.payment != null;
+  let exact: Exact = { n: BigInt(balance), d: BigInt(1) };
+  const owed = () => (carried ? approxCents(exact) : balance);
   let rate = terms.rate;
   // 等额本金 and 等本等息 repay the same principal each month. 等本等息 charges
   // the same interest each month too, a month's on `base`: the amount borrowed,
@@ -587,7 +650,7 @@ function repayments(terms: LoanTerms): LoanPeriod[] {
   let base = balance;
   const flatInterest = () => interestOn(base * MONTH, rate, 360);
   // A level payment no one has stated: what repays the balance over `left` repayments.
-  const worked = (left: number) => (method === "annuity" ? levelPayment(balance, rate, left) : part + flatInterest());
+  const worked = (left: number) => (method === "annuity" ? levelPayment(owed(), rate, left) : part + flatInterest());
   let payment = hasLevelPayment(method) ? (terms.payment != null ? toCents(terms.payment) : worked(n)) : 0;
   // A contract ending after the last monthly day moves the last repayment to its end.
   const maturity = terms.maturity && terms.maturity > addMonths(terms.start, n - 1) ? terms.maturity : null;
@@ -604,7 +667,7 @@ function repayments(terms: LoanTerms): LoanPeriod[] {
 
     // Prepayments since the repayment before: interest runs on what was owed
     // before each, up to its day, and on what is left after.
-    let balanceDays = 0, counted = 0;
+    let balanceDays = 0, exactDays = ZERO, counted = 0;
     const prepaid: Array<{ paid_on: string; amount: number }> = [];
     while (nextPrepayment < prepayments.length && prepayments[nextPrepayment].paid_on < date) {
       const p = prepayments[nextPrepayment++];
@@ -612,6 +675,10 @@ function repayments(terms: LoanTerms): LoanPeriod[] {
       if (amount <= 0) continue;
       const at = into(p.paid_on);
       balanceDays += balance * (at - counted);
+      if (carried) {
+        exactDays = plus(exactDays, times(exact, at - counted));
+        exact = plusCents(exact, -amount);
+      }
       counted = at;
       balance -= amount;
       prepaid.push({ paid_on: p.paid_on, amount });
@@ -621,12 +688,12 @@ function repayments(terms: LoanTerms): LoanPeriod[] {
         if (hasLevelPayment(method)) payment = p.payment != null ? toCents(p.payment) : worked(left());
       } else if (balance > 0) {
         // The payment stays: the term is what it now takes to clear what is left.
-        end = k - 1 + repaymentsToClear(balance, method, payment, part, rate, method === "flat" ? flatInterest() : 0, left());
+        end = k - 1 + repaymentsToClear(owed(), method, payment, part, rate, method === "flat" ? flatInterest() : 0, left());
       }
     }
     if (balance === 0) {
       // Cleared early: the interest owed up to the day, and no repayment after.
-      const interest = method === "flat" ? 0 : interestOn(balanceDays, rate, basis);
+      const interest = method === "flat" ? 0 : carried ? centsOf(exactInterest(exactDays, rate, basis)) : interestOn(balanceDays, rate, basis);
       periods.push({ n: k, date: prepaid[prepaid.length - 1].paid_on, rate, payment: interest, principal: 0, interest, balance: 0, prepaid });
       break;
     }
@@ -640,12 +707,28 @@ function repayments(terms: LoanTerms): LoanPeriod[] {
     }
 
     balanceDays += balance * (span - counted);
-    const interest = k === 1 && terms.firstInterest != null
-      ? toCents(terms.firstInterest)
-      : method === "flat" ? flatInterest() : interestOn(balanceDays, rate, basis);
-    const due = method === "equal_principal" ? part : method === "interest_only" ? 0 : payment - interest;
-    // The last repayment clears what is left, and so does one that would repay more.
-    const principal = k === end ? balance : Math.min(due, balance);
+    let principal: number, interest: number;
+    if (carried) {
+      // What the bank runs up, unrounded; the first repayment's as it was charged.
+      const accrued = k === 1 && terms.firstInterest != null
+        ? exactCentsOf(terms.firstInterest)
+        : counted === 0 ? exactInterest(exact, rate, basis, span) : exactInterest(plus(exactDays, times(exact, span - counted)), rate, basis);
+      const after = plus(exact, plusCents(accrued, -payment));
+      const shown = centsOf(after);
+      // The last repayment clears what the plan shows owing, with its interest
+      // to the cent; so does one that would repay more.
+      const last = k === end || shown <= 0;
+      principal = last ? balance : balance - shown;
+      interest = last ? centsOf(accrued) : payment - principal;
+      exact = last ? ZERO : after;
+    } else {
+      interest = k === 1 && terms.firstInterest != null
+        ? toCents(terms.firstInterest)
+        : method === "flat" ? flatInterest() : interestOn(balanceDays, rate, basis);
+      const due = method === "equal_principal" ? part : method === "interest_only" ? 0 : payment - interest;
+      // The last repayment clears what is left, and so does one that would repay more.
+      principal = k === end ? balance : Math.min(due, balance);
+    }
     balance -= principal;
     periods.push({ n: k, date, rate, payment: principal + interest, principal, interest, balance, ...(prepaid.length ? { prepaid } : {}) });
   }
@@ -666,7 +749,12 @@ const prepaidIn = (period: LoanPeriod | undefined, until = "9999-12-31") =>
  *  taking up the cents the rounding moved.
  *
  *  The level payment is the bank's stated one when given, else the formula's
- *  to the cent. A rate change sets the rate from its first repayment, and the
+ *  to the cent. At a stated one, 等额本息's balance is carried exactly, as
+ *  建设银行 carries it, and shown to the cent: each repayment's principal is
+ *  what the shown balance fell by, its interest the rest of the payment, a
+ *  cent off the month's interest now and then, as on the bank's plan. The first
+ *  repayment's interest, when stated, is taken as written, to the fraction of a
+ *  cent the bank carried. A rate change sets the rate from its first repayment, and the
  *  payment to the one given, or to what repays the balance then owed over the
  *  repayments left. A prepayment comes off what is owed on its day; after it
  *  the payment stays and the loan ends sooner, or the end stays and the

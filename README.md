@@ -79,7 +79,11 @@ other way in is an API token, below.
   bank's plan differs, give its stated **monthly payment** and the **first
   repayment's interest** (the first after a rate reset usually does), and the
   **contract end date** when the last repayment falls after the monthly day —
-  it is then charged by the day, counted 30/360. A **rate
+  it is then charged by the day, counted 30/360. Given the monthly payment,
+  等额本息's balance is carried unrounded, as 建设银行 carries it, and shown
+  to the cent; the first repayment's interest then takes up to four decimals,
+  the fraction of a cent the bank carried (3,836.2239 where its plan shows
+  3,836.22). A **rate
   change** is kept beside the terms, not over them: from its first repayment
   the new rate applies, and the payment is the one given or is worked out
   again over the months left. A **prepayment** comes off what is owed on its

@@ -12,8 +12,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { todayInSG } from "@/lib/dates";
 import {
-  CATEGORIES, ILLIQUID_CATEGORIES, LOAN_DAY_COUNTS, LOAN_DAY_COUNT_LABELS, LOAN_METHODS, LOAN_METHOD_LABELS, PREPAYMENT_MODES,
-  PREPAYMENT_MODE_LABELS, REGIONS, REGION_LABELS, addMonths, displayName, hasLevelPayment, isCategory, loanSchedule, loanStatus, loanTermsOf,
+  CATEGORIES, FIRST_INTEREST_PLACES, ILLIQUID_CATEGORIES, LOAN_DAY_COUNTS, LOAN_DAY_COUNT_LABELS, LOAN_METHODS, LOAN_METHOD_LABELS,
+  PREPAYMENT_MODES, PREPAYMENT_MODE_LABELS, REGIONS, REGION_LABELS, addMonths, decimalPlaces, displayName, hasLevelPayment, isCategory,
+  loanSchedule, loanStatus, loanTermsOf,
   type FinanceAccount, type Kind, type LoanDayCount, type LoanMethod, type LoanPeriod, type LoanPrepayment, type LoanRateChange, type LoanTerms,
   type PrepaymentMode, type Region,
 } from "@/lib/finance";
@@ -115,6 +116,9 @@ function loanProblem(f: Form): string | null {
   if (!(Number.isInteger(f.months) && f.months >= 1 && f.months <= 600)) return "Enter the term, in whole months";
   if (Number.isFinite(f.statedPayment) && !(f.statedPayment > 0)) return "The bank's monthly payment has to be above zero";
   if (Number.isFinite(f.firstInterest) && !(f.firstInterest >= 0)) return "The first repayment's interest cannot be below zero";
+  if (Number.isFinite(f.firstInterest) && decimalPlaces(f.firstInterest) > FIRST_INTEREST_PLACES) {
+    return `The first repayment's interest goes to ${FIRST_INTEREST_PLACES} decimal places at most`;
+  }
   const last = addMonths(f.start, f.months - 1), after = addMonths(f.start, f.months);
   if (f.maturity && (f.maturity < last || f.maturity >= after)) {
     return `The contract's end date falls from the last monthly repayment, ${dayLabel(last)}, to before ${dayLabel(after)}`;
