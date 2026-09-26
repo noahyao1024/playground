@@ -99,9 +99,10 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   `src/lib/cron.ts` checks is from `daily-jobs.yml` on `main` in this repository, by numeric
   repository id. So GitHub holds no copy of any site secret. Renaming the workflow file, or
   running it from another branch, is refused until `DAILY_JOBS_CLAIMS` says otherwise.
-- `.github/workflows/supabase-keepalive.yml` and `unpaid-alert.yml` — the old way, with their
-  own copies of the Supabase and SMTP settings, on their way out: they stay until the Daily jobs
-  workflow has mailed, then go with those secrets.
+- GitHub holds what only its workflows use: the SMTP secrets (`SMTP_USERNAME`, `SMTP_PASSWORD`,
+  `ALERT_TO`, and the optional variables `SMTP_SERVER`, `SMTP_PORT`, `MAIL_FROM`) and
+  `SUPABASE_DB_URL`. `test/workflows.test.ts` fails any workflow reaching for anything else:
+  configuration kept in two places goes stale in one of them.
 - `.github/workflows/check.yml` — typecheck, lint and tests on every pull request and push
   to `main`, with a Postgres service for `test/sql/`. The gate pre-approved deploys rest on.
 - `vercel.json` — cron hitting `/api/cron/bill` at 00:00 UTC on the 1st, 2nd and 3rd, and

@@ -24,7 +24,7 @@ describe("overThreshold", () => {
 });
 
 describe("alertMail", () => {
-  it("says who owes what, as the GitHub workflow's mail did", () => {
+  it("says who owes what, most first, and where to settle it", () => {
     const { subject, text } = alertMail([{ name: "Bob", owed: 1234.5, charges: 3, oldest: "2026-07" }], 500, "https://x/split-bill");
     expect(subject).toBe("Split bill: 1 over the unpaid threshold");
     expect(text).toBe([
