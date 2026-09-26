@@ -535,6 +535,180 @@ describe("rate changes", () => {
   });
 });
 
+describe("等本等息, a flat rate", () => {
+  it("charges a card instalment's fee on the whole amount every month: 12,000 at 0.6% a month is 1,072 twelve times", () => {
+    const { periods, totals } = loanSchedule({ principal: 12_000, rate: 7.2, start: "2026-01-10", months: 12, method: "flat" });
+    expect(periods.every((p) => p.payment === 1072 && p.principal === 1000 && p.interest === 72)).toBe(true);
+    expect(totals).toEqual({ payment: 12_864, principal: 12_000, interest: 864 });
+  });
+
+  it("does a Singapore car loan the same way: 100,000 at 2.78% flat over 7 years", () => {
+    const t: LoanTerms = { principal: 100_000, rate: 2.78, start: "2026-01-05", months: 84, method: "flat" };
+    const { periods, totals } = loanSchedule(t);
+    // 100,000 × 2.78% / 12 = 231.666… → 231.67 a month, beside 100,000 / 84 = 1,190.48 of principal.
+    expect(periods[0]).toMatchObject({ payment: 1422.15, principal: 1190.48, interest: 231.67 });
+    expect(periods.at(-1)).toMatchObject({ n: 84, principal: 1190.16, interest: 231.67, balance: 0 });
+    // 100,000 × 2.78% × 7 = 19,460, and 28 fen of monthly rounding.
+    expect(totals.interest).toBe(19_460.28);
+    // The bank's rounded instalment, stated: the principal is what the fixed interest leaves of it.
+    const stated = loanSchedule({ ...t, payment: 1422.14 }).periods;
+    expect(stated[0]).toMatchObject({ payment: 1422.14, principal: 1190.47, interest: 231.67 });
+    expect(stated.at(-1)!.balance).toBe(0);
+  });
+});
+
+describe("先息后本, interest only", () => {
+  it("pays a month's interest each month and the principal with the last", () => {
+    const { periods, totals } = loanSchedule({ principal: 100_000, rate: 3.65, start: "2026-01-20", months: 12, method: "interest_only" });
+    expect(periods.slice(0, 11).every((p) => p.payment === 304.17 && p.principal === 0 && p.balance === 100_000)).toBe(true);
+    expect(periods[11]).toMatchObject({ payment: 100_304.17, principal: 100_000, interest: 304.17, balance: 0 });
+    expect(totals.interest).toBe(3650.04);
+    expect(loanStatus({ principal: 100_000, rate: 3.65, start: "2026-01-20", months: 12, method: "interest_only" }, "2026-06-01"))
+      .toMatchObject({ payments_made: 5, principal_left: 100_000, payment: 304.17 });
+  });
+});
+
+describe("interest counted by the day", () => {
+  // Interest for `days` on `balance` at `rate`% a year of `basis` days, the long way round.
+  const byDay = (balance: number, rate: number, days: number, basis: number) => Math.round((balance * rate * days) / basis) / 100;
+
+  it("charges a Singapore home loan on daily rest, actual/365: each month by its days", () => {
+    const { periods } = loanSchedule({ principal: 500_000, rate: 3, start: "2026-02-01", months: 300, method: "annuity", dayCount: "actual/365" });
+    // The installment is the usual one; what each month's days charge of it varies.
+    expect(periods.slice(0, 3).map((p) => p.payment)).toEqual([2371.06, 2371.06, 2371.06]);
+    expect(periods[0].interest).toBe(byDay(500_000, 3, 31, 365)); // January: 1,273.97
+    expect(periods[1].interest).toBe(byDay(periods[0].balance, 3, 28, 365)); // February: 1,148.16
+    expect(periods[2].interest).toBe(byDay(periods[1].balance, 3, 31, 365)); // March
+    expect([periods[0].interest, periods[1].interest]).toEqual([1273.97, 1148.16]);
+    expect(periods.at(-1)!.balance).toBe(0);
+  });
+
+  it("takes a year of 360 days where the rate is quoted by the day", () => {
+    const { periods } = loanSchedule({ principal: 120_000, rate: 7.2, start: "2026-02-01", months: 12, method: "equal_principal", dayCount: "actual/360" });
+    expect(periods.slice(0, 2).map((p) => [p.principal, p.interest])).toEqual([[10_000, 744], [10_000, 616]]);
+  });
+
+  it("changes nothing when counted by the month, the way it always was", () => {
+    const t: LoanTerms = { principal: 1_000_000, rate: 4.9, start: "2020-01-15", months: 360, method: "annuity" };
+    expect(loanSchedule({ ...t, dayCount: "30/360" })).toEqual(loanSchedule(t));
+  });
+});
+
+describe("prepayments", () => {
+  // The textbook mortgage; after its 13th repayment, on 15 January 2021, 983,693.12 is owed.
+  const t: LoanTerms = { principal: 1_000_000, rate: 4.9, start: "2020-01-15", months: 360, method: "annuity" };
+  const prepay = (paid_on: string, amount: number, mode: "shorten" | "reduce", payment: number | null = null) =>
+    ({ ...t, prepayments: [{ paid_on, amount, mode, payment }] });
+  const owed13 = 983_693.12;
+
+  it("keeps the payment and ends sooner, or keeps the end and pays less", () => {
+    expect(loanSchedule(t).periods[12].balance).toBe(owed13);
+    const shorter = loanSchedule(prepay("2021-01-15", 100_000, "shorten")).periods;
+    // Paid with the 13th repayment: the 14th's interest runs on what is left, 883,693.12 × 4.9% / 12.
+    expect(shorter[13]).toMatchObject({ payment: 5307.27, interest: 3608.41, prepaid: [{ paid_on: "2021-01-15", amount: 100_000 }] });
+    expect(shorter).toHaveLength(293);
+    const lower = loanSchedule(prepay("2021-01-15", 100_000, "reduce")).periods;
+    // 883,693.12 over the 347 repayments left.
+    const i = 0.049 / 12, g = (1 + i) ** 347;
+    expect(lower[13].payment).toBe(Math.round(((owed13 - 100_000) * i * g) / (g - 1) * 100) / 100);
+    expect(lower).toHaveLength(360);
+    expect(Math.abs(lower.at(-1)!.payment - lower[13].payment)).toBeLessThan(2);
+  });
+
+  it("keeps a term it shortened when the rate changes later: the payment is worked out over what is left of it", () => {
+    const shorter = prepay("2021-01-15", 100_000, "shorten");
+    expect(loanSchedule(shorter).periods).toHaveLength(293);
+    const later = loanSchedule({ ...shorter, rateChanges: [{ effective_date: "2022-01-15", rate: 4.2, payment: null }] }).periods;
+    // Still 293: the balance on 15 January 2022 over the 269 repayments then left of the shortened term.
+    expect(later).toHaveLength(293);
+    const owed = later[23].balance, i = 0.042 / 12, g = (1 + i) ** 269;
+    expect(later[24].payment).toBe(Math.round((owed * i * g) / (g - 1) * 100) / 100);
+    expect(Math.abs(later.at(-1)!.payment - later[24].payment)).toBeLessThan(2);
+    // And a prepayment that reduces the payment after it spreads over the shortened term too.
+    const ep = loanSchedule({
+      ...t, method: "equal_principal", prepayments: [
+        { paid_on: "2021-01-15", amount: 100_000, mode: "shorten", payment: null },
+        { paid_on: "2022-01-15", amount: 50_000, mode: "reduce", payment: null },
+      ],
+    }).periods;
+    expect(ep).toHaveLength(324);
+  });
+
+  it("takes the bank's stated payment after it, where it reduces a level one", () => {
+    expect(loanSchedule(prepay("2021-01-15", 100_000, "reduce", 4800)).periods[13].payment).toBe(4800);
+  });
+
+  it("charges interest on what was owed before it up to its day, and on what is left after", () => {
+    // 30 January is 15 days, 30/360, after the 13th repayment.
+    const mid = loanSchedule(prepay("2021-01-30", 100_000, "reduce")).periods[13];
+    expect(mid.interest).toBe(Math.round(((owed13 * 15 + (owed13 - 100_000) * 15) * 100 * 4.9) / 36_000) / 100);
+    expect(mid.interest).toBe(3812.58);
+  });
+
+  it("counts it as paid only from its day", () => {
+    const mid = prepay("2021-01-30", 100_000, "reduce");
+    expect(loanStatus(mid, "2021-01-29").principal_left).toBe(owed13);
+    expect(loanStatus(mid, "2021-01-30").principal_left).toBe(owed13 - 100_000);
+    expect(loanStatus(mid, "2021-01-30").payments_made).toBe(13);
+  });
+
+  it("clears a loan that it more than covers, on its day, with the interest owed up to it", () => {
+    const { periods, totals } = loanSchedule(prepay("2021-01-30", 5_000_000, "shorten"));
+    expect(periods).toHaveLength(14);
+    expect(periods[13]).toEqual({
+      n: 14, date: "2021-01-30", rate: 4.9, payment: 2008.37, principal: 0, interest: 2008.37, balance: 0,
+      prepaid: [{ paid_on: "2021-01-30", amount: owed13 }],
+    });
+    expect(totals.principal).toBe(1_000_000);
+    expect(loanStatus(prepay("2021-01-30", 5_000_000, "shorten"), "2021-01-30")).toMatchObject({ principal_left: 0, payments_left: 0, next_payment: null });
+  });
+
+  it("comes off the start when paid before the first repayment", () => {
+    const [first] = loanSchedule(prepay("2019-12-31", 100_000, "reduce")).periods;
+    // A month before the first repayment, 15 December, to the 31st: 15 days on the million, 15 on 900,000.
+    expect(first).toMatchObject({ interest: 3879.17, payment: 4776.54 });
+    // Earlier still, before that month began: the whole month on 900,000, × 4.9% / 12.
+    expect(loanSchedule(prepay("2019-11-01", 100_000, "reduce")).periods[0]).toMatchObject({ interest: 3675, payment: 4776.54 });
+  });
+
+  it("under 等额本金, spreads what is left over the months left, or keeps the principal and ends sooner", () => {
+    const ep: LoanTerms = { ...t, method: "equal_principal" };
+    const lower = loanSchedule({ ...ep, prepayments: [{ paid_on: "2021-01-15", amount: 100_000, mode: "reduce", payment: null }] }).periods;
+    // 1,000,000 − 13 × 2,777.78 − 100,000 = 863,888.86, over 347: 2,489.59.
+    expect(lower[13].principal).toBe(2489.59);
+    expect(lower).toHaveLength(360);
+    const shorter = loanSchedule({ ...ep, prepayments: [{ paid_on: "2021-01-15", amount: 100_000, mode: "shorten", payment: null }] }).periods;
+    expect(shorter[13].principal).toBe(2777.78);
+    expect(shorter).toHaveLength(324);
+  });
+
+  it("under 等本等息, charges the flat interest on what is left after it", () => {
+    const flat: LoanTerms = { principal: 100_000, rate: 2.78, start: "2026-01-05", months: 84, method: "flat" };
+    const { periods } = loanSchedule({ ...flat, prepayments: [{ paid_on: "2027-01-05", amount: 20_000, mode: "reduce", payment: null }] });
+    // 84,523.76 − 20,000 = 64,523.76: × 2.78% / 12 = 149.48 a month; over 71 months, 908.79 of principal.
+    expect(periods[13]).toMatchObject({ interest: 149.48, principal: 908.79 });
+    expect(periods.at(-1)!.balance).toBe(0);
+  });
+
+  it("under 先息后本, lowers the interest and the principal the last repayment clears", () => {
+    const io: LoanTerms = { principal: 100_000, rate: 3.65, start: "2026-01-20", months: 12, method: "interest_only" };
+    const { periods } = loanSchedule({ ...io, prepayments: [{ paid_on: "2026-06-20", amount: 40_000, mode: "shorten", payment: null }] });
+    expect(periods[6]).toMatchObject({ interest: 182.5, principal: 0, balance: 60_000 });
+    expect(periods[11]).toMatchObject({ payment: 60_182.5, principal: 60_000, balance: 0 });
+  });
+
+  it("adds up to what was borrowed, however much was prepaid", () => {
+    const { totals } = loanSchedule({
+      ...t, prepayments: [
+        { paid_on: "2021-01-30", amount: 100_000, mode: "reduce", payment: null },
+        { paid_on: "2024-06-01", amount: 50_000, mode: "shorten", payment: null },
+      ],
+    });
+    expect(totals.principal).toBe(1_000_000);
+    expect(totals.payment).toBeCloseTo(totals.principal + totals.interest, 6);
+  });
+});
+
 describe("summarize", () => {
   it("names each account, weighs it by the lens, and places each loan on its schedule", () => {
     const accounts = [

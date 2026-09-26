@@ -70,16 +70,21 @@ other way in is an API token, below.
   marked so. The page's filters leave those out, count only liquid shares, or
   keep one owner's accounts; every total, the chart and the records follow them.
 - A liability may carry **loan terms** — amount, annual rate, first repayment,
-  term, 等额本息 or 等额本金 — from which the page works out every repayment to
-  the cent, the way the bank's repayment plan (还款计划) does: each month's
-  interest rounded half up, the last repayment clearing what is left. Where the
+  term, and how it is repaid: 等额本息, 等额本金, 等本等息 (a flat rate: card
+  instalments, car and personal loans in Singapore) or 先息后本 (interest only)
+  — from which the page works out every repayment to the cent, the way the
+  bank's repayment plan (还款计划) does: each month's interest rounded half up,
+  the last repayment clearing what is left. Interest is counted by the month,
+  or **by the day** (365 for a Singapore home loan on daily rest, or 360). Where the
   bank's plan differs, give its stated **monthly payment** and the **first
   repayment's interest** (the first after a rate reset usually does), and the
   **contract end date** when the last repayment falls after the monthly day —
   it is then charged by the day, counted 30/360. A **rate
   change** is kept beside the terms, not over them: from its first repayment
   the new rate applies, and the payment is the one given or is worked out
-  again over the months left. **Loans → Repayment plan** lists every
+  again over the months left. A **prepayment** comes off what is owed on its
+  day; after it the payment stays and the loan ends sooner (缩短期限), or the end
+  stays and the payment falls (减少月供). **Loans → Repayment plan** lists every
   repayment, to set beside the bank's app. The schedule is the plan; the
   balance recorded for the loan is the truth.
 
@@ -108,9 +113,9 @@ curl -s https://playground.noahyao.me/api/finance/summary \
 |---|---|
 | `GET /api/finance/openapi` | OpenAPI 3.1 description of all of this. Public. |
 | `GET /api/finance/summary` | Where things stand, worked out: totals, change since the last record, each account's newest balance and loan schedule, history. Takes the page's filters: `?exclude_long_term=1&liquid_only=1&owner=Daisy`. |
-| `GET /api/finance` | Every account and balance, as stored; each account with its loan's `rate_changes`. |
+| `GET /api/finance` | Every account and balance, as stored; each account with its loan's `rate_changes` and `prepayments`. |
 | `GET /api/finance/loan-schedule?id=…` | One loan's every repayment to the cent — date, payment, principal, interest, balance — and the totals. |
-| `POST /api/finance` | `{"action": …}`: `createAccount`, `updateAccount`, `deleteAccount`, `recordBalances`, `deleteBalance`, `addLoanRateChange`, `deleteLoanRateChange`. |
+| `POST /api/finance` | `{"action": …}`: `createAccount`, `updateAccount`, `deleteAccount`, `recordBalances`, `deleteBalance`, `addLoanRateChange`, `deleteLoanRateChange`, `addLoanPrepayment`, `deleteLoanPrepayment`. |
 
 To revoke it, replace the value and redeploy; the old one stops working with
 that deployment.

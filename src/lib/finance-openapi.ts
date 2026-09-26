@@ -1,10 +1,11 @@
-import { CATEGORIES, KINDS, LOAN_METHODS, REGIONS } from "./finance";
+import { CATEGORIES, KINDS, LOAN_DAY_COUNTS, LOAN_METHODS, PREPAYMENT_MODES, REGIONS } from "./finance";
 import { FINANCE_CURRENCIES } from "./fx";
 
 /** The actions POST /api/finance takes. The route's switch is what handles them;
  *  a test holds the two to each other. */
 export const FINANCE_ACTIONS = [
   "createAccount", "updateAccount", "deleteAccount", "recordBalances", "deleteBalance", "addLoanRateChange", "deleteLoanRateChange",
+  "addLoanPrepayment", "deleteLoanPrepayment",
 ] as const;
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
@@ -41,10 +42,13 @@ const accountFields = {
   loan_rate: nullable("number", { minimum: 0, exclusiveMaximum: 100, description: "Annual interest, in percent: 3.95 is 3.95%." }),
   loan_start: nullable("string", { format: "date", description: "The first repayment; each later one falls on the same day of the month." }),
   loan_term_months: nullable("integer", { minimum: 1, maximum: 600, description: "How many monthly repayments in all: 360 for thirty years." }),
-  loan_method: nullable("string", { enum: [...LOAN_METHODS, null], description: "annuity is 等额本息 (a level payment); equal_principal is 等额本金 (level principal, falling payments)." }),
+  loan_method: nullable("string", {
+    enum: [...LOAN_METHODS, null],
+    description: "annuity is 等额本息 (a level payment); equal_principal is 等额本金 (level principal, falling payments); flat is 等本等息 (a flat rate: the same interest every month on the amount borrowed, beside level principal -- card instalments, car and personal loans in Singapore); interest_only is 先息后本 (interest each month, the principal with the last repayment).",
+  }),
   loan_payment: nullable("number", {
     exclusiveMinimum: 0,
-    description: "The monthly payment as the bank states it, which the schedule then takes each month. annuity only, and only with the terms. Null: the formula's, to the cent.",
+    description: "The monthly payment as the bank states it, which the schedule then takes each month. annuity or flat only, and only with the terms. Null: the formula's, to the cent.",
   }),
   loan_first_interest: nullable("number", {
     minimum: 0,
@@ -53,6 +57,10 @@ const accountFields = {
   loan_maturity: nullable("string", {
     format: "date",
     description: "The contract's end date, when the last repayment falls due on it rather than on the monthly day: from the last monthly repayment to before the month after it. That repayment's interest is then charged by the day, balance × rate / 360 × days, the days counted 30/360 from the repayment before (1 Dec to 16 Jan is 45). Only with the terms. Null: the last repayment is a monthly one.",
+  }),
+  loan_day_count: nullable("string", {
+    enum: [...LOAN_DAY_COUNTS, null],
+    description: "How interest is counted. 30/360: a month's interest is a year's / 12, as Chinese banks count it. actual/365: by the day, a year of 365 -- daily rest, as Singapore banks count a home loan. actual/360: by the day, a year of 360. Null: 30/360. Only with the terms.",
   }),
 };
 
@@ -73,7 +81,7 @@ export function financeOpenApi(origin: string) {
         "**Money.** A balance is kept in its account's own currency, with `cny_rate` and `sgd_rate`: what one unit was worth in CNY and SGD on `rate_date` (ECB mid-market; a weekend or a day not yet published takes the last published day). Totals multiply by those stored rates, so history never re-prices. A liability's balance is what is owed, as a positive number.",
         "**Days.** An account not recorded on a day carries its last balance before it forward. Recording a day again replaces that day's balance for each account sent. An archived account stops counting the day after it was archived, in Singapore (UTC+8), which is also the timezone `as_of` may not be later than today in.",
         "**Family.** Each account may name its `owner`; an asset's `liquidity` says how much of it could be spent now; a liability may carry loan terms, from which the summary works out its repayment schedule.",
-        "**Loans.** A loan is scheduled the way a bank's repayment plan (还款计划) has it, to the cent: each month's interest is what is owed times the monthly rate, rounded half up; annuity takes it out of the level payment, equal_principal repays P/n to the cent; the last repayment clears what is left. Where the bank's plan differs, give its stated `loan_payment` and `loan_first_interest`, and `loan_maturity` when the contract ends after the last monthly day. A rate change is kept as history (`addLoanRateChange`): from its first repayment the rate is the new one and the payment the one given, or what repays the balance then owed over the repayments left. `GET /api/finance/loan-schedule` lists every repayment.",
+        "**Loans.** A loan is scheduled the way a bank's repayment plan (还款计划) has it, to the cent: each month's interest is what is owed times the monthly rate, rounded half up; annuity takes it out of the level payment, equal_principal repays P/n to the cent; the last repayment clears what is left. Where the bank's plan differs, give its stated `loan_payment` and `loan_first_interest`, and `loan_maturity` when the contract ends after the last monthly day. `loan_day_count` counts interest by the day instead. A rate change is kept as history (`addLoanRateChange`): from its first repayment the rate is the new one and the payment the one given, or what repays the balance then owed over the repayments left. A prepayment (`addLoanPrepayment`) comes off what is owed on its day, interest running on what was owed before it up to that day; after it the payment stays and the loan ends sooner, or the end stays and the payment falls. `GET /api/finance/loan-schedule` lists every repayment.",
         "For where things stand, read `GET /api/finance/summary` rather than recomputing it from `GET /api/finance`.",
       ].join("\n\n"),
     },
@@ -124,13 +132,13 @@ export function financeOpenApi(origin: string) {
             },
           },
           responses: {
-            200: ok("createAccount, updateAccount, addLoanRateChange and deleteLoanRateChange: the account, with its rate changes as they now stand. recordBalances: the balances written and the day their rates are from. deleteAccount and deleteBalance: `{ok: true}`.", {
+            200: ok("createAccount, updateAccount and the loan actions: the account, with its rate changes and prepayments as they now stand. recordBalances: the balances written and the day their rates are from. deleteAccount and deleteBalance: `{ok: true}`.", {
               oneOf: [ref("Account"), ref("Recorded"), { type: "object", properties: { ok: { const: true } } }],
             }),
             400: error("The request does not make sense: the message says what"),
             401: error("Not the owner"),
-            404: error("updateAccount and addLoanRateChange: no such account. deleteLoanRateChange: no such rate change."),
-            409: error("deleteAccount on an account with balances (archive it instead), a new currency for one, or a second rate change on the same day for one loan"),
+            404: error("updateAccount, addLoanRateChange and addLoanPrepayment: no such account. deleteLoanRateChange and deleteLoanPrepayment: no such one."),
+            409: error("deleteAccount on an account with balances (archive it instead), a new currency for one, or a second rate change or prepayment on the same day for one loan"),
             502: error("recordBalances: the day's rates could not be had. Nothing was written; try again."),
           },
         },
@@ -185,6 +193,12 @@ export function financeOpenApi(origin: string) {
               readOnly: true,
               description: "Its loan's rate changes, oldest first; empty for most accounts. Changed with addLoanRateChange and deleteLoanRateChange, not updateAccount.",
             },
+            prepayments: {
+              type: "array",
+              items: ref("LoanPrepayment"),
+              readOnly: true,
+              description: "Its loan's prepayments, oldest first; empty for most accounts. Changed with addLoanPrepayment and deleteLoanPrepayment.",
+            },
             archived_at: nullable("string", { format: "date-time", description: "Set while archived." }),
             created_at: { type: "string", format: "date-time" },
           },
@@ -201,6 +215,19 @@ export function financeOpenApi(origin: string) {
             created_at: { type: "string", format: "date-time" },
           },
         },
+        LoanPrepayment: {
+          type: "object",
+          required: ["id", "account_id", "paid_on", "amount", "mode", "payment", "created_at"],
+          properties: {
+            id: uuid,
+            account_id: uuid,
+            paid_on: { ...day, description: "The day it was paid." },
+            amount: { type: "number", description: "Principal repaid, in the loan's currency." },
+            mode: { type: "string", enum: [...PREPAYMENT_MODES], description: "shorten: the payment stays, the loan ends sooner. reduce: the end stays, the payment falls." },
+            payment: nullable("number", { description: "The payment from then on as the bank states it, under reduce on a level payment. Null: worked out." }),
+            created_at: { type: "string", format: "date-time" },
+          },
+        },
         LoanPeriod: {
           type: "object",
           required: ["n", "date", "rate", "payment", "principal", "interest", "balance"],
@@ -212,6 +239,11 @@ export function financeOpenApi(origin: string) {
             principal: { type: "number" },
             interest: { type: "number" },
             balance: { type: "number", description: "Principal still owed once it is paid." },
+            prepaid: {
+              type: "array",
+              items: { type: "object", required: ["paid_on", "amount"], properties: { paid_on: day, amount: { type: "number" } } },
+              description: "Principal repaid early since the repayment before, taken off before this one's interest, which runs on what was owed before each up to its day. Only where there is any. A loan cleared by a prepayment ends with a repayment dated that day: the interest owed up to it.",
+            },
           },
         },
         LoanSchedule: {
@@ -392,7 +424,7 @@ export function financeOpenApi(origin: string) {
             account_id: { ...uuid, description: "A liability with loan terms." },
             effective_date: { ...day, description: "The first repayment charged at the new rate: after loan_start, not after the last repayment. One change per day per loan." },
             rate: { type: "number", minimum: 0, exclusiveMaximum: 100, description: "Annual, in percent." },
-            payment: nullable("number", { exclusiveMinimum: 0, description: "The payment from then on as the bank states it; annuity only. Absent or null: what repays the balance then owed over the repayments left, to the cent." }),
+            payment: nullable("number", { exclusiveMinimum: 0, description: "The payment from then on as the bank states it; annuity or flat only. Absent or null: what repays the balance then owed over the repayments left, to the cent." }),
           },
           description: "The months before keep the rate they were charged at. To correct a change, delete it and add it again.",
         },
@@ -400,6 +432,24 @@ export function financeOpenApi(origin: string) {
           type: "object",
           required: ["action", "id"],
           properties: { action: { const: "deleteLoanRateChange" }, id: { ...uuid, description: "The rate change's." } },
+        },
+        addLoanPrepayment: {
+          type: "object",
+          required: ["action", "account_id", "paid_on", "amount", "mode"],
+          properties: {
+            action: { const: "addLoanPrepayment" },
+            account_id: { ...uuid, description: "A liability with loan terms." },
+            paid_on: { ...day, description: "The day it was paid: not after the last repayment. One prepayment per day per loan." },
+            amount: { type: "number", exclusiveMinimum: 0, description: "Principal repaid: no more than is owed that day, which clears the loan." },
+            mode: { type: "string", enum: [...PREPAYMENT_MODES], description: "shorten: the payment stays, the loan ends sooner. reduce: the end stays, the payment falls." },
+            payment: nullable("number", { exclusiveMinimum: 0, description: "The payment from then on as the bank states it: reduce only, on a level payment (annuity or flat). Absent or null: worked out." }),
+          },
+          description: "To correct a prepayment, delete it and add it again.",
+        },
+        deleteLoanPrepayment: {
+          type: "object",
+          required: ["action", "id"],
+          properties: { action: { const: "deleteLoanPrepayment" }, id: { ...uuid, description: "The prepayment's." } },
         },
       },
     },

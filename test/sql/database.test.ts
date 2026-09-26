@@ -235,6 +235,8 @@ describe.skipIf(!SERVER)("database", () => {
           `insert into finance_api_tokens (name, token_sha256) values ('x', repeat('a', 64))`,
           `select * from finance_loan_rate_changes`,
           `insert into finance_loan_rate_changes (account_id, effective_date, rate) values ('${ACCOUNT}', '2027-01-01', 3)`,
+          `select * from finance_loan_prepayments`,
+          `insert into finance_loan_prepayments (account_id, paid_on, amount, mode) values ('${ACCOUNT}', '2027-01-01', 1000, 'shorten')`,
         ]) {
           expect((await failure(c, sql)).code, `${role}: ${sql}`).toBe("42501");
         }
@@ -348,6 +350,44 @@ describe.skipIf(!SERVER)("database", () => {
           values ('x', 'CN', 'CNY', 'liability', 'loan', ${extras})`);
         expect([err.code, err.constraint], extras).toEqual(["23514", "finance_accounts_loan_extras"]);
       }
+    });
+
+    it("takes 等本等息 and 先息后本, a stated payment on a flat loan too, and a day count on a loan", async () => {
+      for (const method of ["flat", "interest_only"]) await c.query(loan(method, `null, null`));
+      await c.query(loan("flat", `1422.14, null`));
+      for (const count of ["30/360", "actual/365", "actual/360"]) {
+        await c.query(`update finance_accounts set loan_day_count = $1 where loan_method = 'flat'`, [count]);
+      }
+      const bullet = await failure(c, loan("interest_only", `1000, null`));
+      expect([bullet.code, bullet.constraint]).toEqual(["23514", "finance_accounts_loan_extras"]);
+      const other = await failure(c, loan("balloon", `null, null`));
+      expect([other.code, other.constraint]).toEqual(["23514", "finance_accounts_loan_method_check"]);
+      expect((await failure(c, `update finance_accounts set loan_day_count = 'daily'`)).code).toBe("23514");
+      const noLoan = await failure(c, `insert into finance_accounts (name, region, currency, kind, category, loan_day_count)
+        values ('x', 'SG', 'SGD', 'liability', 'loan', 'actual/365')`);
+      expect([noLoan.code, noLoan.constraint]).toEqual(["23514", "finance_accounts_loan_extras"]);
+    });
+
+    it("keeps a loan's prepayments, one a day, positive, and lets them go with the loan", async () => {
+      const { id } = (await c.query(loan("annuity", `9476.90, 3836.22`))).rows[0];
+      const prepay = (day: string, amount: string, mode = "'shorten'", payment = "null") =>
+        c.query(`insert into finance_loan_prepayments (account_id, paid_on, amount, mode, payment) values ($1, $2, ${amount}, ${mode}, ${payment})`, [id, day]);
+      await prepay("2027-01-01", "100000");
+      await prepay("2028-01-01", "50000", "'reduce'", "8000");
+      expect((await failure(c, `insert into finance_loan_prepayments (account_id, paid_on, amount, mode) values ($1, '2027-01-01', 1, 'shorten')`, [id])).code).toBe("23505");
+      for (const [amount, mode, payment] of [["0", "'shorten'", "null"], ["-1", "'shorten'", "null"], ["1", "'halve'", "null"], ["1", "'reduce'", "0"]]) {
+        expect((await failure(c, `insert into finance_loan_prepayments (account_id, paid_on, amount, mode, payment) values ($1, '2029-01-01', ${amount}, ${mode}, ${payment})`, [id])).code, `${amount} ${mode} ${payment}`).toBe("23514");
+      }
+      expect((await failure(c, `insert into finance_loan_prepayments (account_id, paid_on, amount, mode) values (gen_random_uuid(), '2029-01-01', 1, 'shorten')`)).code).toBe("23503");
+      await c.query(`delete from finance_accounts where id = $1`, [id]);
+      expect((await c.query(`select count(*)::int as n from finance_loan_prepayments`)).rows[0].n).toBe(0);
+    });
+
+    it("will not finish widening the loan methods while an older list is in place under another name", async () => {
+      await c.query(`alter table finance_accounts add constraint legacy_methods check (loan_method in ('annuity', 'equal_principal'))`);
+      const again = readFileSync(join(MIGRATIONS, "20260926_finance_loan_schedule_prepayments.sql"), "utf8");
+      const err = await failure(c, again);
+      expect([err.code, err.message]).toEqual(["P0001", "finance_accounts still has a check that lists only the old loan methods"]);
     });
 
     it("keeps a loan's rate changes, one a day, in range, and lets them go with the loan", async () => {

@@ -175,6 +175,120 @@ describe("rate changes", () => {
   });
 });
 
+describe("more kinds of loan", () => {
+  const car = { ...mortgage, category: "loan", region: "SG", currency: "SGD", name: "Car" };
+  const flat = { loan_principal: 100_000, loan_rate: 2.78, loan_start: "2026-01-05", loan_term_months: 84, loan_method: "flat" };
+
+  it("takes 等本等息 with the bank's instalment, 先息后本, and interest counted by the day", async () => {
+    const { status, body } = await post({ action: "createAccount", account: { ...car, ...flat, loan_payment: 1422.14 } });
+    expect(status).toBe(200);
+    expect((await schedule(body.id)).body.periods[0]).toMatchObject({ payment: 1422.14, principal: 1190.47, interest: 231.67 });
+    const io = { ...flat, loan_method: "interest_only", loan_rate: 3.65, loan_term_months: 12 };
+    const bullet = (await post({ action: "createAccount", account: { ...car, ...io, loan_principal: 100_000 } })).body;
+    expect((await schedule(bullet.id)).body.periods.at(-1)).toMatchObject({ payment: 100_304.17, principal: 100_000 });
+    const home = { ...terms, loan_day_count: "actual/365" };
+    const daily = (await post({ action: "createAccount", account: { ...mortgage, ...home } })).body;
+    expect(daily.loan_day_count).toBe("actual/365");
+    // 1 October to 1 November 2026: 31 days of 1,439,520.79 at 3.2%, a year of 365.
+    expect((await schedule(daily.id)).body.periods[0].interest).toBe(Math.round(143_952_079 * 3.2 * 31 / 36_500) / 100);
+  });
+
+  it("refuses what does not fit, saying why", async () => {
+    const bad: Array<[Row, RegExp]> = [
+      [{ ...car, ...flat, loan_method: "interest_only", loan_payment: 1000 }, /only an annuity \(等额本息\) or flat \(等本等息\)/],
+      [{ ...car, ...flat, loan_day_count: "daily" }, /loan_day_count must be 30\/360, actual\/365, actual\/360 or null/],
+      [{ ...car, loan_day_count: "actual/365" }, /loan_day_count belong to a loan's terms/],
+      [{ ...car, ...flat, loan_method: "balloon" }, /loan_method/],
+    ];
+    for (const [account, message] of bad) {
+      const { status, body } = await post({ action: "createAccount", account });
+      expect(status, JSON.stringify(account)).toBe(400);
+      expect(body.error).toMatch(message);
+    }
+  });
+});
+
+describe("prepayments", () => {
+  const prepay = (payload: Row, headers?: Record<string, string>) => post({ action: "addLoanPrepayment", account_id: LOAN, ...payload }, headers);
+
+  it("come off what is owed on their day, and the schedule and the summary follow", async () => {
+    const { status, body } = await prepay({ paid_on: "2027-01-01", amount: 100_000, mode: "reduce" });
+    expect(status).toBe(200);
+    expect(body.prepayments).toEqual([expect.objectContaining({ account_id: LOAN, paid_on: "2027-01-01", amount: 100_000, mode: "reduce", payment: null })]);
+    const everything = await (await GET(request("/api/finance"))).json();
+    expect(everything.accounts.find((a: { id: string }) => a.id === LOAN).prepayments).toHaveLength(1);
+
+    const { periods } = (await schedule(LOAN)).body;
+    // Paid with the third repayment: the fourth's interest runs on 1,322,558.60, and over the 192 left the payment falls.
+    expect(periods[3]).toMatchObject({ n: 4, interest: 3526.82, prepaid: [{ paid_on: "2027-01-01", amount: 100_000 }] });
+    expect(periods[3].payment).toBeLessThan(9476.9);
+    expect(periods).toHaveLength(195);
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2027-01-15T04:00:00Z"));
+    const summary = await (await SUMMARY(request("/api/finance/summary"))).json();
+    expect(summary.accounts.find((a: { id: string }) => a.id === LOAN).loan).toMatchObject({ payments_made: 3, principal_left: 1_322_558.6 });
+  });
+
+  it("refuse what makes no sense, saying why", async () => {
+    await standIn({}, [
+      account(DBS),
+      account(LOAN, { ...mortgage, ...terms, ...stated }),
+      account("00000000-0000-0000-0000-0000000000b2", { ...mortgage, ...terms, loan_method: "equal_principal" }),
+    ]);
+    await prepay({ paid_on: "2027-01-01", amount: 1000, mode: "shorten" });
+    const bad: Array<[Row, number, RegExp]> = [
+      [{ account_id: DBS, paid_on: "2027-02-01", amount: 1000, mode: "shorten" }, 400, /no loan terms/],
+      [{ account_id: NOWHERE, paid_on: "2027-02-01", amount: 1000, mode: "shorten" }, 404, /No such account/],
+      [{ account_id: "not-an-id", paid_on: "2027-02-01", amount: 1000, mode: "shorten" }, 400, /account_id/],
+      [{ paid_on: "2027-02-30", amount: 1000, mode: "shorten" }, 400, /paid_on must be a date/],
+      [{ paid_on: "2043-01-17", amount: 1000, mode: "shorten" }, 400, /after the last repayment, 2043-01-16/],
+      [{ paid_on: "2027-02-01", amount: 0, mode: "shorten" }, 400, /amount must be a positive amount/],
+      [{ paid_on: "2027-02-01", amount: "1000", mode: "shorten" }, 400, /amount must be a positive amount/],
+      [{ paid_on: "2027-02-01", amount: 1000, mode: "halve" }, 400, /mode must be shorten/],
+      [{ paid_on: "2027-02-01", amount: 1000, mode: "shorten", payment: 9000 }, 400, /payment goes with reduce/],
+      [{ account_id: "00000000-0000-0000-0000-0000000000b2", paid_on: "2027-02-01", amount: 1000, mode: "reduce", payment: 9000 }, 400, /only an annuity/],
+      // After the second repayment, on 1 Dec, 1,428,226.89 is owed: the 1,000 prepaid on 1 Jan comes later.
+      [{ paid_on: "2026-12-01", amount: 1_500_000, mode: "shorten" }, 400, /more than the 1428226.89 owed on 2026-12-01\. To clear the loan, prepay 1428226\.89/],
+      [{ paid_on: "2027-01-01", amount: 2000, mode: "shorten" }, 409, /already a prepayment on 2027-01-01/],
+    ];
+    for (const [payload, status, message] of bad) {
+      const { status: got, body } = await prepay(payload);
+      expect(got, JSON.stringify(payload)).toBe(status);
+      expect(body.error).toMatch(message);
+    }
+    expect(db.tables.finance_loan_prepayments).toHaveLength(1);
+    // What is owed that day clears it exactly: the loan ends there, with nothing more to pay.
+    expect((await prepay({ paid_on: "2026-12-01", amount: 1_428_226.89, mode: "shorten" })).status).toBe(200);
+    const { periods } = (await schedule(LOAN)).body;
+    expect(periods).toHaveLength(3);
+    expect(periods[2]).toEqual({
+      n: 3, date: "2026-12-01", rate: 3.2, payment: 0, principal: 0, interest: 0, balance: 0,
+      prepaid: [{ paid_on: "2026-12-01", amount: 1_428_226.89 }],
+    });
+  });
+
+  it("go when deleted, and the schedule runs as if they had never been", async () => {
+    const before = (await schedule(LOAN)).body;
+    const made = (await prepay({ paid_on: "2027-01-01", amount: 100_000, mode: "shorten" })).body.prepayments[0];
+    const { status, body } = await post({ action: "deleteLoanPrepayment", id: made.id });
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ id: LOAN, prepayments: [] });
+    expect((await schedule(LOAN)).body).toEqual(before);
+    expect((await post({ action: "deleteLoanPrepayment", id: made.id })).status).toBe(404);
+    expect((await post({ action: "deleteLoanPrepayment", id: "not-an-id" })).status).toBe(400);
+  });
+
+  it("are the owner's alone", async () => {
+    session.current = null;
+    expect((await prepay({ paid_on: "2027-01-01", amount: 1000, mode: "shorten" })).status).toBe(401);
+    expect((await post({ action: "deleteLoanPrepayment", id: NOWHERE })).status).toBe(401);
+    expect(db.requests).toHaveLength(0);
+    vi.stubEnv("FINANCE_API_TOKEN", TOKEN);
+    expect((await prepay({ paid_on: "2027-01-01", amount: 1000, mode: "shorten" }, { authorization: `Bearer ${TOKEN}` })).status).toBe(200);
+  });
+});
+
 describe("GET /api/finance/loan-schedule", () => {
   it("lists every repayment to the cent, with the totals, from the same schedule the summary reads", async () => {
     const { status, cache, body } = await schedule(LOAN);
@@ -210,7 +324,7 @@ describe("GET /api/finance/loan-schedule", () => {
     const { LoanSchedule, LoanPeriod, Account } = spec.components.schemas;
     expect(Object.keys(body).sort()).toEqual([...LoanSchedule.required].sort());
     expect(Object.keys(body.periods[0]).sort()).toEqual([...LoanPeriod.required].sort());
-    expect(Object.keys(Account.properties)).toEqual(expect.arrayContaining(["loan_payment", "loan_first_interest", "loan_maturity", "rate_changes"]));
+    expect(Object.keys(Account.properties)).toEqual(expect.arrayContaining(["loan_payment", "loan_first_interest", "loan_maturity", "loan_day_count", "rate_changes", "prepayments"]));
   });
 });
 
@@ -233,11 +347,11 @@ describe("before 20260926_finance_loan_schedule is applied", () => {
   // As Supabase answers then: no such table, and no such columns to write.
   const unmigrated = (code: string): Options => ({
     intercept: (req) => {
-      if (req.table === "finance_loan_rate_changes") {
-        return { status: 404, body: { code, message: "relation \"public.finance_loan_rate_changes\" does not exist" } };
+      if (req.table === "finance_loan_rate_changes" || req.table === "finance_loan_prepayments") {
+        return { status: 404, body: { code, message: `relation "public.${req.table}" does not exist` } };
       }
       const body = (Array.isArray(req.body) ? req.body[0] : req.body) as Row | undefined;
-      const column = body && ["loan_payment", "loan_first_interest", "loan_maturity"].find((c) => c in body);
+      const column = body && ["loan_payment", "loan_first_interest", "loan_maturity", "loan_day_count"].find((c) => c in body);
       if (req.table === "finance_accounts" && column) {
         return { status: 400, body: { code: "PGRST204", message: `Could not find the '${column}' column of 'finance_accounts' in the schema cache` } };
       }
@@ -249,11 +363,11 @@ describe("before 20260926_finance_loan_schedule is applied", () => {
     it(`reads, sums up, schedules and saves as before (${code})`, async () => {
       await standIn(unmigrated(code), [account(DBS), account(LOAN, { ...mortgage, ...terms })]);
       const everything = await (await GET(request("/api/finance"))).json();
-      expect(everything.accounts.map((a: { rate_changes: unknown }) => a.rate_changes)).toEqual([[], []]);
+      expect(everything.accounts.map((a: { rate_changes: unknown; prepayments: unknown }) => [a.rate_changes, a.prepayments])).toEqual([[[], []], [[], []]]);
       expect((await SUMMARY(request("/api/finance/summary"))).status).toBe(200);
       expect((await schedule(LOAN)).body.periods[0]).toMatchObject({ payment: 9476.74, interest: 3838.72 });
       // The page sends the new fields empty with every save.
-      const empty = { loan_payment: null, loan_first_interest: null, loan_maturity: null };
+      const empty = { loan_payment: null, loan_first_interest: null, loan_maturity: null, loan_day_count: null };
       expect((await post({ action: "createAccount", account: { ...mortgage, ...terms, ...empty } })).status).toBe(200);
       expect((await post({ action: "updateAccount", id: LOAN, updates: { name: "房贷", ...terms, ...empty } })).status).toBe(200);
       // What cannot be saved yet says so.
