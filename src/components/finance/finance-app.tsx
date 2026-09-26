@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { ArrowDownRight, ArrowUpRight, Minus, PenLine, Plus, RotateCw } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, KeyRound, Minus, PenLine, Plus, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { todayInSG } from "@/lib/dates";
 import {
@@ -14,6 +14,7 @@ import { UNIT_CODE, compactMoney, dayLabel, dayTime, money, percent } from "@/li
 import { cn } from "@/lib/utils";
 import { financeAction, loadFinance, messageOf, type FinanceData } from "./api";
 import { AccountDialog } from "./account-dialog";
+import { ApiAccessDialog } from "./api-access-dialog";
 import { AccountsCard } from "./accounts-card";
 import { ConfirmDialog, type Confirmation } from "./confirm-dialog";
 import { LensBar, describeLens } from "./lens-bar";
@@ -84,6 +85,7 @@ export function FinanceApp() {
   const [chosenLens, setLensState] = useState<Lens>(storedLens);
   const [view, setView] = useState<View>("net");
   const [recordDay, setRecordDay] = useState<string | null>(null);
+  const [apiOpen, setApiOpen] = useState(false);
   const [editing, setEditing] = useState<FinanceAccount | "new" | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
 
@@ -206,9 +208,12 @@ export function FinanceApp() {
             Accounts in China and Singapore, each kept in its own currency and valued in CNY and SGD at the rates of the day it was recorded.
           </p>
         </div>
-        {openAccounts.length > 0 && (
-          <Button onClick={() => setRecordDay(todayInSG())}><PenLine /> Record balances</Button>
-        )}
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" onClick={() => setApiOpen(true)}><KeyRound /> API access</Button>
+          {openAccounts.length > 0 && (
+            <Button onClick={() => setRecordDay(todayInSG())}><PenLine /> Record balances</Button>
+          )}
+        </div>
       </div>
 
       {accounts.length === 0 ? (
@@ -352,6 +357,7 @@ export function FinanceApp() {
         onSaved={(saved) => patch((d) => ({ ...d, accounts: withAccount(d.accounts, saved) }))}
       />
       <ConfirmDialog confirmation={confirmation} onClose={() => setConfirmation(null)} />
+      <ApiAccessDialog open={apiOpen} onClose={() => setApiOpen(false)} />
     </div>
   );
 }

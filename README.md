@@ -44,7 +44,7 @@ split bill's allowlist — with 401 for anyone else, and marks every response
 `private, no-store`. `/finance` shows a sign-in prompt when signed out and a 404
 to anyone else signed in. The navbar item and home-page card appear only for the
 owner, but they are conveniences; the page and the route are the gate. The one
-other way in is `FINANCE_API_TOKEN`, below.
+other way in is an API token, below.
 
 ## Finance: how the numbers work
 
@@ -80,16 +80,19 @@ An agent or a script can work on the finance data as the owner — read it and
 record balances — with a bearer token. It opens `/api/finance/*` and nothing
 else: the split bill does not know it.
 
-1. Generate one: `openssl rand -hex 32` (or `python3 -c "import secrets;
-   print(secrets.token_hex(32))"`). Shorter than 32 characters is ignored.
-2. Set it in Vercel as `FINANCE_API_TOKEN` for Production, then redeploy: an
-   environment change reaches only deployments made after it.
-3. Give the agent the same value in its own environment. Never in this repo —
-   it is public.
+Make one on the page: **/finance → API access → Generate token**, signed in as
+the owner, on any device. The token is shown once; only its SHA-256 is kept
+(`finance_api_tokens`, as private as the other finance tables). Give it to the
+agent in its own environment — never in this repo, which is public — and revoke
+it on the same page if it is ever lost. Tokens can only be made and revoked
+from a signed-in session, never with a token.
+
+`FINANCE_API_TOKEN`, set in Vercel, is the other way to give one: it works the
+same, but is changed by redeploying rather than on the page.
 
 ```bash
 curl -s https://playground.noahyao.me/api/finance/summary \
-  -H "Authorization: Bearer $FINANCE_API_TOKEN"
+  -H "Authorization: Bearer $FINANCE_TOKEN"
 ```
 
 | | |
