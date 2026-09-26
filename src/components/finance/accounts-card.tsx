@@ -115,7 +115,7 @@ function traits(a: FinanceAccount): string[] {
     const terms = loanTermsOf(a);
     if (terms) {
       const s = loanStatus(terms, todayInSG());
-      out.push(`${terms.rate}% ${LOAN_METHOD_LABELS[terms.method]}`, s.payments_left ? `${s.payments_left} of ${terms.months} left` : "repaid");
+      out.push(`${s.rate}% ${LOAN_METHOD_LABELS[terms.method]}`, s.payments_left ? `${s.payments_left} of ${terms.months} left` : "repaid");
     }
   }
   return out;

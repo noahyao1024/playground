@@ -233,6 +233,8 @@ describe.skipIf(!SERVER)("database", () => {
           `delete from finance_balances`,
           `select * from finance_api_tokens`,
           `insert into finance_api_tokens (name, token_sha256) values ('x', repeat('a', 64))`,
+          `select * from finance_loan_rate_changes`,
+          `insert into finance_loan_rate_changes (account_id, effective_date, rate) values ('${ACCOUNT}', '2027-01-01', 3)`,
         ]) {
           expect((await failure(c, sql)).code, `${role}: ${sql}`).toBe("42501");
         }
@@ -321,6 +323,46 @@ describe.skipIf(!SERVER)("database", () => {
       ]) {
         expect((await failure(c, sql)).code, sql).toBe("23514");
       }
+    });
+
+    const loan = (method: string, extras: string, maturity = "null") =>
+      `insert into finance_accounts (name, region, currency, kind, category, ${loanColumns}, loan_payment, loan_first_interest, loan_maturity)
+       values ('Mortgage', 'CN', 'CNY', 'liability', 'mortgage', 1439520.79, 3.2, '2026-11-01', 195, '${method}', ${extras}, ${maturity}) returning id`;
+
+    it("takes the bank's stated payment, first interest and end date on a loan, each optional, and none without one", async () => {
+      await c.query(loan("annuity", `9476.90, 3836.22`, `'2043-01-16'`));
+      await c.query(loan("equal_principal", `null, null`, `'2043-01-16'`));
+      await c.query(loan("annuity", `null, 3836.22`));
+      await c.query(loan("annuity", `9476.90, null`));
+      await c.query(loan("equal_principal", `null, 3836.22`));
+      await c.query(loan("annuity", `null, 0`));
+      for (const extras of [`0, null`, `-1, null`, `null, -0.01`]) {
+        expect((await failure(c, loan("annuity", extras))).code, extras).toBe("23514");
+      }
+      // A stated payment is a level one: 等额本金's falls every month.
+      const falling = await failure(c, loan("equal_principal", `6861.11, null`));
+      expect([falling.code, falling.constraint]).toEqual(["23514", "finance_accounts_loan_extras"]);
+      // And none means anything without the terms it qualifies.
+      for (const extras of [`9476.90, null, null`, `null, 3836.22, null`, `null, null, '2043-01-16'`]) {
+        const err = await failure(c, `insert into finance_accounts (name, region, currency, kind, category, loan_payment, loan_first_interest, loan_maturity)
+          values ('x', 'CN', 'CNY', 'liability', 'loan', ${extras})`);
+        expect([err.code, err.constraint], extras).toEqual(["23514", "finance_accounts_loan_extras"]);
+      }
+    });
+
+    it("keeps a loan's rate changes, one a day, in range, and lets them go with the loan", async () => {
+      const { id } = (await c.query(loan("annuity", `9476.90, 3836.22`))).rows[0];
+      const change = (day: string, rate: string, payment = "null") =>
+        c.query(`insert into finance_loan_rate_changes (account_id, effective_date, rate, payment) values ($1, $2, ${rate}, ${payment})`, [id, day]);
+      await change("2027-01-01", "3", "9300");
+      await change("2028-01-01", "2.8");
+      expect((await failure(c, `insert into finance_loan_rate_changes (account_id, effective_date, rate) values ($1, '2027-01-01', 2.9)`, [id])).code).toBe("23505");
+      for (const [rate, payment] of [["-0.1", "null"], ["100", "null"], ["3", "0"]]) {
+        expect((await failure(c, `insert into finance_loan_rate_changes (account_id, effective_date, rate, payment) values ($1, '2029-01-01', ${rate}, ${payment})`, [id])).code, `${rate} ${payment}`).toBe("23514");
+      }
+      expect((await failure(c, `insert into finance_loan_rate_changes (account_id, effective_date, rate) values (gen_random_uuid(), '2029-01-01', 3)`)).code).toBe("23503");
+      await c.query(`delete from finance_accounts where id = $1`, [id]);
+      expect((await c.query(`select count(*)::int as n from finance_loan_rate_changes`)).rows[0].n).toBe(0);
     });
   });
 

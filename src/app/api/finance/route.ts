@@ -2,8 +2,10 @@ import { NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { todayInSG } from "@/lib/dates";
 import { isFinanceCurrency, ratesOn } from "@/lib/fx";
-import { isCategory, isKind, isLoanMethod, isRegion, type FinanceAccount, type Kind } from "@/lib/finance";
-import { financeDatabase, financeJson as json, isFinanceRequest, readAccounts, reason, streamFinance } from "@/lib/finance-server";
+import { addMonths, isCategory, isKind, isLoanMethod, isRegion, loanTermsOf, type FinanceAccount, type Kind } from "@/lib/finance";
+import {
+  financeDatabase, financeJson as json, isFinanceRequest, isUuid, readAccount, readAccounts, readRateChanges, reason, streamFinance, withRateChanges,
+} from "@/lib/finance-server";
 
 /** The owner's money. Every request is checked -- the owner's session, or the
  *  token an agent carries -- and every answer is marked uncacheable. What the
@@ -62,6 +64,8 @@ export async function POST(req: NextRequest) {
         if (error) throw error;
         return json({ ok: true });
       }
+      case "addLoanRateChange": return await addLoanRateChange(db, body);
+      case "deleteLoanRateChange": return await deleteLoanRateChange(db, body.id);
       default:
         return json({ error: "Invalid action" }, 400);
     }
@@ -73,7 +77,8 @@ export async function POST(req: NextRequest) {
 
 type AccountFields = Partial<Pick<FinanceAccount,
   | "name" | "institution" | "owner" | "region" | "currency" | "kind" | "category" | "note" | "sort_order"
-  | "liquidity" | "long_term" | "loan_principal" | "loan_rate" | "loan_start" | "loan_term_months" | "loan_method">>;
+  | "liquidity" | "long_term" | "loan_principal" | "loan_rate" | "loan_start" | "loan_term_months" | "loan_method"
+  | "loan_payment" | "loan_first_interest" | "loan_maturity">>;
 
 /** A number that may also be cleared: null, or a number `ok` accepts. */
 function nullableNumber(value: unknown, field: string, ok: (n: number) => boolean, what: string): number | null {
@@ -83,14 +88,37 @@ function nullableNumber(value: unknown, field: string, ok: (n: number) => boolea
 }
 
 const LOAN_FIELDS = ["loan_principal", "loan_rate", "loan_start", "loan_term_months", "loan_method"] as const;
+/** What the bank states beyond the terms. Each is optional on its own. */
+const LOAN_EXTRAS = ["loan_payment", "loan_first_interest", "loan_maturity"] as const;
+
+const PERCENT = "an annual percentage, from 0 to under 100";
 
 /** A loan's terms go in whole or not at all, and only on a liability. The
- *  database insists on the same, but this says which part is missing. */
+ *  database insists on the same, but this says which part is missing. What the
+ *  bank states beyond them needs a loan to qualify, a stated payment a level
+ *  one -- 等额本金's falls every month -- and a contract end date has to fall
+ *  where the last repayment could: from the last monthly day to before the
+ *  month after it. Later would mean a longer term. */
 function checkLoanTerms(account: Record<string, unknown>) {
   const missing = LOAN_FIELDS.filter((f) => account[f] == null);
-  if (missing.length === LOAN_FIELDS.length) return;
+  if (missing.length === LOAN_FIELDS.length) {
+    const extras = LOAN_EXTRAS.filter((f) => account[f] != null);
+    if (extras.length > 0) throw new Invalid(`${extras.join(" and ")} belong to a loan's terms; with no terms, clear ${extras.length > 1 ? "them" : "it"} too`);
+    return;
+  }
   if (missing.length > 0) throw new Invalid(`Loan terms need all five of ${LOAN_FIELDS.join(", ")}; missing ${missing.join(", ")}`);
   if (account.kind !== "liability") throw new Invalid("Only a liability has loan terms");
+  if (account.loan_payment != null && account.loan_method !== "annuity") {
+    throw new Invalid("loan_payment is a level monthly payment, which only an annuity (等额本息) loan has");
+  }
+  if (account.loan_maturity != null) {
+    const start = String(account.loan_start), months = Number(account.loan_term_months);
+    const last = addMonths(start, months - 1), after = addMonths(start, months);
+    const maturity = String(account.loan_maturity);
+    if (maturity < last || maturity >= after) {
+      throw new Invalid(`loan_maturity is when the last repayment falls due: from the last monthly one, ${last}, to before ${after}`);
+    }
+  }
 }
 
 /** The fields of an account a request may set, checked. `kind` is the kind the
@@ -134,7 +162,7 @@ function accountFields(input: Record<string, unknown>, kind: Kind): AccountField
     out.loan_principal = nullableNumber(input.loan_principal, "loan_principal", (n) => n > 0, "a positive amount");
   }
   if ("loan_rate" in input) {
-    out.loan_rate = nullableNumber(input.loan_rate, "loan_rate", (n) => n >= 0 && n < 100, "an annual percentage, from 0 to under 100");
+    out.loan_rate = nullableNumber(input.loan_rate, "loan_rate", (n) => n >= 0 && n < 100, PERCENT);
   }
   if ("loan_start" in input) {
     if (input.loan_start !== null && !isRealDay(input.loan_start)) throw new Invalid("loan_start must be a date, YYYY-MM-DD");
@@ -148,6 +176,16 @@ function accountFields(input: Record<string, unknown>, kind: Kind): AccountField
     if (input.loan_method !== null && !isLoanMethod(input.loan_method)) throw new Invalid("loan_method must be annuity or equal_principal");
     out.loan_method = input.loan_method;
   }
+  if ("loan_payment" in input) {
+    out.loan_payment = nullableNumber(input.loan_payment, "loan_payment", (n) => n > 0, "a positive amount, or null");
+  }
+  if ("loan_first_interest" in input) {
+    out.loan_first_interest = nullableNumber(input.loan_first_interest, "loan_first_interest", (n) => n >= 0, "an amount of 0 or more, or null");
+  }
+  if ("loan_maturity" in input) {
+    if (input.loan_maturity !== null && !isRealDay(input.loan_maturity)) throw new Invalid("loan_maturity must be a date, YYYY-MM-DD, or null");
+    out.loan_maturity = input.loan_maturity;
+  }
   return out;
 }
 
@@ -159,9 +197,12 @@ async function createAccount(db: SupabaseClient, input: unknown) {
   }
   const fields = accountFields(a, a.kind);
   checkLoanTerms(fields);
+  // Empty is what they start as anyway. Left out, the insert also works before
+  // their migration is applied.
+  for (const f of LOAN_EXTRAS) if (fields[f] === null) delete fields[f];
   const { data, error } = await db.from("finance_accounts").insert(fields).select().single();
   if (error) throw error;
-  return data;
+  return { ...data, rate_changes: [] };
 }
 
 async function balanceCount(db: SupabaseClient, accountId: string): Promise<number> {
@@ -185,6 +226,8 @@ async function updateAccount(db: SupabaseClient, id: unknown, input: unknown) {
   }
   const fields: Record<string, unknown> = accountFields(updates, kind);
   checkLoanTerms({ ...current, ...fields });
+  // A column its migration has not added yet has nothing to clear.
+  for (const f of LOAN_EXTRAS) if (fields[f] === null && !(f in current)) delete fields[f];
   if ("archived" in updates) {
     if (typeof updates.archived !== "boolean") throw new Invalid("archived must be true or false");
     fields.archived_at = updates.archived ? new Date().toISOString() : null;
@@ -195,7 +238,47 @@ async function updateAccount(db: SupabaseClient, id: unknown, input: unknown) {
   }
   const { data, error } = await db.from("finance_accounts").update(fields).eq("id", id).select().single();
   if (error) throw error;
-  return json(data);
+  return json(withRateChanges([data as FinanceAccount], await readRateChanges(db, id))[0]);
+}
+
+/** A change to a loan's rate, from the first repayment charged at it. Kept
+ *  beside the terms, so the months before keep the rate they were charged at.
+ *  Answers the account, with its rate changes as they now stand. */
+async function addLoanRateChange(db: SupabaseClient, input: Record<string, unknown>) {
+  if (!isUuid(input.account_id)) throw new Invalid("account_id is required: the loan's account");
+  const account = await readAccount(db, input.account_id);
+  if (!account) return json({ error: "No such account" }, 404);
+  const terms = loanTermsOf(account);
+  if (!terms) throw new Invalid("That account has no loan terms to change the rate of");
+  const day = input.effective_date;
+  if (!isRealDay(day)) throw new Invalid("effective_date must be a date, YYYY-MM-DD: the first repayment charged at the new rate");
+  // The last repayment: the monthly one, or the contract's end date after it.
+  const monthly = addMonths(terms.start, terms.months - 1);
+  const last = terms.maturity && terms.maturity > monthly ? terms.maturity : monthly;
+  if (day <= terms.start) throw new Invalid(`effective_date must come after the first repayment, ${terms.start}. For the rate from the start, change loan_rate.`);
+  if (day > last) throw new Invalid(`effective_date is after the last repayment, ${last}: it would change nothing`);
+  const rate = input.rate;
+  if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0 || rate >= 100) throw new Invalid(`rate must be ${PERCENT}`);
+  const payment = input.payment == null ? null : nullableNumber(input.payment, "payment", (n) => n > 0, "a positive amount, or null");
+  if (payment !== null && terms.method !== "annuity") throw new Invalid("payment is a level monthly payment, which only an annuity (等额本息) loan has");
+  const taken = `There is already a rate change on ${day}. Delete it first to put another in its place.`;
+  if (account.rate_changes?.some((c) => c.effective_date === day)) return json({ error: taken }, 409);
+  const { error } = await db.from("finance_loan_rate_changes").insert({ account_id: account.id, effective_date: day, rate, payment });
+  if (error) {
+    if (error.code === "23505") return json({ error: taken }, 409);
+    throw error;
+  }
+  return json(await readAccount(db, account.id));
+}
+
+/** Takes a rate change back: the loan's schedule runs on as if it never was.
+ *  Answers the account, with the rate changes left. */
+async function deleteLoanRateChange(db: SupabaseClient, id: unknown) {
+  if (!isUuid(id)) throw new Invalid("id is required: the rate change's");
+  const { data, error } = await db.from("finance_loan_rate_changes").delete().eq("id", id).select("account_id");
+  if (error) throw error;
+  if (!data?.length) return json({ error: "No such rate change" }, 404);
+  return json(await readAccount(db, data[0].account_id));
 }
 
 async function deleteAccount(db: SupabaseClient, id: unknown) {
