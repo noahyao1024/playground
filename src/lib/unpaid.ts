@@ -22,7 +22,7 @@ export function overThreshold(charges: UnpaidCharge[], people: Person[], thresho
 const yuan = (n: number, digits: number) =>
   `¥${n.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
 
-/** The alert as a mail: the same words the GitHub workflow sent. */
+/** The alert as a mail: who owes what, most first, and where to settle it. */
 export function alertMail(over: Owing[], threshold: number, link: string): { subject: string; text: string } {
   const lines = [`${over.length} person(s) owe more than ${yuan(threshold, 0)}.`, ""];
   for (const o of over) lines.push(`  ${o.name}: ${yuan(o.owed, 2)} across ${o.charges} charge(s), oldest ${o.oldest}`);

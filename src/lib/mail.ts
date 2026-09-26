@@ -1,7 +1,7 @@
 import nodemailer from "nodemailer";
 
-/** Where the alert goes, read from the same variable names the GitHub workflow
- *  used, so the values move across unchanged. */
+/** Where the alert goes, and through which server: the SMTP_* variables and
+ *  ALERT_TO, as .env.example describes them. */
 export type MailConfig = { host: string; port: number; user: string; pass: string; from: string; to: string };
 
 /** Null until SMTP_USERNAME and SMTP_PASSWORD are both set: then there is no

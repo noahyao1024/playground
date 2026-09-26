@@ -143,10 +143,6 @@ All three routes answer only `Authorization: Bearer $CRON_SECRET`. In the
 Actions tab, **Run workflow** runs the jobs on demand; ticking *Test mail* sends
 the alert even when nobody is over the threshold, to check the mail setup.
 
-`unpaid-alert.yml` and `supabase-keepalive.yml` did this before, with their own
-copies of the Supabase and SMTP settings. They stay until the Daily jobs
-workflow has mailed, then go, with their secrets.
-
 Billing is self-healing: each run walks every month from a subscription's start
 to the target month and fills whatever has no charge yet, each at its own
 historical rate. A missed run costs latency, not data -- and running on the 1st,

@@ -94,10 +94,9 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   log is public: counts and states only, never names or amounts. Schedule here rather than on
   Vercel because Vercel Cron on Hobby neither retries nor tells anyone and keeps an hour of
   logs; the work stays on the site, next to its configuration. GitHub holds `CRON_SECRET` (the
-  value Vercel holds) and `SUPABASE_DB_URL`, nothing else.
-- `.github/workflows/supabase-keepalive.yml` and `unpaid-alert.yml` — the old way, with their
-  own copies of the Supabase and SMTP settings, on their way out: they stay until the Daily jobs
-  workflow has mailed, then go with those secrets.
+  value Vercel holds) and `SUPABASE_DB_URL`, nothing else; `test/workflows.test.ts` fails any
+  workflow that reaches for another secret or variable. Configuration kept in two places goes
+  stale in one of them.
 - `.github/workflows/check.yml` — typecheck, lint and tests on every pull request and push
   to `main`, with a Postgres service for `test/sql/`. The gate pre-approved deploys rest on.
 - `vercel.json` — cron hitting `/api/cron/bill` at 00:00 UTC on the 1st, 2nd and 3rd, and
