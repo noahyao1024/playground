@@ -4,7 +4,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { auth } from "@/lib/auth";
 import { isFinanceOwner } from "@/lib/access";
 import { fetchAllRows, pagesOf } from "@/lib/paginate";
-import type { FinanceAccount, FinanceBalance, LoanRateChange } from "@/lib/finance";
+import type { FinanceAccount, FinanceBalance, LoanPrepayment, LoanRateChange } from "@/lib/finance";
 
 /** The server side of /api/finance/*: who may ask, and where the answers come
  *  from. Server-only -- it reads the service-role key and node:crypto. */
@@ -38,50 +38,67 @@ export function financeDatabase(): SupabaseClient | null {
  *  when the table is missing from its schema cache. */
 const MISSING_TABLE = new Set(["42P01", "PGRST205"]);
 
-/** Loans' rate changes, oldest first -- every account's, or one account's.
- *  Before 20260926_finance_loan_schedule is applied the table is not there,
- *  and there are none: the loans are scheduled on their terms alone. */
-export function readRateChanges(db: SupabaseClient, accountId?: string): Promise<LoanRateChange[]> {
-  return fetchAllRows<LoanRateChange>(async (from, to) => {
-    let query = db.from("finance_loan_rate_changes").select("*");
+/** A table's rows for loans, oldest first -- every account's, or one account's.
+ *  Before its migration is applied the table is not there, and there are none:
+ *  the loans are scheduled on their terms alone. */
+function readLoanRows<T>(db: SupabaseClient, table: string, day: string, accountId?: string): Promise<T[]> {
+  return fetchAllRows<T>(async (from, to) => {
+    let query = db.from(table).select("*");
     if (accountId) query = query.eq("account_id", accountId);
-    const page = await query.order("account_id").order("effective_date").range(from, to);
+    const page = await query.order("account_id").order(day).range(from, to);
     return page.error && MISSING_TABLE.has(page.error.code) ? { data: [], error: null } : page;
   });
 }
 
-/** Accounts with each one's rate changes on it, as the API hands them out. */
-export function withRateChanges<T extends FinanceAccount>(accounts: T[], changes: LoanRateChange[]): T[] {
-  const byAccount = new Map<string, LoanRateChange[]>();
-  for (const change of changes) {
-    const list = byAccount.get(change.account_id);
-    if (list) list.push(change);
-    else byAccount.set(change.account_id, [change]);
-  }
-  return accounts.map((a) => ({ ...a, rate_changes: byAccount.get(a.id) ?? [] }));
+/** What has happened to loans since their terms: rate changes and prepayments. */
+export type LoanEvents = { rateChanges: LoanRateChange[]; prepayments: LoanPrepayment[] };
+
+export async function readLoanEvents(db: SupabaseClient, accountId?: string): Promise<LoanEvents> {
+  const [rateChanges, prepayments] = await Promise.all([
+    readLoanRows<LoanRateChange>(db, "finance_loan_rate_changes", "effective_date", accountId),
+    readLoanRows<LoanPrepayment>(db, "finance_loan_prepayments", "paid_on", accountId),
+  ]);
+  return { rateChanges, prepayments };
 }
 
-/** Every account, with its rate changes. A family's are few, but a read that
- *  trusted one request to return them all would lose some silently past
- *  PostgREST's row cap. */
+function byAccount<T extends { account_id: string }>(rows: T[]): Map<string, T[]> {
+  const map = new Map<string, T[]>();
+  for (const row of rows) {
+    const list = map.get(row.account_id);
+    if (list) list.push(row);
+    else map.set(row.account_id, [row]);
+  }
+  return map;
+}
+
+/** Accounts with each one's rate changes and prepayments on it, as the API
+ *  hands them out. */
+export function withLoanEvents<T extends FinanceAccount>(accounts: T[], events: LoanEvents): T[] {
+  const changes = byAccount(events.rateChanges), prepayments = byAccount(events.prepayments);
+  return accounts.map((a) => ({ ...a, rate_changes: changes.get(a.id) ?? [], prepayments: prepayments.get(a.id) ?? [] }));
+}
+
+/** Every account, with its rate changes and prepayments. A family's are few,
+ *  but a read that trusted one request to return them all would lose some
+ *  silently past PostgREST's row cap. */
 export async function readAccounts(db: SupabaseClient): Promise<FinanceAccount[]> {
-  const [accounts, changes] = await Promise.all([
+  const [accounts, events] = await Promise.all([
     fetchAllRows<FinanceAccount>((from, to) =>
       db.from("finance_accounts").select("*").order("created_at").order("id").range(from, to)),
-    readRateChanges(db),
+    readLoanEvents(db),
   ]);
-  return withRateChanges(accounts, changes);
+  return withLoanEvents(accounts, events);
 }
 
-/** One account as the API hands it out, with its rate changes; null if there
- *  is no such account. */
+/** One account as the API hands it out, with its rate changes and
+ *  prepayments; null if there is no such account. */
 export async function readAccount(db: SupabaseClient, id: string): Promise<FinanceAccount | null> {
-  const [{ data, error }, changes] = await Promise.all([
+  const [{ data, error }, events] = await Promise.all([
     db.from("finance_accounts").select("*").eq("id", id).maybeSingle(),
-    readRateChanges(db, id),
+    readLoanEvents(db, id),
   ]);
   if (error) throw error;
-  return data ? withRateChanges([data as FinanceAccount], changes)[0] : null;
+  return data ? withLoanEvents([data as FinanceAccount], events)[0] : null;
 }
 
 /** Every balance, a page at a time, oldest first. They grow by a row per

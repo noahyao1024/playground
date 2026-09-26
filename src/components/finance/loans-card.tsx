@@ -54,7 +54,7 @@ export function LoansCard({ accounts, last, today }: {
                 </p>
               </div>
               <p className="meta-row mt-0.5 flex flex-wrap gap-x-1.5 text-xs text-muted-foreground">
-                <span>{s.rate}% a year</span>
+                <span>{s.rate}%{terms.method === "flat" ? " flat" : ""} a year</span>
                 <span>{LOAN_METHOD_LABELS[terms.method]}</span>
                 <span>{original(terms.principal, a.currency, { whole: true })} over {termLabel(terms.months)}</span>
               </p>
@@ -78,7 +78,7 @@ export function LoansCard({ accounts, last, today }: {
               {off && (
                 <p className="mt-2 text-xs text-muted-foreground">
                   The balance recorded on {dayLabel(recorded!.as_of)}, {original(owed!, a.currency, { whole: true })}, is{" "}
-                  {drift < 0 ? "below" : "above"} the schedule&rsquo;s principal. Prepaid? These figures follow the original schedule.
+                  {drift < 0 ? "below" : "above"} the schedule&rsquo;s principal. Prepaid? Add it under the loan&rsquo;s prepayments, and the schedule follows.
                 </p>
               )}
               <Button variant="outline" size="sm" className="mt-3" onClick={() => setPlan({ account: a, terms })}>

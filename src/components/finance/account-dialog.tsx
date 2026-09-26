@@ -12,9 +12,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { todayInSG } from "@/lib/dates";
 import {
-  CATEGORIES, ILLIQUID_CATEGORIES, LOAN_METHODS, LOAN_METHOD_LABELS, REGIONS, REGION_LABELS, addMonths, displayName, isCategory, loanSchedule,
-  loanStatus, loanTermsOf,
-  type FinanceAccount, type Kind, type LoanMethod, type LoanPeriod, type LoanRateChange, type LoanTerms, type Region,
+  CATEGORIES, ILLIQUID_CATEGORIES, LOAN_DAY_COUNTS, LOAN_DAY_COUNT_LABELS, LOAN_METHODS, LOAN_METHOD_LABELS, PREPAYMENT_MODES,
+  PREPAYMENT_MODE_LABELS, REGIONS, REGION_LABELS, addMonths, displayName, hasLevelPayment, isCategory, loanSchedule, loanStatus, loanTermsOf,
+  type FinanceAccount, type Kind, type LoanDayCount, type LoanMethod, type LoanPeriod, type LoanPrepayment, type LoanRateChange, type LoanTerms,
+  type PrepaymentMode, type Region,
 } from "@/lib/finance";
 import { dayLabel, original } from "@/lib/finance-format";
 import { FINANCE_CURRENCIES } from "@/lib/fx";
@@ -47,14 +48,22 @@ type Form = {
   statedPayment: number;
   firstInterest: number;
   maturity: string;
+  dayCount: LoanDayCount;
 };
 
 const NO_LOAN = {
   loan_principal: null, loan_rate: null, loan_start: null, loan_term_months: null, loan_method: null,
-  loan_payment: null, loan_first_interest: null, loan_maturity: null,
+  loan_payment: null, loan_first_interest: null, loan_maturity: null, loan_day_count: null,
 };
 const TERM_YEARS = [10, 15, 20, 25, 30];
 const METHOD_OPTIONS = LOAN_METHODS.map((m) => ({ value: m, label: LOAN_METHOD_LABELS[m] }));
+const METHOD_HINTS: Record<LoanMethod, string> = {
+  annuity: "等额本息: the same payment every month, mostly interest at first.",
+  equal_principal: "等额本金: the same principal every month, so the payment falls as the interest does.",
+  flat: "等本等息: the same principal and the same interest every month, the interest on the whole amount borrowed. Card instalments; car and personal loans in Singapore.",
+  interest_only: "先息后本: interest alone every month, and the whole principal with the last repayment.",
+};
+const MODE_OPTIONS = PREPAYMENT_MODES.map((m) => ({ value: m, label: PREPAYMENT_MODE_LABELS[m] }));
 
 const KIND_OPTIONS = [
   { value: "asset", label: "Asset" },
@@ -66,7 +75,7 @@ const HOME_CURRENCY: Record<Region, string> = { CN: "CNY", SG: "SGD", OTHER: "US
 
 const blankLoan = {
   hasLoan: false, principal: Number.NaN, rate: Number.NaN, start: "", months: 360, method: "annuity" as LoanMethod,
-  statedPayment: Number.NaN, firstInterest: Number.NaN, maturity: "",
+  statedPayment: Number.NaN, firstInterest: Number.NaN, maturity: "", dayCount: "30/360" as LoanDayCount,
 };
 
 function formOf(account: FinanceAccount | null): Form {
@@ -92,6 +101,7 @@ function formOf(account: FinanceAccount | null): Form {
       ? {
         hasLoan: true, principal: terms.principal, rate: terms.rate, start: terms.start, months: terms.months, method: terms.method,
         statedPayment: terms.payment ?? Number.NaN, firstInterest: terms.firstInterest ?? Number.NaN, maturity: terms.maturity ?? "",
+        dayCount: terms.dayCount ?? "30/360",
       }
       : blankLoan),
   };
@@ -112,15 +122,21 @@ function loanProblem(f: Form): string | null {
   return null;
 }
 
+/** How the form's loan counts interest, as stored: by the month is the
+ *  default, and 等本等息 charges by the month whatever is chosen. */
+const dayCountOf = (f: Form): LoanDayCount | null => (f.dayCount === "30/360" || f.method === "flat" ? null : f.dayCount);
+
 /** The loan the form describes: what the bank states only where given, and
- *  a stated payment only under 等额本息, which alone has a level one. */
-function termsOf(f: Form, rateChanges: LoanRateChange[]): LoanTerms {
+ *  a stated payment only where the method has a level one. */
+function termsOf(f: Form, rateChanges: LoanRateChange[], prepayments: LoanPrepayment[]): LoanTerms {
   return {
     principal: f.principal, rate: f.rate, start: f.start, months: f.months, method: f.method,
-    payment: f.method === "annuity" && Number.isFinite(f.statedPayment) ? f.statedPayment : null,
+    payment: hasLevelPayment(f.method) && Number.isFinite(f.statedPayment) ? f.statedPayment : null,
     firstInterest: Number.isFinite(f.firstInterest) ? f.firstInterest : null,
     maturity: f.maturity || null,
+    dayCount: dayCountOf(f),
     rateChanges,
+    prepayments,
   };
 }
 
@@ -175,6 +191,7 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
   const [saving, setSaving] = useState(false);
   // Saved as each is added or taken back, not with the rest of the form.
   const [rateChanges, setRateChanges] = useState<LoanRateChange[]>(account?.rate_changes ?? []);
+  const [prepayments, setPrepayments] = useState<LoanPrepayment[]>(account?.prepayments ?? []);
   const [showPlan, setShowPlan] = useState(false);
   const set = (patch: Partial<Form>) => setForm((f) => ({ ...f, ...patch }));
   const categories = CATEGORIES[form.kind];
@@ -183,15 +200,17 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
   const longTerm = form.longTerm ?? form.category === "mortgage";
   const problem = form.hasLoan ? loanProblem(form) : null;
   const today = todayInSG();
-  const terms = form.kind === "liability" && form.hasLoan && !problem ? termsOf(form, rateChanges) : null;
+  const terms = form.kind === "liability" && form.hasLoan && !problem ? termsOf(form, rateChanges, prepayments) : null;
   const preview = terms ? loanStatus(terms, today) : null;
   // What the formula alone makes of the first repayment: what an empty field means.
-  const worked = terms ? loanSchedule({ ...terms, payment: null, firstInterest: null, rateChanges: [] }).periods[0] : undefined;
+  const worked = terms ? loanSchedule({ ...terms, payment: null, firstInterest: null, rateChanges: [], prepayments: [] }).periods[0] : undefined;
+  const schedule = terms ? loanSchedule(terms).periods : [];
   // Rate changes go onto a loan already saved: the server checks them against its terms.
   const savedLoan = account && loanTermsOf(account) ? account : null;
 
-  function rateChangesSaved(saved: FinanceAccount) {
+  function eventsSaved(saved: FinanceAccount) {
     setRateChanges(saved.rate_changes ?? []);
+    setPrepayments(saved.prepayments ?? []);
     onSaved(saved);
   }
 
@@ -220,7 +239,8 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
             ...(form.hasLoan
               ? {
                 loan_principal: form.principal, loan_rate: form.rate, loan_start: form.start, loan_term_months: form.months, loan_method: form.method,
-                loan_payment: form.method === "annuity" && Number.isFinite(form.statedPayment) ? form.statedPayment : null,
+                loan_payment: hasLevelPayment(form.method) && Number.isFinite(form.statedPayment) ? form.statedPayment : null,
+                loan_day_count: dayCountOf(form),
                 loan_first_interest: Number.isFinite(form.firstInterest) ? form.firstInterest : null,
                 loan_maturity: form.maturity || null,
               }
@@ -387,7 +407,7 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
                     <NumberInput id="loan-principal" value={form.principal} emptyValue={Number.NaN} step="any" inputMode="decimal" className="h-9 text-right tabular-nums" onValueChange={(v) => set({ principal: v })} />
                   </div>
                   <div className="grid gap-1.5">
-                    <Label htmlFor="loan-rate">Annual rate, %</Label>
+                    <Label htmlFor="loan-rate">{form.method === "flat" ? "Flat rate a year, %" : "Annual rate, %"}</Label>
                     <NumberInput id="loan-rate" value={form.rate} emptyValue={Number.NaN} step="any" inputMode="decimal" className="h-9 text-right tabular-nums" onValueChange={(v) => set({ rate: v })} />
                   </div>
                   <div className="grid gap-1.5">
@@ -415,10 +435,23 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
                 </div>
                 <Segmented label="Repayment method" value={form.method} options={METHOD_OPTIONS} onChange={(method) => set({ method })} className="w-full" />
                 <p className="text-xs text-muted-foreground">
-                  {form.method === "annuity"
-                    ? "等额本息: the same payment every month, mostly interest at first."
-                    : "等额本金: the same principal every month, so the payment falls as the interest does."}
+                  {METHOD_HINTS[form.method]}
+                  {form.method === "flat" && " The rate is a year's: a monthly fee of 0.6% is 7.2."}
                 </p>
+                {form.method !== "flat" && (
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <Label>Interest counted</Label>
+                      <p className="text-xs text-muted-foreground">By the day, 365, for a Singapore home loan on daily rest.</p>
+                    </div>
+                    <Select value={form.dayCount} onValueChange={(v) => set({ dayCount: v as LoanDayCount })}>
+                      <SelectTrigger className="h-9 w-40 shrink-0"><SelectValue>{(v: string | null) => LOAN_DAY_COUNT_LABELS[(v ?? "30/360") as LoanDayCount]}</SelectValue></SelectTrigger>
+                      <SelectContent>
+                        {LOAN_DAY_COUNTS.map((d) => <SelectItem key={d} value={d}>{LOAN_DAY_COUNT_LABELS[d]}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
                 <div className="grid gap-1">
                   <p className="text-xs text-muted-foreground">
@@ -427,7 +460,7 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
                     worked out.
                   </p>
                   <div className="grid grid-cols-2 items-end gap-3">
-                    {form.method === "annuity" && (
+                    {hasLevelPayment(form.method) && (
                       <div className="grid gap-1.5">
                         <Label htmlFor="loan-payment">Monthly payment</Label>
                         <NumberInput
@@ -468,10 +501,18 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
                     <RateChanges
                       account={savedLoan}
                       changes={rateChanges}
-                      schedule={loanSchedule(terms).periods}
+                      schedule={schedule}
                       method={form.method}
                       currency={form.currency}
-                      onSaved={rateChangesSaved}
+                      onSaved={eventsSaved}
+                    />
+                    <Prepayments
+                      account={savedLoan}
+                      prepayments={prepayments}
+                      schedule={schedule}
+                      method={form.method}
+                      currency={form.currency}
+                      onSaved={eventsSaved}
                     />
                     <button
                       type="button"
@@ -536,7 +577,7 @@ function RateChanges({ account, changes, schedule, method, currency, onSaved }: 
         account_id: account.id,
         effective_date: day,
         rate,
-        payment: method === "annuity" && Number.isFinite(payment) ? payment : null,
+        payment: hasLevelPayment(method) && Number.isFinite(payment) ? payment : null,
       }));
       setDay("");
       setRate(Number.NaN);
@@ -586,7 +627,7 @@ function RateChanges({ account, changes, schedule, method, currency, onSaved }: 
                   <p className="tabular-nums">{Number(c.rate)}% from {dayLabel(c.effective_date)}</p>
                   {first && (
                     <p className="text-xs text-muted-foreground tabular-nums">
-                      {original(first.payment, currency)} a month{c.payment == null && method === "annuity" ? ", worked out" : ""}
+                      {original(first.payment, currency)} a month{c.payment == null && hasLevelPayment(method) ? ", worked out" : ""}
                     </p>
                   )}
                 </div>
@@ -621,7 +662,7 @@ function RateChanges({ account, changes, schedule, method, currency, onSaved }: 
               onValueChange={setRate} onKeyDown={addOnEnter} className="h-9 text-right tabular-nums"
             />
           </div>
-          {method === "annuity" && (
+          {hasLevelPayment(method) && (
             <div className="grid gap-1.5">
               <Label htmlFor="change-payment" className="text-xs">Payment <span className="font-normal text-muted-foreground">(optional)</span></Label>
               <NumberInput
@@ -636,6 +677,151 @@ function RateChanges({ account, changes, schedule, method, currency, onSaved }: 
         </div>
       ) : (
         <p className="text-xs text-muted-foreground">Save the loan first; then its rate changes go here.</p>
+      )}
+    </div>
+  );
+}
+
+/** A loan's prepayments: principal repaid early, each coming off what is owed
+ *  on its day. After one the payment stays and the loan ends sooner, or the end
+ *  stays and the payment falls. Saved the moment each is added or taken back. */
+function Prepayments({ account, prepayments, schedule, method, currency, onSaved }: {
+  /** The loan as saved; null until it has been. */
+  account: FinanceAccount | null;
+  prepayments: LoanPrepayment[];
+  /** The schedule as the form has it, to read what each prepayment left. */
+  schedule: LoanPeriod[];
+  method: LoanMethod;
+  currency: string;
+  onSaved: (account: FinanceAccount) => void;
+}) {
+  const [day, setDay] = useState("");
+  const [amount, setAmount] = useState(Number.NaN);
+  const [mode, setMode] = useState<PrepaymentMode>("shorten");
+  const [payment, setPayment] = useState(Number.NaN);
+  const [busy, setBusy] = useState(false);
+  // The prepayment whose removal is waiting to be confirmed.
+  const [removing, setRemoving] = useState<string | null>(null);
+  const level = hasLevelPayment(method);
+
+  async function add() {
+    if (!account) return;
+    if (!day) { toast.error("Enter the day it was paid"); return; }
+    if (!(amount > 0)) { toast.error("Enter the principal prepaid"); return; }
+    setBusy(true);
+    try {
+      onSaved(await financeAction<FinanceAccount>("addLoanPrepayment", {
+        account_id: account.id,
+        paid_on: day,
+        amount,
+        mode,
+        payment: level && mode === "reduce" && Number.isFinite(payment) ? payment : null,
+      }));
+      setDay("");
+      setAmount(Number.NaN);
+      setPayment(Number.NaN);
+      toast.success(`Prepaid ${original(amount, currency)} on ${dayLabel(day)}`);
+    } catch (err) {
+      toast.error(messageOf(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(p: LoanPrepayment) {
+    try {
+      onSaved(await financeAction<FinanceAccount>("deleteLoanPrepayment", { id: p.id }));
+      toast.success(`Took back ${original(Number(p.amount), currency)} prepaid on ${dayLabel(p.paid_on)}`);
+    } catch (err) {
+      toast.error(messageOf(err));
+    } finally {
+      setRemoving(null);
+    }
+  }
+
+  // Enter in these fields adds the prepayment; it must not save and close the account form around them.
+  const addOnEnter = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void add();
+    }
+  };
+
+  return (
+    <div className="grid gap-2 border-t pt-3">
+      <div>
+        <p className="text-sm font-medium">Prepayments</p>
+        <p className="text-xs text-muted-foreground">
+          Principal repaid early, off what is owed on its day. Saved as soon as added.
+        </p>
+      </div>
+      {prepayments.length > 0 && (
+        <ul className="divide-y divide-border/60 text-sm">
+          {prepayments.map((p) => {
+            const after = schedule.find((r) => r.prepaid?.some((x) => x.paid_on === p.paid_on));
+            return (
+              <li key={p.id} className="flex items-center gap-2 py-1.5">
+                <div className="min-w-0 flex-1">
+                  <p className="tabular-nums">{original(Number(p.amount), currency)} on {dayLabel(p.paid_on)}</p>
+                  <p className="text-xs text-muted-foreground tabular-nums">
+                    {after?.balance === 0 && after.principal === 0
+                      ? "Repaid the loan"
+                      : `${PREPAYMENT_MODE_LABELS[p.mode]}${after && level ? `, then ${original(after.payment, currency)} a month` : ""}`}
+                  </p>
+                </div>
+                {removing === p.id ? (
+                  <>
+                    <Button type="button" variant="outline" size="sm" onClick={() => setRemoving(null)}>Keep</Button>
+                    <Button type="button" variant="destructive" size="sm" onClick={() => remove(p)}>Remove</Button>
+                  </>
+                ) : (
+                  <Button
+                    type="button" variant="ghost" size="sm" aria-label={`Remove ${Number(p.amount)} prepaid on ${dayLabel(p.paid_on)}`}
+                    onClick={() => setRemoving(p.id)} className="text-muted-foreground hover:text-destructive"
+                  >
+                    <Trash2 />
+                  </Button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {account ? (
+        <div className="grid gap-2">
+          <div className="grid grid-cols-2 items-end gap-2">
+            <div className="grid gap-1.5">
+              <Label htmlFor="prepay-day" className="text-xs">Paid on</Label>
+              <Input id="prepay-day" type="date" value={day} onChange={(e) => setDay(e.target.value)} onKeyDown={addOnEnter} className="h-9" />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="prepay-amount" className="text-xs">Principal, {currency}</Label>
+              <NumberInput
+                id="prepay-amount" value={amount} emptyValue={Number.NaN} step="any" inputMode="decimal"
+                onValueChange={setAmount} onKeyDown={addOnEnter} className="h-9 text-right tabular-nums"
+              />
+            </div>
+          </div>
+          {method !== "interest_only" && (
+            <Segmented label="After it" value={mode} options={MODE_OPTIONS} onChange={setMode} className="w-full" />
+          )}
+          <div className="grid grid-cols-2 items-end gap-2">
+            {level && mode === "reduce" ? (
+              <div className="grid gap-1.5">
+                <Label htmlFor="prepay-payment" className="text-xs">New payment <span className="font-normal text-muted-foreground">(optional)</span></Label>
+                <NumberInput
+                  id="prepay-payment" value={payment} emptyValue={Number.NaN} step="any" inputMode="decimal" placeholder="Worked out"
+                  onValueChange={setPayment} onKeyDown={addOnEnter} className="h-9 text-right tabular-nums"
+                />
+              </div>
+            ) : <span />}
+            <Button type="button" variant="outline" disabled={busy} onClick={() => void add()} className="h-9 self-end">
+              <Plus /> {busy ? "Adding…" : "Add"}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">Save the loan first; then its prepayments go here.</p>
       )}
     </div>
   );

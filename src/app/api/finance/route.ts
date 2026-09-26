@@ -2,9 +2,12 @@ import { NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { todayInSG } from "@/lib/dates";
 import { isFinanceCurrency, ratesOn } from "@/lib/fx";
-import { addMonths, isCategory, isKind, isLoanMethod, isRegion, loanTermsOf, type FinanceAccount, type Kind } from "@/lib/finance";
 import {
-  financeDatabase, financeJson as json, isFinanceRequest, isUuid, readAccount, readAccounts, readRateChanges, reason, streamFinance, withRateChanges,
+  addMonths, hasLevelPayment, isCategory, isKind, isLoanDayCount, isLoanMethod, isPrepaymentMode, isRegion, loanStatus, loanTermsOf,
+  type FinanceAccount, type Kind, type LoanTerms,
+} from "@/lib/finance";
+import {
+  financeDatabase, financeJson as json, isFinanceRequest, isUuid, readAccount, readAccounts, readLoanEvents, reason, streamFinance, withLoanEvents,
 } from "@/lib/finance-server";
 
 /** The owner's money. Every request is checked -- the owner's session, or the
@@ -66,6 +69,8 @@ export async function POST(req: NextRequest) {
       }
       case "addLoanRateChange": return await addLoanRateChange(db, body);
       case "deleteLoanRateChange": return await deleteLoanRateChange(db, body.id);
+      case "addLoanPrepayment": return await addLoanPrepayment(db, body);
+      case "deleteLoanPrepayment": return await deleteLoanPrepayment(db, body.id);
       default:
         return json({ error: "Invalid action" }, 400);
     }
@@ -78,7 +83,7 @@ export async function POST(req: NextRequest) {
 type AccountFields = Partial<Pick<FinanceAccount,
   | "name" | "institution" | "owner" | "region" | "currency" | "kind" | "category" | "note" | "sort_order"
   | "liquidity" | "long_term" | "loan_principal" | "loan_rate" | "loan_start" | "loan_term_months" | "loan_method"
-  | "loan_payment" | "loan_first_interest" | "loan_maturity">>;
+  | "loan_payment" | "loan_first_interest" | "loan_maturity" | "loan_day_count">>;
 
 /** A number that may also be cleared: null, or a number `ok` accepts. */
 function nullableNumber(value: unknown, field: string, ok: (n: number) => boolean, what: string): number | null {
@@ -89,16 +94,17 @@ function nullableNumber(value: unknown, field: string, ok: (n: number) => boolea
 
 const LOAN_FIELDS = ["loan_principal", "loan_rate", "loan_start", "loan_term_months", "loan_method"] as const;
 /** What the bank states beyond the terms. Each is optional on its own. */
-const LOAN_EXTRAS = ["loan_payment", "loan_first_interest", "loan_maturity"] as const;
+const LOAN_EXTRAS = ["loan_payment", "loan_first_interest", "loan_maturity", "loan_day_count"] as const;
 
 const PERCENT = "an annual percentage, from 0 to under 100";
+const LEVEL_ONLY = (field: string) => `${field} is a level monthly payment, which only an annuity (等额本息) or flat (等本等息) loan has`;
 
 /** A loan's terms go in whole or not at all, and only on a liability. The
  *  database insists on the same, but this says which part is missing. What the
  *  bank states beyond them needs a loan to qualify, a stated payment a level
- *  one -- 等额本金's falls every month -- and a contract end date has to fall
- *  where the last repayment could: from the last monthly day to before the
- *  month after it. Later would mean a longer term. */
+ *  one -- 等额本息's or 等本等息's -- and a contract end date has to fall where
+ *  the last repayment could: from the last monthly day to before the month
+ *  after it. Later would mean a longer term. */
 function checkLoanTerms(account: Record<string, unknown>) {
   const missing = LOAN_FIELDS.filter((f) => account[f] == null);
   if (missing.length === LOAN_FIELDS.length) {
@@ -108,8 +114,8 @@ function checkLoanTerms(account: Record<string, unknown>) {
   }
   if (missing.length > 0) throw new Invalid(`Loan terms need all five of ${LOAN_FIELDS.join(", ")}; missing ${missing.join(", ")}`);
   if (account.kind !== "liability") throw new Invalid("Only a liability has loan terms");
-  if (account.loan_payment != null && account.loan_method !== "annuity") {
-    throw new Invalid("loan_payment is a level monthly payment, which only an annuity (等额本息) loan has");
+  if (account.loan_payment != null && !(isLoanMethod(account.loan_method) && hasLevelPayment(account.loan_method))) {
+    throw new Invalid(LEVEL_ONLY("loan_payment"));
   }
   if (account.loan_maturity != null) {
     const start = String(account.loan_start), months = Number(account.loan_term_months);
@@ -186,6 +192,10 @@ function accountFields(input: Record<string, unknown>, kind: Kind): AccountField
     if (input.loan_maturity !== null && !isRealDay(input.loan_maturity)) throw new Invalid("loan_maturity must be a date, YYYY-MM-DD, or null");
     out.loan_maturity = input.loan_maturity;
   }
+  if ("loan_day_count" in input) {
+    if (input.loan_day_count !== null && !isLoanDayCount(input.loan_day_count)) throw new Invalid("loan_day_count must be 30/360, actual/365, actual/360 or null");
+    out.loan_day_count = input.loan_day_count;
+  }
   return out;
 }
 
@@ -202,7 +212,7 @@ async function createAccount(db: SupabaseClient, input: unknown) {
   for (const f of LOAN_EXTRAS) if (fields[f] === null) delete fields[f];
   const { data, error } = await db.from("finance_accounts").insert(fields).select().single();
   if (error) throw error;
-  return { ...data, rate_changes: [] };
+  return { ...data, rate_changes: [], prepayments: [] };
 }
 
 async function balanceCount(db: SupabaseClient, accountId: string): Promise<number> {
@@ -238,29 +248,41 @@ async function updateAccount(db: SupabaseClient, id: unknown, input: unknown) {
   }
   const { data, error } = await db.from("finance_accounts").update(fields).eq("id", id).select().single();
   if (error) throw error;
-  return json(withRateChanges([data as FinanceAccount], await readRateChanges(db, id))[0]);
+  return json(withLoanEvents([data as FinanceAccount], await readLoanEvents(db, id))[0]);
+}
+
+/** The loan behind an action on one: the account, and its terms. */
+async function loanFor(db: SupabaseClient, accountId: unknown): Promise<{ account: FinanceAccount; terms: LoanTerms } | Response> {
+  if (!isUuid(accountId)) throw new Invalid("account_id is required: the loan's account");
+  const account = await readAccount(db, accountId);
+  if (!account) return json({ error: "No such account" }, 404);
+  const terms = loanTermsOf(account);
+  if (!terms) throw new Invalid("That account has no loan terms");
+  return { account, terms };
+}
+
+/** The day of a loan's last repayment: the monthly one, or the contract's end after it. */
+function lastRepayment(terms: LoanTerms): string {
+  const monthly = addMonths(terms.start, terms.months - 1);
+  return terms.maturity && terms.maturity > monthly ? terms.maturity : monthly;
 }
 
 /** A change to a loan's rate, from the first repayment charged at it. Kept
  *  beside the terms, so the months before keep the rate they were charged at.
  *  Answers the account, with its rate changes as they now stand. */
 async function addLoanRateChange(db: SupabaseClient, input: Record<string, unknown>) {
-  if (!isUuid(input.account_id)) throw new Invalid("account_id is required: the loan's account");
-  const account = await readAccount(db, input.account_id);
-  if (!account) return json({ error: "No such account" }, 404);
-  const terms = loanTermsOf(account);
-  if (!terms) throw new Invalid("That account has no loan terms to change the rate of");
+  const loan = await loanFor(db, input.account_id);
+  if (loan instanceof Response) return loan;
+  const { account, terms } = loan;
   const day = input.effective_date;
   if (!isRealDay(day)) throw new Invalid("effective_date must be a date, YYYY-MM-DD: the first repayment charged at the new rate");
-  // The last repayment: the monthly one, or the contract's end date after it.
-  const monthly = addMonths(terms.start, terms.months - 1);
-  const last = terms.maturity && terms.maturity > monthly ? terms.maturity : monthly;
+  const last = lastRepayment(terms);
   if (day <= terms.start) throw new Invalid(`effective_date must come after the first repayment, ${terms.start}. For the rate from the start, change loan_rate.`);
   if (day > last) throw new Invalid(`effective_date is after the last repayment, ${last}: it would change nothing`);
   const rate = input.rate;
   if (typeof rate !== "number" || !Number.isFinite(rate) || rate < 0 || rate >= 100) throw new Invalid(`rate must be ${PERCENT}`);
   const payment = input.payment == null ? null : nullableNumber(input.payment, "payment", (n) => n > 0, "a positive amount, or null");
-  if (payment !== null && terms.method !== "annuity") throw new Invalid("payment is a level monthly payment, which only an annuity (等额本息) loan has");
+  if (payment !== null && !hasLevelPayment(terms.method)) throw new Invalid(LEVEL_ONLY("payment"));
   const taken = `There is already a rate change on ${day}. Delete it first to put another in its place.`;
   if (account.rate_changes?.some((c) => c.effective_date === day)) return json({ error: taken }, 409);
   const { error } = await db.from("finance_loan_rate_changes").insert({ account_id: account.id, effective_date: day, rate, payment });
@@ -278,6 +300,47 @@ async function deleteLoanRateChange(db: SupabaseClient, id: unknown) {
   const { data, error } = await db.from("finance_loan_rate_changes").delete().eq("id", id).select("account_id");
   if (error) throw error;
   if (!data?.length) return json({ error: "No such rate change" }, 404);
+  return json(await readAccount(db, data[0].account_id));
+}
+
+/** Principal repaid early. It comes off what is owed on its day; after it the
+ *  payment stays and the loan ends sooner (shorten), or the end stays and the
+ *  payment falls (reduce). No more than is owed then: to clear the loan, that
+ *  amount. Answers the account, with its prepayments as they now stand. */
+async function addLoanPrepayment(db: SupabaseClient, input: Record<string, unknown>) {
+  const loan = await loanFor(db, input.account_id);
+  if (loan instanceof Response) return loan;
+  const { account, terms } = loan;
+  const day = input.paid_on;
+  if (!isRealDay(day)) throw new Invalid("paid_on must be a date, YYYY-MM-DD");
+  const last = lastRepayment(terms);
+  if (day > last) throw new Invalid(`paid_on is after the last repayment, ${last}: nothing is owed then`);
+  const amount = input.amount;
+  if (typeof amount !== "number" || !Number.isFinite(amount) || amount <= 0) throw new Invalid("amount must be a positive amount");
+  if (!isPrepaymentMode(input.mode)) throw new Invalid("mode must be shorten (the payment stays, the loan ends sooner) or reduce (the end stays, the payment falls)");
+  const payment = input.payment == null ? null : nullableNumber(input.payment, "payment", (n) => n > 0, "a positive amount, or null");
+  if (payment !== null && !hasLevelPayment(terms.method)) throw new Invalid(LEVEL_ONLY("payment"));
+  if (payment !== null && input.mode !== "reduce") throw new Invalid("payment goes with reduce: under shorten the payment stays as it was");
+  const taken = `There is already a prepayment on ${day}. Delete it first to put another in its place.`;
+  if (account.prepayments?.some((p) => p.paid_on === day)) return json({ error: taken }, 409);
+  // What is owed that day, after its repayment and any prepayment before.
+  const owed = loanStatus(terms, day).principal_left;
+  if (amount > owed) throw new Invalid(`That is more than the ${owed.toFixed(2)} owed on ${day}. To clear the loan, prepay ${owed.toFixed(2)}.`);
+  const { error } = await db.from("finance_loan_prepayments").insert({ account_id: account.id, paid_on: day, amount, mode: input.mode, payment });
+  if (error) {
+    if (error.code === "23505") return json({ error: taken }, 409);
+    throw error;
+  }
+  return json(await readAccount(db, account.id));
+}
+
+/** Takes a prepayment back: the schedule runs on as if it had not been made.
+ *  Answers the account, with the prepayments left. */
+async function deleteLoanPrepayment(db: SupabaseClient, id: unknown) {
+  if (!isUuid(id)) throw new Invalid("id is required: the prepayment's");
+  const { data, error } = await db.from("finance_loan_prepayments").delete().eq("id", id).select("account_id");
+  if (error) throw error;
+  if (!data?.length) return json({ error: "No such prepayment" }, 404);
   return json(await readAccount(db, data[0].account_id));
 }
 
