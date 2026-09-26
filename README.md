@@ -108,9 +108,10 @@ Copy `.env.example` to `.env.local`. Every key is listed there with a line on
 what breaks without it.
 
 Production values live in **Vercel** (`vercel env ls production`): everything
-the site and its scheduled jobs use. GitHub holds two secrets: `CRON_SECRET`,
-the same value as Vercel's, for the Daily jobs workflow to call the site with,
-and `SUPABASE_DB_URL` for the Apply Migration workflow.
+the site uses. GitHub holds what only its workflows use: the SMTP account the
+unpaid alert is sent through (`SMTP_USERNAME`, `SMTP_PASSWORD`, `ALERT_TO`, and
+optionally the variables `SMTP_SERVER`, `SMTP_PORT`, `MAIL_FROM`), and
+`SUPABASE_DB_URL` for the Apply Migration workflow. Nothing is kept in both.
 Nothing is stored in this repo, and `src/lib/supabase.ts` has no fallback: without
 `NEXT_PUBLIC_SUPABASE_*` the client is `null` and the app runs against
 localStorage rather than quietly attaching to production.
@@ -120,15 +121,16 @@ localStorage rather than quietly attaching to production.
 | what | called by | when |
 |---|---|---|
 | Generate the month's charges: `/api/cron/bill` | Vercel Cron, and the Daily jobs workflow | 1st–3rd |
-| Email `ALERT_TO` who owes over the threshold: `/api/cron/daily` | the Daily jobs workflow | daily |
+| Work out who owes over the threshold, `/api/cron/daily`, and email `ALERT_TO` | the Daily jobs workflow | daily |
 | Keep the free-tier Supabase project awake: `/api/cron/keepalive` | Vercel Cron | daily |
 
 The work happens on the site; what schedules it is split by what each scheduler
 does well. The **Daily jobs** workflow (`.github/workflows/daily-jobs.yml`) runs
-`scripts/daily-jobs.mjs`, which calls the routes and judges the answers, so each
-run is on record in the Actions tab and a failed one — no answer, a refused
-secret, a mail due that could not go, a charge skipped — is mailed to the owner
-by GitHub. **Vercel Cron** (`vercel.json`) runs on time, within the hour on the
+`scripts/daily-jobs.mjs`, which calls the routes and judges the answers, then
+sends the alert through GitHub's SMTP secrets. Each run is on record in the
+Actions tab, and a failed one — no answer, a refusal, a charge skipped, a mail
+that could not go — is mailed to the owner by GitHub. **Vercel Cron**
+(`vercel.json`) runs on time, within the hour on the
 Hobby plan, and never lapses, but it does not retry, tells nobody when a run
 fails, and keeps an hour of logs.
 
@@ -139,9 +141,12 @@ waits. If Vercel misses a billing run, the workflow's call fills it in — billi
 fills only what has no charge yet, so two callers bill a month once. The alert
 has one caller, since two would mean two mails.
 
-All three routes answer only `Authorization: Bearer $CRON_SECRET`. In the
-Actions tab, **Run workflow** runs the jobs on demand; ticking *Test mail* sends
-the alert even when nobody is over the threshold, to check the mail setup.
+The routes answer two callers only. Vercel Cron sends `CRON_SECRET`. The
+workflow sends the OIDC token GitHub gives each run, which the site checks is
+from `daily-jobs.yml` on `main` in this repository (`src/lib/cron.ts`), so no
+secret is copied into GitHub for it. In the Actions tab, **Run workflow** runs
+the jobs on demand; ticking *Test mail* sends the alert even when nobody is over
+the threshold, to check the mail setup.
 
 `unpaid-alert.yml` and `supabase-keepalive.yml` did this before, with their own
 copies of the Supabase and SMTP settings. They stay until the Daily jobs

@@ -7,14 +7,14 @@ name: Daily jobs
 #
 # The work itself happens on the site, in /api/cron/bill and /api/cron/daily,
 # next to the configuration it needs. scripts/daily-jobs.mjs calls them and
-# decides what counts as a failure; its tests say what that is.
+# decides what counts as a failure; its tests say what that is. The site knows
+# this workflow by its GitHub OIDC token, so no secret is copied here for that.
+# The mail goes out from here, through the SMTP account GitHub holds.
 #
 # Vercel Cron still bills and keeps the database awake on its own (vercel.json),
 # so if GitHub stops scheduling this -- it does, in a public repository, after
 # 60 days without a commit, with an email a week before -- bills still go out
 # and the site stays up. Only the unpaid alert waits.
-#
-# Needs one secret: CRON_SECRET, the value Vercel holds.
 
 on:
   schedule:
@@ -30,6 +30,8 @@ on:
 
 permissions:
   contents: read
+  # The OIDC token the site checks in place of a shared secret.
+  id-token: write
 
 # A run started by hand waits for a scheduled one rather than overlapping it.
 concurrency: daily-jobs
@@ -44,6 +46,22 @@ jobs:
         with:
           node-version: 22
       - name: Bill on the 1st to 3rd, check who owes
-        env:
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        id: jobs
         run: node scripts/daily-jobs.mjs ${{ inputs.test_mail && '--test-mail' || '' }}
+      - name: Mail the owner
+        # Even if billing failed: the alert stands on its own.
+        if: ${{ !cancelled() && steps.jobs.outputs.mail == 'true' }}
+        uses: dawidd6/action-send-mail@v22
+        with:
+          server_address: ${{ vars.SMTP_SERVER || 'smtp.gmail.com' }}
+          server_port: ${{ vars.SMTP_PORT || '465' }}
+          secure: true
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          # Gmail sends only as an address verified under "Send mail as"; anything
+          # else is rewritten to the account, so the account is the default.
+          from: Split Bill <${{ vars.MAIL_FROM || secrets.SMTP_USERNAME }}>
+          to: ${{ secrets.ALERT_TO || secrets.SMTP_USERNAME }}
+          subject: ${{ steps.jobs.outputs.subject }}
+          # file:// keeps the body, which names people, out of the log.
+          body: file://${{ steps.jobs.outputs.mail_file }}

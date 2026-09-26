@@ -10,7 +10,7 @@ import { cronRefusal } from "@/lib/cron";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  const refused = cronRefusal(req);
+  const refused = await cronRefusal(req);
   if (refused) return refused;
   const db = getServerSupabase();
   if (!db) return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });

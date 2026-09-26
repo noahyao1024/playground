@@ -93,6 +93,24 @@ describe("reading everything", () => {
 
   it("streams every balance, in order, whatever the size -- no body length fixed up front", async () => {
     db.tables.finance_balances.push(...many(2500));
+    // The pages after the first are fetched together, so they can land in any
+    // order. Make the page at 2000 land first: the one at 1000 is held back
+    // until it is in.
+    let secondIn!: () => void;
+    const second = new Promise<void>((resolve) => (secondIn = resolve));
+    const site = await startPostgrest(db.tables, {
+      intercept: (req) => {
+        if (req.table === "finance_balances" && req.params.get("offset") === "2000") secondIn();
+        return undefined;
+      },
+    });
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", site.url);
+    const inner = globalThis.fetch;
+    vi.stubGlobal("fetch", async (url: string | URL | Request, init?: RequestInit) => {
+      const href = new URL(String(url instanceof Request ? url.url : url));
+      if (href.pathname.endsWith("/finance_balances") && href.searchParams.get("offset") === "1000") await second;
+      return inner(url, init);
+    });
     const res = await GET(get());
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
@@ -102,10 +120,12 @@ describe("reading everything", () => {
     expect(body.balances).toHaveLength(2500);
     const keys = body.balances.map((b: Row) => `${b.as_of} ${b.id}`);
     expect(keys).toEqual([...keys].sort());
-    // One request that also counts, then the rest of the pages.
-    const reads = db.requests.filter((r) => r.table === "finance_balances");
-    expect(reads.map((r) => r.params.get("offset"))).toEqual(["0", "1000", "2000"]);
+    // One request that also counts, then the rest of the pages -- which landed
+    // out of order, and went out in order all the same.
+    const reads = site.requests.filter((r) => r.table === "finance_balances");
+    expect(reads.map((r) => r.params.get("offset"))).toEqual(["0", "2000", "1000"]);
     expect(String(reads[0].headers.prefer)).toContain("count=exact");
+    await site.close();
   });
 
   it("answers a proper error when the first page fails, and cuts the body short when a later one does", async () => {
