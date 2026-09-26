@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { auth } from "@/lib/auth";
 import { isFinanceOwner } from "@/lib/access";
-import { fetchAllRows } from "@/lib/paginate";
+import { fetchAllRows, pagesOf } from "@/lib/paginate";
 import type { FinanceAccount, FinanceBalance } from "@/lib/finance";
 
 /** The server side of /api/finance/*: who may ask, and where the answers come
@@ -29,16 +29,62 @@ export function financeDatabase(): SupabaseClient | null {
   return url && key ? createClient(url, key, { auth: { persistSession: false } }) : null;
 }
 
-/** All accounts and all balances. Balances grow by a row per account per
- *  record, forever: paged, on a unique order. */
+/** Every account. A family's are few, but a read that trusted one request to
+ *  return them all would lose some silently past PostgREST's row cap. */
+export function readAccounts(db: SupabaseClient): Promise<FinanceAccount[]> {
+  return fetchAllRows<FinanceAccount>((from, to) =>
+    db.from("finance_accounts").select("*").order("created_at").order("id").range(from, to));
+}
+
+/** Every balance, a page at a time, oldest first. They grow by a row per
+ *  account per record, forever: paged on a unique order, several pages in
+ *  flight at once. */
+export function balancePages(db: SupabaseClient): AsyncGenerator<FinanceBalance[]> {
+  return pagesOf<FinanceBalance>((from, to, count) =>
+    db.from("finance_balances").select("*", count ? { count: "exact" } : undefined).order("as_of").order("id").range(from, to));
+}
+
+/** All accounts and all balances, in memory: for what has to see all of them
+ *  at once, like the summary. The page's own read streams instead. */
 export async function readFinance(db: SupabaseClient): Promise<{ accounts: FinanceAccount[]; balances: FinanceBalance[] }> {
-  const [{ data: accounts, error }, balances] = await Promise.all([
-    db.from("finance_accounts").select("*").order("created_at").order("id"),
-    fetchAllRows<FinanceBalance>((from, to) =>
-      db.from("finance_balances").select("*").order("as_of").order("id").range(from, to)),
-  ]);
-  if (error) throw error;
-  return { accounts: (accounts ?? []) as FinanceAccount[], balances };
+  const collect = async () => {
+    const balances: FinanceBalance[] = [];
+    for await (const page of balancePages(db)) balances.push(...page);
+    return balances;
+  };
+  const [accounts, balances] = await Promise.all([readAccounts(db), collect()]);
+  return { accounts, balances };
+}
+
+/** Accounts and balances as one JSON document, written out as the pages
+ *  arrive. Streaming lifts Vercel's 4.5 MB cap on a function's response, and
+ *  the first bytes leave before the last page is read. Anything that fails
+ *  before then is thrown here, while a proper error can still be sent; after,
+ *  all a failure can do is cut the body short, which no JSON parser will take
+ *  for a whole answer. */
+export async function streamFinance(db: SupabaseClient): Promise<Response> {
+  const [accounts, pages] = await Promise.all([readAccounts(db), balancePages(db)]);
+  const first = await pages.next();
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (text: string) => controller.enqueue(encoder.encode(text));
+      try {
+        send(`{"accounts":${JSON.stringify(accounts)},"balances":[`);
+        let separator = "";
+        for (let page = first; !page.done; page = await pages.next()) {
+          if (page.value.length === 0) continue;
+          send(separator + page.value.map((row) => JSON.stringify(row)).join(","));
+          separator = ",";
+        }
+        send("]}");
+        controller.close();
+      } catch (err) {
+        controller.error(err);
+      }
+    },
+  });
+  return new Response(body, { headers: { "Content-Type": "application/json", ...NO_STORE } });
 }
 
 /** Shorter than this, FINANCE_API_TOKEN is ignored and only the owner's session

@@ -31,3 +31,60 @@ export async function fetchAllRows<T>(
   }
   return rows;
 }
+
+type Page<T> = { data: T[] | null; error: { message: string } | null; count?: number | null };
+
+/** The rows fetchAllRows reads, a page at a time and in order, with several
+ *  pages in flight at once.
+ *
+ *  The first request asks for the exact count, so every later page can be
+ *  requested without waiting for the one before: years of records arrive in a
+ *  couple of round trips instead of one per thousand rows. Pages come back in
+ *  order however the requests finish, so a caller can stream them as they
+ *  come. The same rule as fetchAllRows holds: order by something unique.
+ *
+ *  `page` gets `count` true only for the first request. Without a count in the
+ *  reply it reads on one page after another, as fetchAllRows does. */
+export async function* pagesOf<T>(
+  page: (from: number, to: number, count: boolean) => PromiseLike<Page<T>>,
+  { pageSize = 1000, concurrency = 4 }: { pageSize?: number; concurrency?: number } = {},
+): AsyncGenerator<T[]> {
+  const first = await page(0, pageSize - 1, true);
+  if (first.error) throw new Error(first.error.message);
+  const rows = first.data ?? [];
+  if (rows.length) yield rows;
+  if (rows.length < pageSize) return;
+
+  if (first.count == null) {
+    for (let from = pageSize; ; from += pageSize) {
+      const { data, error } = await page(from, from + pageSize - 1, false);
+      if (error) throw new Error(error.message);
+      if (!data || data.length === 0) return;
+      yield data;
+      if (data.length < pageSize) return;
+    }
+  }
+
+  const starts: number[] = [];
+  for (let from = pageSize; from < first.count; from += pageSize) starts.push(from);
+  const inflight = new Map<number, Promise<Page<T>>>();
+  let next = 0;
+  const launch = () => {
+    while (inflight.size < concurrency && next < starts.length) {
+      const from = starts[next++];
+      const request = Promise.resolve(page(from, from + pageSize - 1, false));
+      // Awaited in turn below; this only keeps a failure that lands before its
+      // turn from being reported as unhandled in the meantime.
+      request.catch(() => {});
+      inflight.set(from, request);
+    }
+  };
+  launch();
+  for (const from of starts) {
+    const { data, error } = await inflight.get(from)!;
+    inflight.delete(from);
+    if (error) throw new Error(error.message);
+    launch();
+    if (data && data.length) yield data;
+  }
+}

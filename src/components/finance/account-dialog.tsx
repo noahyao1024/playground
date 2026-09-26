@@ -98,7 +98,8 @@ export function AccountDialog({ open, account, hasBalances, owners, onClose, onS
   /** Everyone already named as an owner, offered as the owner is typed. */
   owners: string[];
   onClose: () => void;
-  onSaved: () => Promise<void> | void;
+  /** Called with the account as the server saved it, to merge into the page. */
+  onSaved: (account: FinanceAccount) => void;
 }) {
   const nameRef = useRef<HTMLInputElement>(null);
   return (
@@ -132,7 +133,7 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
   owners: string[];
   nameRef: React.RefObject<HTMLInputElement | null>;
   onClose: () => void;
-  onSaved: () => Promise<void> | void;
+  onSaved: (account: FinanceAccount) => void;
 }) {
   const [form, setForm] = useState<Form>(() => formOf(account));
   const [currencyChosen, setCurrencyChosen] = useState(account !== null);
@@ -174,11 +175,12 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
               : NO_LOAN),
           }),
       };
-      if (account) await financeAction("updateAccount", { id: account.id, updates: fields });
-      else await financeAction("createAccount", { account: fields });
+      const saved = account
+        ? await financeAction<FinanceAccount>("updateAccount", { id: account.id, updates: fields })
+        : await financeAction<FinanceAccount>("createAccount", { account: fields });
       toast.success(account ? "Account updated" : `Added ${form.name.trim()}`);
       onClose();
-      await onSaved();
+      onSaved(saved);
     } catch (err) {
       toast.error(messageOf(err));
     } finally {

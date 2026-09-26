@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { ArrowDownRight, ArrowUpRight, Minus, PenLine, Plus, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { todayInSG } from "@/lib/dates";
 import {
   CATEGORIES, REGIONS, REGION_LABELS, changeBetween, displayName, historyOf, isLongTerm, lastBalances, liquidityOf, positionOn,
+  withAccount, withBalances,
   type Change, type FinanceAccount, type FinanceBalance, type Kind, type Lens, type Position, type Region, type Unit,
 } from "@/lib/finance";
 import { UNIT_CODE, compactMoney, dayLabel, dayTime, money, percent } from "@/lib/finance-format";
@@ -23,6 +24,9 @@ import { Segmented } from "./segmented";
 import { TrendChart, type TrendRow, type TrendSeries } from "./trend-chart";
 
 const UNIT_KEY = "finance.unit";
+/** Away this long, and the page reads everything again on return: an agent with
+ *  the token may have written in the meantime. */
+const STALE_AFTER_MS = 5 * 60_000;
 const LENS_KEY = "finance.lens";
 const UNIT_OPTIONS = [{ value: "cny", label: "CNY" }, { value: "sgd", label: "SGD" }] as const;
 const VIEW_OPTIONS = [
@@ -84,7 +88,8 @@ export function FinanceApp() {
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
 
   // Its writes land in promise callbacks, and it can be abandoned if the page
-  // goes away first; reload() below is for after a change, when it has not.
+  // goes away first. reload() below is for trying again and for coming back to
+  // the page; saves never read everything again.
   useEffect(() => {
     let alive = true;
     loadFinance()
@@ -102,6 +107,25 @@ export function FinanceApp() {
       else setLoadError(messageOf(err));
     }
   }, [data]);
+
+  // Back after a while in another tab or app: read everything again, quietly.
+  const hiddenAt = useRef<number | null>(null);
+  useEffect(() => {
+    function onVisibility() {
+      if (document.visibilityState === "hidden") {
+        hiddenAt.current = Date.now();
+      } else if (hiddenAt.current !== null && Date.now() - hiddenAt.current > STALE_AFTER_MS) {
+        hiddenAt.current = null;
+        void reload();
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, [reload]);
+
+  /** A save puts the server's own reply on screen, rather than reading every
+   *  balance again: the cost of saving stays the same however long the history. */
+  const patch = useCallback((update: (d: FinanceData) => FinanceData) => setData((d) => (d ? update(d) : d)), []);
 
   function setUnit(next: Unit) {
     setUnitState(next);
@@ -138,11 +162,11 @@ export function FinanceApp() {
   const regions = REGIONS.filter((r) => accounts.some((a) => a.region === r));
   const openAccounts = accounts.filter((a) => !a.archived_at);
 
-  async function act(action: string, payload: Record<string, unknown>, done: string) {
+  async function act<T>(action: string, payload: Record<string, unknown>, done: string, apply: (reply: T) => (d: FinanceData) => FinanceData) {
     try {
-      await financeAction(action, payload);
+      const reply = await financeAction<T>(action, payload);
+      patch(apply(reply));
       toast.success(done);
-      await reload();
     } catch (err) {
       toast.error(messageOf(err));
     }
@@ -273,16 +297,18 @@ export function FinanceApp() {
             actions={{
               onAdd: () => setEditing("new"),
               onEdit: (a) => setEditing(a),
-              onArchive: (a, archived) => act(
+              onArchive: (a, archived) => act<FinanceAccount>(
                 "updateAccount",
                 { id: a.id, updates: { archived } },
                 archived ? `Archived ${displayName(a)}. Its history stays.` : `Restored ${displayName(a)}`,
+                (saved) => (d) => ({ ...d, accounts: withAccount(d.accounts, saved) }),
               ),
               onDelete: (a) => setConfirmation({
                 title: `Delete ${displayName(a)}?`,
                 description: "It has no balances recorded, so nothing else goes with it.",
                 action: "Delete",
-                run: () => act("deleteAccount", { id: a.id }, `Deleted ${displayName(a)}`),
+                run: () => act("deleteAccount", { id: a.id }, `Deleted ${displayName(a)}`,
+                  () => (d) => ({ ...d, accounts: d.accounts.filter((x) => x.id !== a.id) })),
               }),
             }}
           />
@@ -302,21 +328,28 @@ export function FinanceApp() {
                 title: "Delete this balance?",
                 description: `${a ? displayName(a) : "The account"} on ${dayLabel(b.as_of)}. Later days that carried it forward will carry the balance before it instead.`,
                 action: "Delete",
-                run: () => act("deleteBalance", { id: b.id }, "Balance deleted"),
+                run: () => act("deleteBalance", { id: b.id }, "Balance deleted",
+                  () => (d) => ({ ...d, balances: d.balances.filter((x) => x.id !== b.id) })),
               })}
             />
           )}
         </>
       )}
 
-      <RecordDialog day={recordDay} accounts={accounts} balances={balances} onClose={() => setRecordDay(null)} onSaved={reload} />
+      <RecordDialog
+        day={recordDay}
+        accounts={accounts}
+        balances={balances}
+        onClose={() => setRecordDay(null)}
+        onSaved={(written) => patch((d) => ({ ...d, balances: withBalances(d.balances, written) }))}
+      />
       <AccountDialog
         open={editing !== null}
         account={editing === "new" ? null : editing}
         hasBalances={editing !== null && editing !== "new" && last.has(editing.id)}
         owners={owners}
         onClose={() => setEditing(null)}
-        onSaved={reload}
+        onSaved={(saved) => patch((d) => ({ ...d, accounts: withAccount(d.accounts, saved) }))}
       />
       <ConfirmDialog confirmation={confirmation} onClose={() => setConfirmation(null)} />
     </div>

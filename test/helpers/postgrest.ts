@@ -144,7 +144,14 @@ export async function startPostgrest(tables: Record<string, Row[]>, options: Opt
           case "GET": {
             const offset = Number(req.params.get("offset") ?? 0);
             const limit = Math.min(Number(req.params.get("limit") ?? Infinity), 1000);
-            return answer(ordered(filtered(rows, req.params), req.params.get("order")).slice(offset, offset + limit));
+            const matched = ordered(filtered(rows, req.params), req.params.get("order"));
+            const out = matched.slice(offset, offset + limit);
+            // Prefer: count=exact puts the total in Content-Range, as PostgREST does.
+            if (String(incoming.headers.prefer ?? "").includes("count=exact") && !single) {
+              const range = out.length ? `${offset}-${offset + out.length - 1}` : "*";
+              return send({ status: 200, body: out, headers: { "content-range": `${range}/${matched.length}` } });
+            }
+            return answer(out);
           }
           case "POST": {
             const incomingRows = (Array.isArray(req.body) ? req.body : [req.body]) as Row[];

@@ -86,11 +86,13 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
 
 - Next.js 16 App Router, TypeScript, Tailwind v4, shadcn/ui
 - Supabase (`@supabase/supabase-js`) for data; NextAuth v5 + Google OAuth for sign-in
-- `.github/workflows/supabase-keepalive.yml` — daily, pings Supabase REST so the free-tier
-  project doesn't get paused. Occasional 504s from upstream are noise; it retries.
-- `.github/workflows/unpaid-alert.yml` — daily, emails `ALERT_TO` — the owner, not the people
-  who owe — a list of anyone owing more than `UNPAID_THRESHOLD_CNY`. Silent when nobody is
-  over it, which is the common case.
+- `/api/cron/daily` (Vercel Cron, `vercel.json`) — daily: its reads keep the free-tier Supabase
+  project from being paused, and it emails `ALERT_TO` — the owner, not the people who owe — a
+  list of anyone owing more than `UNPAID_THRESHOLD_CNY`. Mails only once `SMTP_USERNAME` and
+  `SMTP_PASSWORD` are set in Vercel; silent when nobody is over the line, the common case.
+- `.github/workflows/supabase-keepalive.yml` and `unpaid-alert.yml` — the same two jobs, on
+  their way out: they stay until a Vercel run has mailed, then go with their GitHub secrets.
+  Configuration belongs in Vercel; GitHub keeps only `SUPABASE_DB_URL` for migrations.
 - `.github/workflows/check.yml` — typecheck, lint and tests on every pull request and push
   to `main`, with a Postgres service for `test/sql/`. The gate pre-approved deploys rest on.
 - `vercel.json` — cron hitting `/api/cron/bill` at 00:00 UTC on the 1st, 2nd and 3rd. The
@@ -121,7 +123,9 @@ Two conventions worth knowing before adding code:
 - `src/lib/paginate.ts` — PostgREST caps rows per request and a capped response is an
   ordinary 200, so anything reading a table that grows without bound pages through it. Every
   paged query needs a unique sort key; `created_at` is not one, since a billing run stamps
-  its whole batch with the same second.
+  its whole batch with the same second. `pagesOf` fetches the pages several at a time, in
+  order; `/api/finance` streams them as they come, which also lifts Vercel's 4.5 MB cap on a
+  function's response. Keep lists of ids out of URLs: past a few hundred the gateway refuses.
 - `src/components/ui/number-input.tsx` — use it for numeric fields. Binding a number
   straight to a controlled input makes the field refuse to be emptied.
 

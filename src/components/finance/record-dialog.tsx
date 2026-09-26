@@ -22,7 +22,8 @@ export function RecordDialog({ day, accounts, balances, onClose, onSaved }: {
   accounts: FinanceAccount[];
   balances: FinanceBalance[];
   onClose: () => void;
-  onSaved: () => Promise<void> | void;
+  /** Called with the balances the server wrote, to merge into the page. */
+  onSaved: (written: FinanceBalance[]) => void;
 }) {
   return (
     <Dialog open={day !== null} onOpenChange={(o) => { if (!o) onClose(); }}>
@@ -43,7 +44,7 @@ function RecordForm({ initialDay, accounts, balances, onClose, onSaved }: {
   accounts: FinanceAccount[];
   balances: FinanceBalance[];
   onClose: () => void;
-  onSaved: () => Promise<void> | void;
+  onSaved: (written: FinanceBalance[]) => void;
 }) {
   const open = useMemo(() => sortAccounts(accounts.filter((a) => !a.archived_at)), [accounts]);
   const today = todayInSG();
@@ -73,11 +74,11 @@ function RecordForm({ initialDay, accounts, balances, onClose, onSaved }: {
     e.preventDefault();
     setSaving(true);
     try {
-      const result = await financeAction<{ rate_date: string }>("recordBalances", { as_of: day, entries });
+      const result = await financeAction<{ balances: FinanceBalance[]; rate_date: string }>("recordBalances", { as_of: day, entries });
       const rates = result.rate_date === day ? "" : ` at the rates of ${dayLabel(result.rate_date)}, the last published`;
       toast.success(`Recorded ${entries.length} balance${entries.length === 1 ? "" : "s"} for ${dayLabel(day)}${rates}`);
       onClose();
-      await onSaved();
+      onSaved(result.balances);
     } catch (err) {
       toast.error(messageOf(err));
     } finally {

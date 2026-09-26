@@ -85,6 +85,52 @@ describe("who may see it", () => {
   });
 });
 
+describe("reading everything", () => {
+  const many = (n: number): Row[] => Array.from({ length: n }, (_, i) => ({
+    id: `b${String(i).padStart(5, "0")}`, account_id: DBS, as_of: `2026-${String(1 + (i % 9)).padStart(2, "0")}-01`,
+    currency: "SGD", amount: i, cny_rate: 5, sgd_rate: 1, rate_date: "2026-01-01", note: null, created_at: "2026-01-01T00:00:00Z", updated_at: null,
+  }));
+
+  it("streams every balance, in order, whatever the size -- no body length fixed up front", async () => {
+    db.tables.finance_balances.push(...many(2500));
+    const res = await GET(get());
+    expect(res.status).toBe(200);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(res.headers.get("content-length")).toBeNull();
+    const body = await res.json();
+    expect(body.accounts).toHaveLength(3);
+    expect(body.balances).toHaveLength(2500);
+    const keys = body.balances.map((b: Row) => `${b.as_of} ${b.id}`);
+    expect(keys).toEqual([...keys].sort());
+    // One request that also counts, then the rest of the pages.
+    const reads = db.requests.filter((r) => r.table === "finance_balances");
+    expect(reads.map((r) => r.params.get("offset"))).toEqual(["0", "1000", "2000"]);
+    expect(String(reads[0].headers.prefer)).toContain("count=exact");
+  });
+
+  it("answers a proper error when the first page fails, and cuts the body short when a later one does", async () => {
+    db.tables.finance_balances.push(...many(2500));
+    const failing = (offset: string) => startPostgrest(db.tables, {
+      intercept: (req) => (req.table === "finance_balances" && req.params.get("offset") === offset
+        ? { status: 500, body: { message: "connection lost" } }
+        : undefined),
+    });
+    const early = await failing("0");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", early.url);
+    const res = await GET(get());
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toMatch(/connection lost/);
+    await early.close();
+
+    const late = await failing("2000");
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", late.url);
+    const cut = await GET(get());
+    expect(cut.status).toBe(200);
+    await expect(cut.json()).rejects.toThrow();
+    await late.close();
+  });
+});
+
 describe("an agent's token", () => {
   // 64 characters, as `openssl rand -hex 32` makes them.
   const TOKEN = "3f9a0c1e7b2d4a6f8e0c2b4d6f8a0c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a";
@@ -313,6 +359,17 @@ describe("recording balances", () => {
     }
     expect(db.tables.finance_balances).toHaveLength(0);
     expect(fxAsked).toHaveLength(0);
+  });
+
+  it("keeps every request small however many accounts are recorded at once", async () => {
+    const ids = Array.from({ length: 300 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    db.tables.finance_accounts.push(...ids.map((id) => account(id)));
+    const { status } = await record("2026-09-30", ids.map((account_id) => ({ account_id, amount: 1 })));
+    expect(status).toBe(200);
+    expect(db.tables.finance_balances).toHaveLength(300);
+    // The gateway refuses URLs of a few hundred ids; none may grow with the count.
+    const longest = Math.max(...db.requests.map((r) => `${r.path}?${r.params}`.length));
+    expect(longest).toBeLessThan(2000);
   });
 
   it("deletes a balance", async () => {

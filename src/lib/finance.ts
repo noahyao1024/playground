@@ -198,17 +198,19 @@ export type Position = Totals & {
 
 const scaled = (m: Money, k: number): Money => (k === 1 ? m : { cny: m.cny * k, sgd: m.sgd * k });
 
-/** Where things stood at the end of `day`, as the lens sees it. */
-export function positionOn(accounts: FinanceAccount[], balances: FinanceBalance[], day: string, lens: Lens = {}): Position {
-  const byId = new Map(accounts.map((a) => [a.id, a]));
+/** Adds up a day from each account's balance as of that day -- the arithmetic
+ *  positionOn and historyOf share. Accounts unknown, or archived by `day`, are
+ *  passed over. */
+function positionFrom(byId: Map<string, FinanceAccount>, latest: Iterable<FinanceBalance>, day: string, lens: Lens): Position {
   const position: Position = {
     day,
     ...noTotals(),
     byRegion: { CN: noTotals(), SG: noTotals(), OTHER: noTotals() },
     byCategory: {},
   };
-  for (const [id, balance] of latestOn(accounts, balances, day)) {
-    const account = byId.get(id)!;
+  for (const balance of latest) {
+    const account = byId.get(balance.account_id);
+    if (!account || !countsOn(account, day)) continue;
     const weight = weightOf(account, lens);
     if (weight === 0) continue;
     const value = scaled(valueOf(balance), weight);
@@ -222,10 +224,46 @@ export function positionOn(accounts: FinanceAccount[], balances: FinanceBalance[
   return position;
 }
 
-/** One point for every day anything was recorded, oldest first. */
+/** Where things stood at the end of `day`, as the lens sees it. */
+export function positionOn(accounts: FinanceAccount[], balances: FinanceBalance[], day: string, lens: Lens = {}): Position {
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+  return positionFrom(byId, latestOn(accounts, balances, day).values(), day, lens);
+}
+
+/** One point for every day anything was recorded, oldest first.
+ *
+ *  One pass over the balances in day order, carrying each account's latest
+ *  forward, rather than a fresh scan of every balance for every day: the
+ *  difference between milliseconds and seconds once years of weekly records
+ *  pile up. Held by a test to exactly what positionOn gives each day. */
 export function historyOf(accounts: FinanceAccount[], balances: FinanceBalance[], lens: Lens = {}): Position[] {
-  const days = [...new Set(balances.map((b) => b.as_of))].sort();
-  return days.map((day) => positionOn(accounts, balances, day, lens));
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+  const ordered = [...balances].sort((a, b) => (a.as_of < b.as_of ? -1 : a.as_of > b.as_of ? 1 : 0));
+  const latest = new Map<string, FinanceBalance>();
+  const history: Position[] = [];
+  for (let i = 0; i < ordered.length;) {
+    const day = ordered[i].as_of;
+    // A day holds at most one balance per account, so the last write wins cleanly.
+    for (; i < ordered.length && ordered[i].as_of === day; i++) latest.set(ordered[i].account_id, ordered[i]);
+    history.push(positionFrom(byId, latest.values(), day, lens));
+  }
+  return history;
+}
+
+/** The balances with `written` in place: one for the same account and day is
+ *  replaced, anything new added. A save puts the server's reply on screen this
+ *  way, instead of fetching every balance again. */
+export function withBalances(balances: FinanceBalance[], written: FinanceBalance[]): FinanceBalance[] {
+  const key = (b: FinanceBalance) => `${b.account_id}|${b.as_of}`;
+  const replaced = new Set(written.map(key));
+  return [...balances.filter((b) => !replaced.has(key(b))), ...written];
+}
+
+/** The accounts with `account` added, or put in place of the one it updates. */
+export function withAccount(accounts: FinanceAccount[], account: FinanceAccount): FinanceAccount[] {
+  return accounts.some((a) => a.id === account.id)
+    ? accounts.map((a) => (a.id === account.id ? account : a))
+    : [...accounts, account];
 }
 
 export type Change = {
