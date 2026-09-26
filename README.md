@@ -107,9 +107,10 @@ that deployment.
 Copy `.env.example` to `.env.local`. Every key is listed there with a line on
 what breaks without it.
 
-Production values live in **Vercel** (`vercel env ls production`) and the two
-GitHub Actions read theirs from **repository secrets**. Nothing is stored in
-this repo, and `src/lib/supabase.ts` has no fallback: without
+Production values live in **Vercel** (`vercel env ls production`): everything
+the site and its scheduled jobs use. GitHub holds one secret, `SUPABASE_DB_URL`,
+for the Apply Migration workflow — the only thing that has to run from there.
+Nothing is stored in this repo, and `src/lib/supabase.ts` has no fallback: without
 `NEXT_PUBLIC_SUPABASE_*` the client is `null` and the app runs against
 localStorage rather than quietly attaching to production.
 
@@ -118,11 +119,17 @@ localStorage rather than quietly attaching to production.
 | what | where | when |
 |---|---|---|
 | Generate the month's charges | `vercel.json` → `/api/cron/bill` | 1st–3rd, 00:00 UTC |
-| Email `ALERT_TO` who owes over the threshold | `.github/workflows/unpaid-alert.yml` | daily, 01:23 UTC |
-| Keep the free-tier Supabase project awake | `.github/workflows/supabase-keepalive.yml` | daily, 03:17 UTC |
+| Keep the free-tier Supabase project awake, and email `ALERT_TO` who owes over the threshold | `vercel.json` → `/api/cron/daily` | daily, 01:23 UTC |
 
-GitHub runs scheduled jobs late — several hours, routinely. Treat the times as
-hints.
+Vercel runs these within the hour on the Hobby plan. Both answer only
+`Authorization: Bearer $CRON_SECRET`, which Vercel Cron sends; the Cron Jobs page
+in Vercel's dashboard can run one on demand and shows each run's answer.
+
+The daily job used to be two GitHub workflows, `unpaid-alert.yml` and
+`supabase-keepalive.yml`. They stay until the SMTP settings are in Vercel and a
+run there has mailed, then go, with their secrets. GitHub stops scheduling
+workflows in a public repository after 60 days without a commit, which for the
+keepalive would mean a paused database and a site that is down.
 
 Billing is self-healing: each run walks every month from a subscription's start
 to the target month and fills whatever has no charge yet, each at its own

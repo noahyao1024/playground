@@ -144,6 +144,6 @@ describe("vercel.json", () => {
     // Twice in 2026 a single missed run on the 1st left a month unbilled for
     // days. The later runs fill only what is missing, per the test above.
     const { crons } = JSON.parse(readFileSync("vercel.json", "utf8"));
-    expect(crons).toEqual([{ path: "/api/cron/bill", schedule: "0 0 1-3 * *" }]);
+    expect(crons).toContainEqual({ path: "/api/cron/bill", schedule: "0 0 1-3 * *" });
   });
 });
