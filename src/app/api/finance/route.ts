@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { todayInSG } from "@/lib/dates";
 import { isFinanceCurrency, ratesOn } from "@/lib/fx";
 import { isCategory, isKind, isLoanMethod, isRegion, type FinanceAccount, type Kind } from "@/lib/finance";
-import { financeDatabase, financeJson as json, isFinanceRequest, readFinance, reason } from "@/lib/finance-server";
+import { financeDatabase, financeJson as json, isFinanceRequest, readAccounts, reason, streamFinance } from "@/lib/finance-server";
 
 /** The owner's money. Every request is checked -- the owner's session, or the
  *  token an agent carries -- and every answer is marked uncacheable. What the
@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
   const db = financeDatabase();
   if (!db) return json({ error: "Supabase not configured" }, 500);
   try {
-    return json(await readFinance(db));
+    return await streamFinance(db);
   } catch (err) {
     return json({ error: reason(err) }, 500);
   }
@@ -225,9 +225,9 @@ async function recordBalances(db: SupabaseClient, asOf: unknown, input: unknown)
   const ids = [...new Set(entries.map((e) => e.account_id))];
   if (ids.length !== entries.length) throw new Invalid("An account appears twice");
 
-  const { data: accounts, error: readError } = await db.from("finance_accounts").select("*").in("id", ids);
-  if (readError) throw readError;
-  const byId = new Map((accounts as FinanceAccount[]).map((a) => [a.id, a]));
+  // All of them, not `id=in.(…)`: that list rides in the URL, and at a few
+  // hundred accounts the gateway refuses the request.
+  const byId = new Map((await readAccounts(db)).map((a) => [a.id, a]));
   for (const id of ids) {
     const account = byId.get(id);
     if (!account) throw new Invalid("Unknown account");

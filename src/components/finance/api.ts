@@ -10,8 +10,17 @@ async function parse<T>(res: Response): Promise<T> {
   return body as T;
 }
 
+/** Everything, as the route streams it. A failure after the first bytes can
+ *  only cut the stream short, which surfaces here as JSON that does not parse:
+ *  said as what it is rather than as a parser's complaint. */
 export async function loadFinance(): Promise<FinanceData> {
-  return parse(await fetch("/api/finance", { cache: "no-store" }));
+  const res = await fetch("/api/finance", { cache: "no-store" });
+  if (!res.ok) return parse(res);
+  try {
+    return (await res.json()) as FinanceData;
+  } catch {
+    throw new Error("The data stopped arriving part-way. Try again.");
+  }
 }
 
 export async function financeAction<T = unknown>(action: string, payload: Record<string, unknown>): Promise<T> {

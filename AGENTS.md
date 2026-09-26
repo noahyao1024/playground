@@ -121,7 +121,9 @@ Two conventions worth knowing before adding code:
 - `src/lib/paginate.ts` — PostgREST caps rows per request and a capped response is an
   ordinary 200, so anything reading a table that grows without bound pages through it. Every
   paged query needs a unique sort key; `created_at` is not one, since a billing run stamps
-  its whole batch with the same second.
+  its whole batch with the same second. `pagesOf` fetches the pages several at a time, in
+  order; `/api/finance` streams them as they come, which also lifts Vercel's 4.5 MB cap on a
+  function's response. Keep lists of ids out of URLs: past a few hundred the gateway refuses.
 - `src/components/ui/number-input.tsx` — use it for numeric fields. Binding a number
   straight to a controlled input makes the field refuse to be emptied.
 

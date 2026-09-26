@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   addMonths, changeBetween, displayName, draftFor, historyOf, isCategory, isLongTerm, lastBalances, latestOn,
-  loanStatus, paymentsMade, positionOn, sortAccounts, summarize, valueOf, weightOf,
-  type FinanceAccount, type FinanceBalance, type LoanTerms,
+  loanStatus, paymentsMade, positionOn, sortAccounts, summarize, valueOf, weightOf, withAccount, withBalances,
+  type FinanceAccount, type FinanceBalance, type Lens, type LoanTerms, type Position,
 } from "@/lib/finance";
 
 const account = (id: string, extra: Partial<FinanceAccount> = {}): FinanceAccount => ({
@@ -344,5 +344,95 @@ describe("summarize", () => {
     expect(wechat).toMatchObject({ display_name: "微信余额", owner: "Daisy", weight: 1, counted: true, loan: null });
     expect(home).toMatchObject({ is_long_term: true, weight: 0, counted: false });
     expect(home.loan).toMatchObject({ payment: 5307.27, payments_made: 81, payments_left: 279 });
+  });
+});
+
+describe("historyOf, in one pass", () => {
+  // A small deterministic generator: the same "random" families every run.
+  function random(seed: number) {
+    let x = seed;
+    return () => ((x = (x * 16807) % 2147483647) / 2147483647);
+  }
+  const pick = <T,>(r: () => number, xs: readonly T[]) => xs[Math.floor(r() * xs.length)];
+
+  function family(seed: number) {
+    const r = random(seed);
+    const days = Array.from({ length: 2 + Math.floor(r() * 12) }, (_, i) => addMonths("2025-01-31", i * (1 + Math.floor(r() * 2))));
+    const accounts = Array.from({ length: 1 + Math.floor(r() * 8) }, (_, i) => account(`a${i}`, {
+      kind: r() < 0.3 ? "liability" : "asset",
+      category: pick(r, ["cash", "retirement", "property", "mortgage", "loan"]),
+      region: pick(r, ["CN", "SG", "OTHER"] as const),
+      owner: pick(r, ["Daisy", "Noah", null]),
+      liquidity: r() < 0.5 ? null : Math.round(r() * 10) / 10,
+      long_term: pick(r, [null, true, false]),
+      archived_at: r() < 0.25 ? `${pick(r, days)}T${pick(r, ["03", "20"])}:00:00Z` : null,
+    }));
+    const balances: FinanceBalance[] = [];
+    for (const day of days) {
+      for (const a of accounts) if (r() < 0.7) balances.push(balance(a.id, day, Math.round(r() * 100000) / 100, 1 + r() * 5, 0.1 + r()));
+      // Now and then, a balance whose account is gone from the list.
+      if (r() < 0.1) balances.push(balance("stray", day, 1, 1, 1));
+    }
+    // Stored order is whatever the database gave; it must not matter.
+    balances.sort(() => r() - 0.5);
+    return { accounts, balances };
+  }
+
+  const close = (a: Position, b: Position) => {
+    expect(a.day).toBe(b.day);
+    for (const t of ["assets", "liabilities", "net"] as const) {
+      expect(a[t].cny).toBeCloseTo(b[t].cny, 6);
+      expect(a[t].sgd).toBeCloseTo(b[t].sgd, 6);
+    }
+    for (const region of ["CN", "SG", "OTHER"] as const) expect(a.byRegion[region].net.cny).toBeCloseTo(b.byRegion[region].net.cny, 6);
+    expect(Object.keys(a.byCategory).sort()).toEqual(Object.keys(b.byCategory).sort());
+    for (const k of Object.keys(a.byCategory)) expect(a.byCategory[k].sgd).toBeCloseTo(b.byCategory[k].sgd, 6);
+  };
+
+  it("gives, for 200 random families and every filter, exactly what positionOn gives each day", () => {
+    const lenses: Lens[] = [{}, { excludeLongTerm: true }, { liquidOnly: true }, { owner: "Daisy" }, { owner: "" }, { excludeLongTerm: true, liquidOnly: true, owner: "Noah" }];
+    for (let seed = 1; seed <= 200; seed++) {
+      const { accounts, balances } = family(seed);
+      const days = [...new Set(balances.map((b) => b.as_of))].sort();
+      for (const lens of lenses) {
+        const fast = historyOf(accounts, balances, lens);
+        expect(fast.map((p) => p.day)).toEqual(days);
+        fast.forEach((p, i) => close(p, positionOn(accounts, balances, days[i], lens)));
+      }
+    }
+  });
+
+  it("works through ten years of weekly records for 300 accounts in well under a second", () => {
+    const accounts = Array.from({ length: 300 }, (_, i) => account(`a${i}`));
+    const balances: FinanceBalance[] = [];
+    for (let week = 0; week < 520; week++) {
+      const day = new Date(Date.UTC(2020, 0, 1 + week * 7)).toISOString().slice(0, 10);
+      for (const a of accounts) balances.push(balance(a.id, day, 1000 + week, 5, 1));
+    }
+    const started = performance.now();
+    const history = historyOf(accounts, balances, { liquidOnly: true });
+    const took = performance.now() - started;
+    expect(history).toHaveLength(520);
+    expect(history.at(-1)!.net.sgd).toBe(300 * (1000 + 519));
+    // A scan of every balance for every day, as it was, takes seconds here.
+    expect(took, `${took.toFixed(0)}ms for 156,000 balances`).toBeLessThan(1000);
+  });
+});
+
+describe("merging a save into what is on screen", () => {
+  it("replaces a balance for the same account and day, and adds the rest", () => {
+    const before = [balance("a", "2026-09-30", 100, 1, 1), balance("b", "2026-09-30", 200, 1, 1), balance("a", "2026-08-31", 50, 1, 1)];
+    const written = [{ ...balance("a", "2026-09-30", 150, 1, 1), id: before[0].id }, balance("c", "2026-09-30", 300, 1, 1)];
+    const after = withBalances(before, written);
+    expect(after.map((b) => `${b.account_id} ${b.as_of} ${b.amount}`).sort()).toEqual([
+      "a 2026-08-31 50", "a 2026-09-30 150", "b 2026-09-30 200", "c 2026-09-30 300",
+    ]);
+  });
+
+  it("adds a new account, and puts an edited one in its place", () => {
+    const accounts = [account("a"), account("b")];
+    expect(withAccount(accounts, account("c")).map((a) => a.id)).toEqual(["a", "b", "c"]);
+    const renamed = withAccount(accounts, account("a", { name: "Renamed" }));
+    expect(renamed.map((a) => a.name)).toEqual(["Renamed", "b"]);
   });
 });
