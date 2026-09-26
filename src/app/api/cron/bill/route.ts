@@ -7,7 +7,7 @@ import { cronRefusal } from "@/lib/cron";
  *  the Daily jobs workflow, which reports on it; each run fills only what has no
  *  charge yet, so however many of them reach it, a month is billed once. */
 export async function GET(req: NextRequest) {
-  const refused = cronRefusal(req);
+  const refused = await cronRefusal(req);
   if (refused) return refused;
 
   const supabase = getServerSupabase();

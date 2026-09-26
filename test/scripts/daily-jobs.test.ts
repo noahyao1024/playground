@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -7,26 +7,34 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startPostgrest, type StandIn } from "../helpers/postgrest";
-import { call, isBillingDay, judgeBill, judgeDaily, quote } from "../../scripts/daily-jobs.mjs";
+import { AUDIENCE, call, isBillingDay, judgeBill, judgeDaily, oidcToken, quote } from "../../scripts/daily-jobs.mjs";
 
 const exec = promisify(execFile);
 const SCRIPT = resolve("scripts/daily-jobs.mjs");
+const TOKEN = "header.payload.signature";
 
 type Reply = { status: number; body?: unknown; headers?: Record<string, string> };
 
-const alerted = { threshold: 500, over: [{ name: "Alice", owed: 700, charges: 2, oldest: "2026-08" }], email: "sent" };
+const alertText = "1 person(s) owe more than ¥500.\n\n  Alice: ¥700.00 across 2 charge(s), oldest 2026-08\n\nhttps://x/split-bill";
+const alerted = {
+  threshold: 500,
+  over: [{ name: "Alice", owed: 700, charges: 2, oldest: "2026-08" }],
+  mail: { subject: "Split bill: 1 over the unpaid threshold", text: alertText },
+};
+const quiet = { threshold: 500, over: [], mail: null };
 const billed = { message: "Generated 2 charge(s)", month: "2026-10", generated: 2, skipped: [], details: [{ subscriber: "Alice", total_cny: 53 }] };
 
 let site: StandIn;
 // Per path, the answers in turn; the last one repeats.
 let replies: Record<string, Reply[]>;
 let dir: string;
-let summary: string;
 
 beforeEach(async () => {
   replies = {
     "/api/cron/daily": [{ status: 200, body: alerted }],
     "/api/cron/bill": [{ status: 200, body: billed }],
+    // GitHub's token endpoint, as the runner offers it.
+    "/_oidc": [{ status: 200, body: { value: TOKEN } }],
   };
   site = await startPostgrest({}, {
     other: (req) => {
@@ -36,7 +44,6 @@ beforeEach(async () => {
     },
   });
   dir = mkdtempSync(join(tmpdir(), "daily-jobs-"));
-  summary = join(dir, "summary.md");
 });
 
 afterEach(async () => {
@@ -44,46 +51,50 @@ afterEach(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const paths = () => site.requests.map((r) => `${r.path}${r.params.size ? `?${r.params}` : ""}`);
+const siteCalls = () => site.requests.filter((r) => r.path.startsWith("/api/"))
+  .map((r) => `${r.path}${r.params.size ? `?${r.params}` : ""}`);
+const oidcEnv = () => ({ ACTIONS_ID_TOKEN_REQUEST_URL: `${site.url}/_oidc?api-version=2.0`, ACTIONS_ID_TOKEN_REQUEST_TOKEN: "runner-token" });
 
-/** The script as the workflow runs it: its own process, its exit code, its log. */
+/** The script as the workflow runs it: its own process, its exit code, its log,
+ *  and the files it leaves for the next step. */
 async function runScript(overrides: Record<string, string | undefined> = {}, args: string[] = []) {
+  const files = { summary: join(dir, "summary.md"), output: join(dir, "output.txt"), mail: join(dir, "mail.txt") };
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PLAYGROUND_URL: site.url,
-    CRON_SECRET: "cron-secret",
+    ...oidcEnv(),
     RETRY_DELAY_MS: "0",
     NOW: "2026-10-15T02:00:00Z", // mid-month: no billing
-    GITHUB_STEP_SUMMARY: summary,
+    GITHUB_STEP_SUMMARY: files.summary,
+    GITHUB_OUTPUT: files.output,
+    MAIL_FILE: files.mail,
     ...overrides,
   };
   // An override of undefined removes the variable, as unset in the workflow.
   for (const [name, value] of Object.entries(env)) if (value === undefined) delete env[name];
+  const read = (path: string) => (existsSync(path) ? readFileSync(path, "utf8") : "");
+  let code = 0, stdout = "";
   try {
-    const { stdout } = await exec(process.execPath, [SCRIPT, ...args], { env });
-    return { code: 0, stdout };
+    ({ stdout } = await exec(process.execPath, [SCRIPT, ...args], { env }));
   } catch (err) {
-    const { code, stdout } = err as { code: number; stdout: string };
-    return { code, stdout };
+    ({ code, stdout } = err as { code: number; stdout: string });
   }
+  return { code, stdout, summary: read(files.summary), output: read(files.output), mail: read(files.mail), mailFile: files.mail };
 }
 
 describe("judging the unpaid check", () => {
-  it("passes when the mail went, or none was needed", () => {
-    expect(judgeDaily({ status: 200, body: alerted })).toEqual({ ok: true, text: "1 over ¥500; mail sent" });
-    expect(judgeDaily({ status: 200, body: { threshold: 500, over: [], email: "not needed" } }))
-      .toEqual({ ok: true, text: "nobody over ¥500; no mail needed" });
+  it("passes with the mail to send, or none needed", () => {
+    expect(judgeDaily({ status: 200, body: alerted })).toEqual({ ok: true, text: "1 over ¥500; mail to send", mail: alerted.mail });
+    expect(judgeDaily({ status: 200, body: quiet })).toEqual({ ok: true, text: "nobody over ¥500; no mail needed" });
   });
 
-  it("fails when a mail was due and did not go, whichever the reason", () => {
-    expect(judgeDaily({ status: 200, body: { ...alerted, email: "not configured" } }))
-      .toEqual({ ok: false, text: "1 over ¥500, but SMTP is not set in Vercel, so no mail went out" });
-    expect(judgeDaily({ status: 502, body: { ...alerted, email: "failed", error: "535 Username and Password not accepted" } }))
-      .toEqual({ ok: false, text: "1 over ¥500, but the mail failed -- 535 Username and Password not accepted" });
+  it("fails when somebody is over the line and no mail came with the report", () => {
+    expect(judgeDaily({ status: 200, body: { ...alerted, mail: null } }).ok).toBe(false);
+    expect(judgeDaily({ status: 200, body: { ...alerted, mail: { subject: 1 } } }).ok).toBe(false);
   });
 
-  it("fails on a refused secret, an error, or no answer, saying which", () => {
-    expect(judgeDaily({ status: 401, body: { error: "Unauthorized" } }).text).toContain("refused CRON_SECRET");
+  it("fails on a refusal, an error, or no answer, saying which", () => {
+    expect(judgeDaily({ status: 401, body: { error: "Unauthorized" } }).text).toContain("refused this run");
     expect(judgeDaily({ status: 500, body: { error: "relation \"charges\" does not exist" } }))
       .toEqual({ ok: false, text: "failed: HTTP 500 -- relation \"charges\" does not exist" });
     expect(judgeDaily({ status: 0, body: { error: "fetch failed (ECONNREFUSED)" } }))
@@ -92,13 +103,13 @@ describe("judging the unpaid check", () => {
 
   it("fails on an answer it does not recognise, rather than pass it quietly", () => {
     expect(judgeDaily({ status: 200, body: {} }).ok).toBe(false);
-    expect(judgeDaily({ status: 200, body: { ...alerted, email: "queued" } }).ok).toBe(false);
+    expect(judgeDaily({ status: 200, body: { over: "Alice", threshold: 500, mail: null } }).ok).toBe(false);
     expect(judgeDaily({ status: 307, body: {} }).ok).toBe(false);
   });
 
   it("never repeats a name: the log is public", () => {
-    for (const email of ["sent", "not configured", "failed", "queued"]) {
-      expect(judgeDaily({ status: email === "failed" ? 502 : 200, body: { ...alerted, email, error: "x" } }).text).not.toContain("Alice");
+    for (const body of [alerted, { ...alerted, mail: null }, { ...alerted, mail: { subject: 1 } }]) {
+      expect(judgeDaily({ status: 200, body }).text).not.toContain("Alice");
     }
   });
 });
@@ -115,8 +126,8 @@ describe("judging billing", () => {
       .toEqual({ ok: false, text: "2026-10: 2 charge(s) generated, 1 skipped with no rate for their currency" });
   });
 
-  it("fails on a refused secret, an error, or an answer without a count", () => {
-    expect(judgeBill({ status: 401, body: {} }).text).toContain("refused CRON_SECRET");
+  it("fails on a refusal, an error, or an answer without a count", () => {
+    expect(judgeBill({ status: 401, body: {} }).text).toContain("refused this run");
     expect(judgeBill({ status: 500, body: { error: "boom" } })).toEqual({ ok: false, text: "failed: HTTP 500 -- boom" });
     expect(judgeBill({ status: 200, body: {} }).ok).toBe(false);
   });
@@ -142,108 +153,133 @@ describe("isBillingDay", () => {
   });
 });
 
-describe("call", () => {
-  it("sends the secret as a bearer token and hands back the status and body", async () => {
-    expect(await call(`${site.url}/api/cron/daily`, "s3cret", { delay: 0 })).toEqual({ status: 200, body: alerted });
-    expect(site.requests[0].headers.authorization).toBe("Bearer s3cret");
+describe("oidcToken", () => {
+  it("asks GitHub for a token for the site's audience, with the runner's own credential", async () => {
+    expect(await oidcToken(oidcEnv())).toBe(TOKEN);
+    const [asked] = site.requests;
+    expect(asked.params.get("audience")).toBe(AUDIENCE);
+    expect(asked.params.get("api-version")).toBe("2.0");
+    expect(asked.headers.authorization).toBe("Bearer runner-token");
   });
 
-  it("tries a 5xx again, up to three times in all", async () => {
-    replies["/api/cron/daily"] = [{ status: 503 }, { status: 504 }, { status: 200, body: alerted }];
-    expect((await call(`${site.url}/api/cron/daily`, "s", { delay: 0 })).status).toBe(200);
-    expect(site.requests).toHaveLength(3);
+  it("says what is missing when GitHub offers none, or will not give one", async () => {
+    await expect(oidcToken({})).rejects.toThrow("id-token: write");
+    replies["/_oidc"] = [{ status: 403, body: { message: "no" } }];
+    await expect(oidcToken(oidcEnv())).rejects.toThrow("HTTP 403");
+  });
+});
 
+describe("call", () => {
+  const url = () => `${site.url}/api/cron/daily`;
+
+  it("sends a fresh token each try as the bearer, and hands back the status and body", async () => {
+    let minted = 0;
+    const token = async () => `t${++minted}`;
+    replies["/api/cron/daily"] = [{ status: 503 }, { status: 200, body: alerted }];
+    expect(await call(url(), { token, delay: 0 })).toEqual({ status: 200, body: alerted });
+    expect(site.requests.map((r) => r.headers.authorization)).toEqual(["Bearer t1", "Bearer t2"]);
+  });
+
+  it("tries a 5xx again, up to three times in all, and no more", async () => {
+    const token = async () => TOKEN;
     replies["/api/cron/daily"] = [{ status: 500, body: { error: "still down" } }];
-    expect(await call(`${site.url}/api/cron/daily`, "s", { delay: 0 })).toEqual({ status: 500, body: { error: "still down" } });
-    expect(site.requests).toHaveLength(6);
+    expect(await call(url(), { token, delay: 0 })).toEqual({ status: 500, body: { error: "still down" } });
+    expect(site.requests).toHaveLength(3);
   });
 
   it("does not ask again what asking again will not change", async () => {
     replies["/api/cron/daily"] = [{ status: 401, body: { error: "Unauthorized" } }];
-    expect((await call(`${site.url}/api/cron/daily`, "s", { delay: 0 })).status).toBe(401);
+    expect((await call(url(), { token: async () => TOKEN, delay: 0 })).status).toBe(401);
     expect(site.requests).toHaveLength(1);
   });
 
   it("takes a redirect as the answer, as Vercel Cron does", async () => {
     replies["/api/cron/daily"] = [{ status: 307, headers: { location: "/login" } }];
-    expect((await call(`${site.url}/api/cron/daily`, "s", { delay: 0 })).status).toBe(307);
-    expect(paths()).toEqual(["/api/cron/daily"]);
+    expect((await call(url(), { token: async () => TOKEN, delay: 0 })).status).toBe(307);
+    expect(siteCalls()).toEqual(["/api/cron/daily"]);
   });
 
-  it("reports no answer as status 0, with the reason", async () => {
+  it("reports no answer as status 0, with the reason -- including a token it could not get", async () => {
     const closed = http.createServer();
     await new Promise<void>((done) => closed.listen(0, "127.0.0.1", done));
     const { port } = closed.address() as AddressInfo;
     await new Promise<void>((done) => closed.close(() => done()));
-    const answer = await call(`http://127.0.0.1:${port}/api/cron/daily`, "s", { delay: 0, attempts: 2 });
-    expect(answer.status).toBe(0);
-    expect(answer.body.error).toContain("ECONNREFUSED");
+    const down = await call(`http://127.0.0.1:${port}/api/cron/daily`, { token: async () => TOKEN, delay: 0, attempts: 2 });
+    expect(down.status).toBe(0);
+    expect(down.body.error).toContain("ECONNREFUSED");
+
+    const tokenless = await call(url(), { token: () => Promise.reject(new Error("no token today")), delay: 0, attempts: 2 });
+    expect(tokenless).toEqual({ status: 0, body: { error: "no token today" } });
+    expect(siteCalls()).toEqual([]);
   });
 });
 
 describe("a run", () => {
-  it("checks who owes, bills nothing mid-month, and passes", async () => {
-    const { code, stdout } = await runScript();
+  it("checks who owes as this run, with GitHub's token, and bills nothing mid-month", async () => {
+    const { code, stdout, summary } = await runScript();
     expect(code).toBe(0);
-    expect(paths()).toEqual(["/api/cron/daily"]);
-    expect(stdout).toContain("Unpaid alert: 1 over ¥500; mail sent");
-    expect(readFileSync(summary, "utf8")).toContain("| Unpaid alert | ✅ 1 over ¥500; mail sent |");
+    expect(siteCalls()).toEqual(["/api/cron/daily"]);
+    expect(site.requests.find((r) => r.path === "/api/cron/daily")?.headers.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(stdout).toContain("Unpaid alert: 1 over ¥500; mail to send");
+    expect(summary).toContain("| Unpaid alert | ✅ 1 over ¥500; mail to send |");
   });
 
-  it("bills first on the 1st to 3rd in Singapore, so the check counts the new month", async () => {
-    const { code, stdout } = await runScript({ NOW: "2026-09-30T20:00:00Z" }); // 1 Oct, 04:00 in Singapore
-    expect(code).toBe(0);
-    expect(paths()).toEqual(["/api/cron/bill", "/api/cron/daily"]);
-    expect(stdout).toContain("Billing: 2026-10: 2 charge(s) generated");
-  });
-
-  it("logs no names or amounts, in the log or the summary", async () => {
-    const { stdout } = await runScript({ NOW: "2026-10-01T02:00:00Z" });
-    for (const text of [stdout, readFileSync(summary, "utf8")]) {
+  it("leaves the mail in a file for the next step, and its subject in the outputs -- never in the log", async () => {
+    const { mail, output, stdout, summary, mailFile } = await runScript();
+    expect(mail).toBe(alertText);
+    expect(output).toBe(`mail=true\nsubject=Split bill: 1 over the unpaid threshold\nmail_file=${mailFile}\n`);
+    for (const text of [stdout, summary]) {
       expect(text).not.toContain("Alice");
       expect(text).not.toMatch(/700|53/);
     }
   });
 
-  it("fails with an annotation when a mail was due and had nowhere to go", async () => {
-    replies["/api/cron/daily"] = [{ status: 200, body: { ...alerted, email: "not configured" } }];
-    const { code, stdout } = await runScript();
-    expect(code).toBe(1);
-    expect(stdout).toContain("::error title=Unpaid alert::1 over ¥500, but SMTP is not set in Vercel");
-    expect(readFileSync(summary, "utf8")).toContain("| Unpaid alert | ❌ ");
+  it("leaves nothing to send when nobody is over the line", async () => {
+    replies["/api/cron/daily"] = [{ status: 200, body: quiet }];
+    const { code, mail, output } = await runScript();
+    expect(code).toBe(0);
+    expect([mail, output]).toEqual(["", ""]);
   });
 
-  it("fails when billing fails, and still checks who owes", async () => {
+  it("bills first on the 1st to 3rd in Singapore, so the check counts the new month", async () => {
+    const { code, stdout } = await runScript({ NOW: "2026-09-30T20:00:00Z" }); // 1 Oct, 04:00 in Singapore
+    expect(code).toBe(0);
+    expect(siteCalls()).toEqual(["/api/cron/bill", "/api/cron/daily"]);
+    expect(stdout).toContain("Billing: 2026-10: 2 charge(s) generated");
+    expect(stdout).not.toContain("Alice");
+  });
+
+  it("fails when billing fails, and still checks who owes and leaves the mail", async () => {
     replies["/api/cron/bill"] = [{ status: 500, body: { error: "boom" } }];
-    const { code, stdout } = await runScript({ NOW: "2026-10-02T02:00:00Z" });
+    const { code, stdout, output } = await runScript({ NOW: "2026-10-02T02:00:00Z" });
     expect(code).toBe(1);
-    expect(paths()).toEqual(["/api/cron/bill", "/api/cron/bill", "/api/cron/bill", "/api/cron/daily"]);
+    expect(siteCalls()).toEqual(["/api/cron/bill", "/api/cron/bill", "/api/cron/bill", "/api/cron/daily"]);
     expect(stdout).toContain("::error title=Billing::failed: HTTP 500 -- boom");
-    expect(stdout).toContain("Unpaid alert: 1 over ¥500; mail sent");
+    expect(output).toContain("mail=true");
   });
 
   it("rides out a brief outage", async () => {
     replies["/api/cron/daily"] = [{ status: 503 }, { status: 200, body: alerted }];
     expect((await runScript()).code).toBe(0);
-    expect(paths()).toEqual(["/api/cron/daily", "/api/cron/daily"]);
+    expect(siteCalls()).toEqual(["/api/cron/daily", "/api/cron/daily"]);
   });
 
   it("asks for a test mail with --test-mail", async () => {
     await runScript({}, ["--test-mail"]);
-    expect(paths()).toEqual(["/api/cron/daily?test=1"]);
+    expect(siteCalls()).toEqual(["/api/cron/daily?test=1"]);
   });
 
-  it("says so when the site refuses the secret", async () => {
+  it("says so when the site refuses it", async () => {
     replies["/api/cron/daily"] = [{ status: 401, body: { error: "Unauthorized" } }];
     const { code, stdout } = await runScript();
     expect(code).toBe(1);
-    expect(stdout).toContain("::error title=Unpaid alert::the site refused CRON_SECRET");
+    expect(stdout).toContain("::error title=Unpaid alert::the site refused this run");
   });
 
-  it("fails at once without CRON_SECRET, calling nothing", async () => {
-    const { code, stdout } = await runScript({ CRON_SECRET: undefined });
+  it("fails at once when GitHub offers it no token, calling nothing", async () => {
+    const { code, stdout } = await runScript({ ACTIONS_ID_TOKEN_REQUEST_URL: undefined, ACTIONS_ID_TOKEN_REQUEST_TOKEN: undefined });
     expect(code).toBe(1);
-    expect(stdout).toContain("::error title=CRON_SECRET::Not set.");
+    expect(stdout).toContain("::error title=OIDC::");
     expect(site.requests).toHaveLength(0);
   });
 });

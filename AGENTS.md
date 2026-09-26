@@ -88,13 +88,17 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
 - Supabase (`@supabase/supabase-js`) for data; NextAuth v5 + Google OAuth for sign-in
 - `.github/workflows/daily-jobs.yml` — daily, runs `scripts/daily-jobs.mjs`, which calls
   `/api/cron/bill` on the 1st–3rd in Singapore and `/api/cron/daily` every day, and fails the
-  run when a job did not do its work, so GitHub mails the owner. `/api/cron/daily` emails
-  `ALERT_TO` — the owner, not the people who owe — a list of anyone owing more than
-  `UNPAID_THRESHOLD_CNY`, once `SMTP_USERNAME` and `SMTP_PASSWORD` are set in Vercel. The run's
-  log is public: counts and states only, never names or amounts. Schedule here rather than on
-  Vercel because Vercel Cron on Hobby neither retries nor tells anyone and keeps an hour of
-  logs; the work stays on the site, next to its configuration. GitHub holds `CRON_SECRET` (the
-  value Vercel holds) and `SUPABASE_DB_URL`, nothing else.
+  run when a job did not do its work, so GitHub mails the owner. `/api/cron/daily` works out
+  who owes more than `UNPAID_THRESHOLD_CNY` and hands back the mail; the workflow sends it to
+  `ALERT_TO` — the owner, not the people who owe — through the SMTP secrets GitHub holds. The
+  site has no mail settings and no mail library. The run's log is public: counts and states
+  only, never names or amounts; the mail body goes through a file. Schedule here rather than
+  on Vercel because Vercel Cron on Hobby neither retries nor tells anyone and keeps an hour of
+  logs; the work stays on the site, next to its configuration.
+- The cron routes answer Vercel Cron's `CRON_SECRET`, or a GitHub OIDC token that
+  `src/lib/cron.ts` checks is from `daily-jobs.yml` on `main` in this repository, by numeric
+  repository id. So GitHub holds no copy of any site secret. Renaming the workflow file, or
+  running it from another branch, is refused until `DAILY_JOBS_CLAIMS` says otherwise.
 - `.github/workflows/supabase-keepalive.yml` and `unpaid-alert.yml` — the old way, with their
   own copies of the Supabase and SMTP settings, on their way out: they stay until the Daily jobs
   workflow has mailed, then go with those secrets.
