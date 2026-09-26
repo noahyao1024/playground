@@ -1,0 +1,49 @@
+name: Daily jobs
+
+# The site's scheduled work, run from here so that every run is on record and
+# a failed one reaches the owner: GitHub mails the owner when a scheduled run
+# fails. Vercel Cron on the Hobby plan neither retries nor tells anyone, and
+# keeps an hour of logs.
+#
+# The work itself happens on the site, in /api/cron/bill and /api/cron/daily,
+# next to the configuration it needs. scripts/daily-jobs.mjs calls them and
+# decides what counts as a failure; its tests say what that is.
+#
+# Vercel Cron still bills and keeps the database awake on its own (vercel.json),
+# so if GitHub stops scheduling this -- it does, in a public repository, after
+# 60 days without a commit, with an email a week before -- bills still go out
+# and the site stays up. Only the unpaid alert waits.
+#
+# Needs one secret: CRON_SECRET, the value Vercel holds.
+
+on:
+  schedule:
+    # Off the hour, the busiest slot. GitHub starts scheduled runs late anyway,
+    # about five hours here and up to twelve, which nothing in this minds.
+    - cron: '23 1 * * *'
+  workflow_dispatch:
+    inputs:
+      test_mail:
+        description: Test mail -- send the alert even if nobody is over the threshold
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# A run started by hand waits for a scheduled one rather than overlapping it.
+concurrency: daily-jobs
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Bill on the 1st to 3rd, check who owes
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: node scripts/daily-jobs.mjs ${{ inputs.test_mail && '--test-mail' || '' }}

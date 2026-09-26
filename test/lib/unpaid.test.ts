@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alertMail, overThreshold } from "@/lib/unpaid";
+import { alertMail, overThreshold, testMail } from "@/lib/unpaid";
 
 const people = [{ id: "a", name: "Alice" }, { id: "b", name: "Bob" }, { id: "c", name: "Cara" }];
 
@@ -34,5 +34,13 @@ describe("alertMail", () => {
       "",
       "https://x/split-bill",
     ].join("\n"));
+  });
+});
+
+describe("testMail", () => {
+  it("says it is a test, and where the real alert will come", () => {
+    const { subject, text } = testMail(1500, "https://x/split-bill");
+    expect(subject).toBe("Split bill: unpaid alert test");
+    expect(text).toBe("Nobody owes more than ¥1,500 right now. When somebody does, the alert comes to this address.\n\nhttps://x/split-bill");
   });
 });

@@ -1,17 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { monthInSG } from "@/lib/dates";
 import { getServerSupabase, generateChargesForMonth, monthlyRates } from "@/lib/billing";
+import { cronRefusal } from "@/lib/cron";
 
+/** Bills the month. Called on the 1st to 3rd by Vercel Cron (vercel.json) and by
+ *  the Daily jobs workflow, which reports on it; each run fills only what has no
+ *  charge yet, so however many of them reach it, a month is billed once. */
 export async function GET(req: NextRequest) {
-  // Verify the request is from Vercel Cron
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret) {
-    return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 500 });
-  }
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${cronSecret}`) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const refused = cronRefusal(req);
+  if (refused) return refused;
 
   const supabase = getServerSupabase();
   if (!supabase) {

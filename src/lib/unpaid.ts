@@ -29,3 +29,12 @@ export function alertMail(over: Owing[], threshold: number, link: string): { sub
   lines.push("", link);
   return { subject: `Split bill: ${over.length} over the unpaid threshold`, text: lines.join("\n") };
 }
+
+/** What a test run sends when nobody is over the line, so the mail setup can be
+ *  checked without waiting for somebody to fall behind. */
+export function testMail(threshold: number, link: string): { subject: string; text: string } {
+  return {
+    subject: "Split bill: unpaid alert test",
+    text: [`Nobody owes more than ${yuan(threshold, 0)} right now. When somebody does, the alert comes to this address.`, "", link].join("\n"),
+  };
+}
