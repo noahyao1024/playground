@@ -145,6 +145,10 @@ Two conventions worth knowing before adding code:
   function's response. Keep lists of ids out of URLs: past a few hundred the gateway refuses.
 - `src/components/ui/number-input.tsx` — use it for numeric fields. Binding a number
   straight to a controlled input makes the field refuse to be emptied.
+- Supabase's advisors, held to in `test/sql`: every function in `public` pins its
+  `search_path` (a `create or replace function` must say `set search_path = public, pg_temp`
+  itself, since it resets the setting), and every foreign key has an index that starts with its
+  columns. A new migration that breaks either fails CI before it reaches the live project.
 
 GitHub runs scheduled jobs late, routinely by hours. A job that has not fired yet is not
 evidence it is broken; check `gh run list --workflow=<name>` for `event=schedule`.

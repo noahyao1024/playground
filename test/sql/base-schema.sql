@@ -50,7 +50,9 @@ create table subscriptions (
   start_date date,
   exchange_rate numeric,
   active boolean not null default true,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  -- As the dashboard made it: production has subscriptions_subscriber_id_service_id_key.
+  unique (subscriber_id, service_id)
 );
 
 create table charges (

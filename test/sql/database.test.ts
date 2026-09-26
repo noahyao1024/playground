@@ -170,6 +170,35 @@ describe.skipIf(!SERVER)("database", () => {
     });
   });
 
+  // Supabase's advisors check a live project; these hold every migration to the
+  // same rules before it gets there.
+  describe("what Supabase's advisors check", () => {
+    it("pins search_path on every function in public (lint 0011)", async () => {
+      const { rows } = await c.query(`
+        select p.proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.prokind = 'f'
+          and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')
+          and not exists (select 1 from unnest(coalesce(p.proconfig, '{}')) cfg where cfg like 'search_path=%')
+        order by 1`);
+      expect(rows.map((r) => r.proname)).toEqual([]);
+    });
+
+    it("covers every foreign key in public with an index that starts with its columns (lint 0001)", async () => {
+      // The advisor's own rule: an index counts when its leading columns are the
+      // key's, in order. Partial indexes count too, as they do there.
+      const { rows } = await c.query(`
+        select con.conrelid::regclass || '.' || con.conname as fkey
+        from pg_constraint con join pg_namespace n on n.oid = con.connamespace
+        where n.nspname = 'public' and con.contype = 'f'
+          and not exists (
+            select 1 from pg_index i
+            where i.indrelid = con.conrelid and i.indisvalid
+              and (string_to_array(i.indkey::text, ' ')::int2[])[1:cardinality(con.conkey)] = con.conkey)
+        order by 1`);
+      expect(rows.map((r) => r.fkey)).toEqual([]);
+    });
+  });
+
   describe("finance", () => {
     it("keeps an API token only as a well-formed, unique hash, under a name", async () => {
       const hash = "ab".repeat(32);
