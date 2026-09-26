@@ -171,6 +171,15 @@ describe.skipIf(!SERVER)("database", () => {
   });
 
   describe("finance", () => {
+    it("keeps an API token only as a well-formed, unique hash, under a name", async () => {
+      const hash = "ab".repeat(32);
+      await c.query(`insert into finance_api_tokens (name, token_sha256) values ('Laptop agent', $1)`, [hash]);
+      expect((await failure(c, `insert into finance_api_tokens (name, token_sha256) values ('again', $1)`, [hash])).code).toBe("23505");
+      for (const [name, sha] of [["x", "pgf_not-a-hash"], ["x", "AB".repeat(32)], ["x", "ab".repeat(31)], ["  ", "cd".repeat(32)], ["x".repeat(61), "ef".repeat(32)]]) {
+        expect((await failure(c, `insert into finance_api_tokens (name, token_sha256) values ($1, $2)`, [name, sha])).code, `${name} ${sha}`).toBe("23514");
+      }
+    });
+
     const ACCOUNT = "00000000-0000-0000-0000-0000000000f1";
     const account = (currency = "SGD") => c.query(
       `insert into finance_accounts (id, name, region, currency, kind, category) values ($1, 'DBS', 'SG', $2, 'asset', 'cash')`,
@@ -193,6 +202,8 @@ describe.skipIf(!SERVER)("database", () => {
           `insert into finance_accounts (name, region, currency, kind, category) values ('x', 'CN', 'CNY', 'asset', 'cash')`,
           `update finance_balances set amount = 0`,
           `delete from finance_balances`,
+          `select * from finance_api_tokens`,
+          `insert into finance_api_tokens (name, token_sha256) values ('x', repeat('a', 64))`,
         ]) {
           expect((await failure(c, sql)).code, `${role}: ${sql}`).toBe("42501");
         }

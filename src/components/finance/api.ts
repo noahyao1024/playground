@@ -34,3 +34,23 @@ export async function financeAction<T = unknown>(action: string, payload: Record
 export function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
+
+/** A token for the owner's own agents, as the page may see it: never the token
+ *  itself, except in the answer that makes it. */
+export type ApiToken = { id: string; name: string; created_at?: string };
+
+export async function listTokens(): Promise<ApiToken[]> {
+  return (await parse<{ tokens: ApiToken[] }>(await fetch("/api/finance/tokens", { cache: "no-store" }))).tokens;
+}
+
+export async function makeToken(name: string): Promise<ApiToken & { token: string }> {
+  return parse(await fetch("/api/finance/tokens", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  }));
+}
+
+export async function revokeToken(id: string): Promise<void> {
+  await parse(await fetch(`/api/finance/tokens?id=${encodeURIComponent(id)}`, { method: "DELETE" }));
+}

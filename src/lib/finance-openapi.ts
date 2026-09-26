@@ -55,7 +55,7 @@ export function financeOpenApi(origin: string) {
       version: "1",
       description: [
         "One person's accounts in China and Singapore: what each held on the days it was recorded, and what is owed.",
-        "**Auth.** `Authorization: Bearer <FINANCE_API_TOKEN>`, reading and writing as the owner; or the owner's signed-in session. Anything else is 401. Every answer is `Cache-Control: private, no-store`.",
+        "**Auth.** `Authorization: Bearer <token>`, reading and writing as the owner: a token the owner made on the /finance page (API access), or FINANCE_API_TOKEN. Or the owner's signed-in session. Anything else is 401. Every answer is `Cache-Control: private, no-store`.",
         "**Money.** A balance is kept in its account's own currency, with `cny_rate` and `sgd_rate`: what one unit was worth in CNY and SGD on `rate_date` (ECB mid-market; a weekend or a day not yet published takes the last published day). Totals multiply by those stored rates, so history never re-prices. A liability's balance is what is owed, as a positive number.",
         "**Days.** An account not recorded on a day carries its last balance before it forward. Recording a day again replaces that day's balance for each account sent. An archived account stops counting the day after it was archived, in Singapore (UTC+8), which is also the timezone `as_of` may not be later than today in.",
         "**Family.** Each account may name its `owner`; an asset's `liquidity` says how much of it could be spent now; a liability may carry loan terms, from which the summary works out its repayment schedule.",
@@ -130,7 +130,7 @@ export function financeOpenApi(origin: string) {
       },
     },
     components: {
-      securitySchemes: { token: { type: "http", scheme: "bearer", description: "FINANCE_API_TOKEN" } },
+      securitySchemes: { token: { type: "http", scheme: "bearer", description: "A token made on the /finance page (API access), or FINANCE_API_TOKEN" } },
       schemas: {
         Error: { type: "object", required: ["error"], properties: { error: { type: "string" } } },
         Money: {

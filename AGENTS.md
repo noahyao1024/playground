@@ -126,8 +126,12 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   cut-off, stored rates, the filters, loan schedules) lives in `src/lib/finance.ts`; the page
   only draws it. `liquidity` and `long_term` are null until set, meaning "as the category
   says" — read them through `liquidityOf` and `isLongTerm`, never directly.
-  `FINANCE_API_TOKEN` lets the owner's own agents in as the owner (`src/lib/finance-server.ts`);
-  `/api/finance/openapi` describes the API and a test holds it to the route.
+  The owner's own agents get in as the owner with a bearer token: one made on the page
+  (/finance → API access, `/api/finance/tokens`), stored only as its SHA-256 in the private
+  `finance_api_tokens`, or `FINANCE_API_TOKEN` (`src/lib/finance-server.ts`). Tokens are made
+  and revoked only from the owner's signed-in session, never with a token — one that could mint
+  tokens could outlive its own revoking. `/api/finance/openapi` describes the API and a test
+  holds it to the route.
 - Chart colours are `--series-1` to `--series-3` in `globals.css`, a palette checked for
   colour-blind separation with separate dark steps. Marks wear them; text never does.
 

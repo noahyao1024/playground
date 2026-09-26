@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { auth } from "@/lib/auth";
@@ -93,6 +93,8 @@ export async function streamFinance(db: SupabaseClient): Promise<Response> {
 export const MIN_TOKEN_LENGTH = 32;
 
 const digest = (s: string) => createHash("sha256").update(s).digest();
+const bearerOf = (req: Request) => /^Bearer\s+(\S+)\s*$/i.exec(req.headers.get("authorization") ?? "")?.[1];
+export const sha256Hex = (s: string) => createHash("sha256").update(s).digest("hex");
 
 /** Whether a request carries FINANCE_API_TOKEN as a bearer token -- how an agent
  *  or a script acts for the owner, reading and writing. Both sides are hashed
@@ -102,13 +104,43 @@ const digest = (s: string) => createHash("sha256").update(s).digest();
 export function hasFinanceToken(req: Request): boolean {
   const token = (process.env.FINANCE_API_TOKEN ?? "").trim();
   if (token.length < MIN_TOKEN_LENGTH) return false;
-  const given = /^Bearer\s+(\S+)\s*$/i.exec(req.headers.get("authorization") ?? "")?.[1];
+  const given = bearerOf(req);
   return given !== undefined && timingSafeEqual(digest(given), digest(token));
 }
 
-/** Whether a request speaks for the owner: the token, or their signed-in session. */
-export async function isFinanceRequest(req: Request): Promise<boolean> {
-  if (hasFinanceToken(req)) return true;
+/** A new token for the owner's agents, made on the /finance page: 256 random
+ *  bits, with a prefix that says what it is to anyone -- or any secret scanner --
+ *  that finds one lying around. */
+export const newFinanceToken = () => `pgf_${randomBytes(32).toString("base64url")}`;
+
+/** Whether a request carries a token made on the /finance page. Only hashes are
+ *  stored, so the one given is hashed and looked up. A lookup that fails -- the
+ *  table not there yet, the database down -- lets nobody in by it. */
+export async function hasStoredFinanceToken(req: Request): Promise<boolean> {
+  const given = bearerOf(req);
+  if (!given || given.length < MIN_TOKEN_LENGTH) return false;
+  const db = financeDatabase();
+  if (!db) return false;
+  try {
+    const { data, error } = await db.from("finance_api_tokens").select("id").eq("token_sha256", sha256Hex(given)).limit(1);
+    return !error && (data?.length ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Whether the owner is signed in, in a browser. Making and revoking tokens
+ *  takes this rather than a token: one that could make tokens could outlive
+ *  its own revoking. */
+export async function isFinanceOwnerSession(): Promise<boolean> {
   const session = await auth();
   return isFinanceOwner(session?.user?.email);
+}
+
+/** Whether a request speaks for the owner: FINANCE_API_TOKEN, a token made on
+ *  the /finance page, or their signed-in session. */
+export async function isFinanceRequest(req: Request): Promise<boolean> {
+  if (hasFinanceToken(req)) return true;
+  if (await hasStoredFinanceToken(req)) return true;
+  return isFinanceOwnerSession();
 }
