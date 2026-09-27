@@ -208,10 +208,13 @@ describe("an agent's token", () => {
 
 describe("the actions the OpenAPI description promises", () => {
   it("are each handled by the route, and nothing else is", async () => {
+    // Every action wants something said of it -- but revaluing, which without
+    // an account values them all.
+    const wantsNothing = new Set(["revalueStocks"]);
     for (const action of FINANCE_ACTIONS) {
       const { status, body } = await post({ action });
       expect(body.error, action).not.toBe("Invalid action");
-      expect(status, action).toBe(400);
+      expect(status, action).toBe(wantsNothing.has(action) ? 200 : 400);
     }
     expect((await post({ action: "dropEverything" })).body.error).toBe("Invalid action");
   });

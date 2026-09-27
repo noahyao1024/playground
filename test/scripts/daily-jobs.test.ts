@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startPostgrest, type StandIn } from "../helpers/postgrest";
-import { AUDIENCE, call, isBillingDay, judgeBill, judgeDaily, oidcToken, quote } from "../../scripts/daily-jobs.mjs";
+import { AUDIENCE, call, isBillingDay, judgeBill, judgeDaily, judgeStocks, oidcToken, quote } from "../../scripts/daily-jobs.mjs";
 
 const exec = promisify(execFile);
 const SCRIPT = resolve("scripts/daily-jobs.mjs");
@@ -22,6 +22,7 @@ const alerted = {
   mail: { subject: "Split bill: 1 over the unpaid threshold", text: alertText },
 };
 const quiet = { threshold: 500, over: [], mail: null };
+const valued = { valued_at: "2026-09-28T06:00:00.000Z", accounts: 1, positions: 3, failed: 0, skipped: 0 };
 const billed = { message: "Generated 2 charge(s)", month: "2026-10", generated: 2, skipped: [], details: [{ subscriber: "Alice", total_cny: 53 }] };
 
 let site: StandIn;
@@ -33,6 +34,7 @@ beforeEach(async () => {
   replies = {
     "/api/cron/daily": [{ status: 200, body: alerted }],
     "/api/cron/bill": [{ status: 200, body: billed }],
+    "/api/cron/stocks": [{ status: 200, body: valued }],
     // GitHub's token endpoint, as the runner offers it.
     "/_oidc": [{ status: 200, body: { value: TOKEN } }],
   };
@@ -133,6 +135,22 @@ describe("judging billing", () => {
   });
 });
 
+describe("judging the stock prices", () => {
+  it("passes every account valued and every price had, saying how many and never what", () => {
+    expect(judgeStocks({ status: 200, body: { accounts: 1, positions: 7, failed: 0, skipped: 0 } })).toEqual({ ok: true, text: "1 account(s) valued, 7 price(s) fetched" });
+    expect(judgeStocks({ status: 200, body: { accounts: 0, positions: 0, failed: 0, skipped: 0 } })).toEqual({ ok: true, text: "no stocks held" });
+  });
+
+  it("fails a price not had, an account not valued, and anything it does not recognise", () => {
+    expect(judgeStocks({ status: 200, body: { accounts: 1, positions: 6, failed: 1, skipped: 0 } }))
+      .toEqual({ ok: false, text: "1 account(s) valued, 6 price(s) fetched; 1 price(s) not had, 0 account(s) not valued" });
+    expect(judgeStocks({ status: 200, body: { accounts: 0, positions: 0, failed: 0, skipped: 1 } }).ok).toBe(false);
+    expect(judgeStocks({ status: 503, body: { accounts: 0, positions: 0, failed: 7, skipped: 0 } })).toEqual({ ok: false, text: "failed: HTTP 503" });
+    expect(judgeStocks({ status: 401, body: {} }).text).toContain("refused this run");
+    expect(judgeStocks({ status: 200, body: {} }).ok).toBe(false);
+  });
+});
+
 describe("quote", () => {
   it("keeps an error on one line, so it cannot start a workflow command", () => {
     expect(quote("bad\n::set-env name=X::1\r\nmore")).toBe("bad ::set-env name=X::1 more");
@@ -215,13 +233,24 @@ describe("call", () => {
 });
 
 describe("a run", () => {
-  it("checks who owes as this run, with GitHub's token, and bills nothing mid-month", async () => {
+  it("checks who owes and values the stocks as this run, with GitHub's token, and bills nothing mid-month", async () => {
     const { code, stdout, summary } = await runScript();
     expect(code).toBe(0);
-    expect(siteCalls()).toEqual(["/api/cron/daily"]);
+    expect(siteCalls()).toEqual(["/api/cron/daily", "/api/cron/stocks"]);
     expect(site.requests.find((r) => r.path === "/api/cron/daily")?.headers.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(site.requests.find((r) => r.path === "/api/cron/stocks")?.headers.authorization).toBe(`Bearer ${TOKEN}`);
     expect(stdout).toContain("Unpaid alert: 1 over ¥500; mail to send");
+    expect(stdout).toContain("Stock prices: 1 account(s) valued, 3 price(s) fetched");
     expect(summary).toContain("| Unpaid alert | ✅ 1 over ¥500; mail to send |");
+    expect(summary).toContain("| Stock prices | ✅ 1 account(s) valued, 3 price(s) fetched |");
+  });
+
+  it("fails when a price could not be had, having still checked who owes", async () => {
+    replies["/api/cron/stocks"] = [{ status: 200, body: { ...valued, positions: 2, failed: 1 } }];
+    const { code, stdout, output } = await runScript();
+    expect(code).toBe(1);
+    expect(stdout).toContain("::error title=Stock prices::1 account(s) valued, 2 price(s) fetched; 1 price(s) not had, 0 account(s) not valued");
+    expect(output).toContain("mail=true");
   });
 
   it("leaves the mail in a file for the next step, and its subject in the outputs -- never in the log", async () => {
@@ -244,7 +273,7 @@ describe("a run", () => {
   it("bills first on the 1st to 3rd in Singapore, so the check counts the new month", async () => {
     const { code, stdout } = await runScript({ NOW: "2026-09-30T20:00:00Z" }); // 1 Oct, 04:00 in Singapore
     expect(code).toBe(0);
-    expect(siteCalls()).toEqual(["/api/cron/bill", "/api/cron/daily"]);
+    expect(siteCalls()).toEqual(["/api/cron/bill", "/api/cron/daily", "/api/cron/stocks"]);
     expect(stdout).toContain("Billing: 2026-10: 2 charge(s) generated");
     expect(stdout).not.toContain("Alice");
   });
@@ -253,7 +282,7 @@ describe("a run", () => {
     replies["/api/cron/bill"] = [{ status: 500, body: { error: "boom" } }];
     const { code, stdout, output } = await runScript({ NOW: "2026-10-02T02:00:00Z" });
     expect(code).toBe(1);
-    expect(siteCalls()).toEqual(["/api/cron/bill", "/api/cron/bill", "/api/cron/bill", "/api/cron/daily"]);
+    expect(siteCalls()).toEqual(["/api/cron/bill", "/api/cron/bill", "/api/cron/bill", "/api/cron/daily", "/api/cron/stocks"]);
     expect(stdout).toContain("::error title=Billing::failed: HTTP 500 -- boom");
     expect(output).toContain("mail=true");
   });
@@ -261,12 +290,12 @@ describe("a run", () => {
   it("rides out a brief outage", async () => {
     replies["/api/cron/daily"] = [{ status: 503 }, { status: 200, body: alerted }];
     expect((await runScript()).code).toBe(0);
-    expect(siteCalls()).toEqual(["/api/cron/daily", "/api/cron/daily"]);
+    expect(siteCalls()).toEqual(["/api/cron/daily", "/api/cron/daily", "/api/cron/stocks"]);
   });
 
   it("asks for a test mail with --test-mail", async () => {
     await runScript({}, ["--test-mail"]);
-    expect(siteCalls()).toEqual(["/api/cron/daily?test=1"]);
+    expect(siteCalls()).toEqual(["/api/cron/daily?test=1", "/api/cron/stocks"]);
   });
 
   it("says so when the site refuses it", async () => {

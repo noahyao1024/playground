@@ -125,6 +125,26 @@ export function judgeBill(answer) {
     : { ok: true, text };
 }
 
+/** Whether the stock accounts were valued: every account holding positions
+ *  recorded, every price fetched. Counts only -- what is held stays out of
+ *  the log. A price that could not be had fails the run: the account is left
+ *  at yesterday's value, which nothing else would say. */
+export function judgeStocks(answer) {
+  const { status, body } = answer;
+  if (status === 401) return { ok: false, text: REFUSED };
+  if (status !== 200) return { ok: false, text: `failed: ${failure(answer)}` };
+  if (typeof body.accounts !== "number" || typeof body.positions !== "number") {
+    return { ok: false, text: `unexpected answer: HTTP ${status}, no counts` };
+  }
+  const failed = Number(body.failed) || 0, skipped = Number(body.skipped) || 0;
+  const text = body.accounts || body.positions || failed || skipped
+    ? `${body.accounts} account(s) valued, ${body.positions} price(s) fetched`
+    : "no stocks held";
+  return failed || skipped
+    ? { ok: false, text: `${text}; ${failed} price(s) not had, ${skipped} account(s) not valued` }
+    : { ok: true, text };
+}
+
 /** The 1st to 3rd of the month in Singapore: the days vercel.json bills on. */
 export function isBillingDay(now) {
   const day = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Singapore", day: "numeric" }).format(now));
@@ -145,6 +165,7 @@ async function main() {
   if (isBillingDay(now)) results.push(["Billing", judgeBill(await call(`${SITE}/api/cron/bill`))]);
   const daily = judgeDaily(await call(`${SITE}/api/cron/daily${testMail ? "?test=1" : ""}`));
   results.push(["Unpaid alert", daily]);
+  results.push(["Stock prices", judgeStocks(await call(`${SITE}/api/cron/stocks`))]);
 
   // The mail names people, so it goes to a file for the next step, not the log.
   if (daily.mail) {

@@ -114,6 +114,18 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
   within **three months** may still buy of the shares held, and nothing while
   no window is that near — worked out for each day of the history. Its
   balance is still what is recorded: the shares held at the price.
+- An asset may hold **stock positions**: so many shares of a symbol at an
+  average cost, pasted from a broker's statement (**Stocks → Import**: a line
+  each, `AAPL 100 150.25`; Hong Kong `0700.HK` or `00700`, A-shares `600519`,
+  Singapore `D05.SI`, Futu's `HK.00700` too). They are priced from Yahoo
+  Finance — keyless and unofficial, so a symbol it cannot price keeps its last
+  price — and the account's balance for the day is recorded from them: on
+  every change, on opening the page once the prices are ten minutes old, and
+  every day by the Daily jobs workflow, whether or not the page is opened. A
+  position up **more than** the account's threshold (10% unless set; it is on
+  the card) counts as liquid, the rest not. Each balance keeps the share that
+  was liquid when it was recorded, so every day of the history counts what was
+  liquid then. What is held lives in the database only.
 
 ## Finance API, for agents
 
@@ -143,7 +155,7 @@ curl -s https://playground.noahyao.me/api/finance/summary \
 | `GET /api/finance` | Every account and balance, as stored; each account with its loan's `rate_changes` and `prepayments`, and its `rsu_grants` and `rsu_sales`. |
 | `GET /api/finance/loan-schedule?id=…` | One loan's every repayment to the cent — date, payment, principal, interest, balance — and the totals. |
 | `GET /api/finance/rsu?id=…&window=…&price=…&tax_rate=…` | One RSU account in a window, tranche by tranche: what it may buy, what that comes to at the price, and the windows ahead. |
-| `POST /api/finance` | `{"action": …}`: `createAccount`, `updateAccount`, `deleteAccount`, `recordBalances`, `deleteBalance`, `addLoanRateChange`, `deleteLoanRateChange`, `addLoanPrepayment`, `deleteLoanPrepayment`, `addRsuGrant`, `updateRsuGrant`, `deleteRsuGrant`, `addRsuSale`, `deleteRsuSale`. |
+| `POST /api/finance` | `{"action": …}`: `createAccount`, `updateAccount`, `deleteAccount`, `recordBalances`, `deleteBalance`, `addLoanRateChange`, `deleteLoanRateChange`, `addLoanPrepayment`, `deleteLoanPrepayment`, `addRsuGrant`, `updateRsuGrant`, `deleteRsuGrant`, `addRsuSale`, `deleteRsuSale`, `importStockPositions`, `addStockPosition`, `updateStockPosition`, `deleteStockPosition`, `revalueStocks`. |
 
 To revoke it, replace the value and redeploy; the old one stops working with
 that deployment.
@@ -168,6 +180,7 @@ localStorage rather than quietly attaching to production.
 |---|---|---|
 | Generate the month's charges: `/api/cron/bill` | Vercel Cron, and the Daily jobs workflow | 1st–3rd |
 | Work out who owes over the threshold, `/api/cron/daily`, and email `ALERT_TO` | the Daily jobs workflow | daily |
+| Value the stock accounts at the day's prices and record their balances: `/api/cron/stocks` | the Daily jobs workflow | daily |
 | Keep the free-tier Supabase project awake: `/api/cron/keepalive` | Vercel Cron | daily |
 
 The work happens on the site; what schedules it is split by what each scheduler

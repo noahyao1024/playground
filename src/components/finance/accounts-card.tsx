@@ -104,10 +104,10 @@ export function AccountsCard({ accounts, last, position, lens, unit, actions }: 
 }
 
 /** What the meta line says about liquidity, debt length and a loan's schedule. */
-function traits(a: FinanceAccount): string[] {
+function traits(a: FinanceAccount, b: FinanceBalance | undefined): string[] {
   const out: string[] = [];
   if (a.kind === "asset") {
-    const share = liquidityOf(a);
+    const share = liquidityOf(a, todayInSG(), b);
     if (share === 0) out.push("not liquid");
     else if (share < 1) out.push(`${Math.round(share * 1000) / 10}% liquid`);
   } else {
@@ -130,7 +130,7 @@ function AccountRow({ account: a, balance: b, latestDay, lens, unit, actions }: 
   actions: AccountActions;
 }) {
   const value = b ? valueOf(b) : undefined;
-  const leftOut = !a.archived_at && weightOf(a, lens) === 0;
+  const leftOut = !a.archived_at && weightOf(a, lens, todayInSG(), b) === 0;
   // Worth in whichever of CNY and SGD the account is not already kept in: both,
   // for any other currency. The chosen unit first.
   const others = (unit === "cny" ? UNITS : [...UNITS].reverse()).filter((u) => UNIT_CODE[u] !== a.currency);
@@ -140,7 +140,7 @@ function AccountRow({ account: a, balance: b, latestDay, lens, unit, actions }: 
         <AccountName account={a} className="text-sm" />
         <p className="meta-row flex min-w-0 flex-wrap gap-x-1.5 text-xs text-muted-foreground">
           <span>{CATEGORIES[a.kind][a.category] ?? a.category}</span>
-          {traits(a).map((t) => <span key={t}>{t}</span>)}
+          {traits(a, b).map((t) => <span key={t}>{t}</span>)}
           {a.archived_at && <span>archived {dayLabel(dayInSG(a.archived_at))}</span>}
           {/* Carried forward: it was not recorded on the latest day. */}
           {b && !a.archived_at && latestDay && b.as_of !== latestDay && <span>as of {dayLabel(b.as_of)}</span>}

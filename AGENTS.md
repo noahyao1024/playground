@@ -87,8 +87,8 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
 - Next.js 16 App Router, TypeScript, Tailwind v4, shadcn/ui
 - Supabase (`@supabase/supabase-js`) for data; NextAuth v5 + Google OAuth for sign-in
 - `.github/workflows/daily-jobs.yml` — daily, runs `scripts/daily-jobs.mjs`, which calls
-  `/api/cron/bill` on the 1st–3rd in Singapore and `/api/cron/daily` every day, and fails the
-  run when a job did not do its work, so GitHub mails the owner. `/api/cron/daily` works out
+  `/api/cron/bill` on the 1st–3rd in Singapore, and `/api/cron/daily` and `/api/cron/stocks`
+  every day, and fails the run when a job did not do its work, so GitHub mails the owner. `/api/cron/daily` works out
   who owes more than `UNPAID_THRESHOLD_CNY` and hands back the mail; the workflow sends it to
   `ALERT_TO` — the owner, not the people who owe — through the SMTP secrets GitHub holds. The
   site has no mail settings and no mail library. The run's log is public: counts and states
@@ -158,6 +158,17 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   buy of the shares held, and none while no window is that near, worked out for each day —
   read it through `liquidityOf(a, day)`. Its balance is still recorded by hand: the held
   shares at a price.
+  Stocks are positions on an asset, in the private `finance_stock_positions`: shares of a
+  symbol at an average cost, in the currency it trades in, with the last price fetched and
+  the rate into the account's currency then (`src/lib/stocks.ts`). Prices come from Yahoo
+  Finance's chart endpoint (`src/lib/quotes.ts`), keyless and unofficial: a full browser user
+  agent gets 429, so it sends a short one, and a symbol it cannot price keeps its last price.
+  `revalueStocks` (`src/lib/stocks-server.ts`) prices them and records the account's balance
+  for the day with `liquid_share`: the value in positions up more than `liquid_min_gain`
+  percent (10 unless set). Liquidity reads, in order: set by hand, the balance's own
+  `liquid_share`, RSUs, positions, the category — pass the balance to `liquidityOf(a, day,
+  balance)`. `/api/cron/stocks` answers in counts only: the Daily jobs log is public. Never
+  put the owner's holdings in the repository; the tests use made-up ones.
   The owner's own agents get in as the owner with a bearer token: one made on the page
   (/finance → API access, `/api/finance/tokens`), stored only as its SHA-256 in the private
   `finance_api_tokens`, or `FINANCE_API_TOKEN` (`src/lib/finance-server.ts`). Tokens are made
