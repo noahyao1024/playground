@@ -280,6 +280,10 @@ describe.skipIf(!SERVER)("database", () => {
           `insert into finance_loan_rate_changes (account_id, effective_date, rate) values ('${ACCOUNT}', '2027-01-01', 3)`,
           `select * from finance_loan_prepayments`,
           `insert into finance_loan_prepayments (account_id, paid_on, amount, mode) values ('${ACCOUNT}', '2027-01-01', 1000, 'shorten')`,
+          `select * from finance_rsu_grants`,
+          `insert into finance_rsu_grants (account_id, grant_no, profile, tranches) values ('${ACCOUNT}', 'G1', 'standard', '[{"vests_on":"2026-01-01","shares":1}]')`,
+          `select * from finance_rsu_sales`,
+          `insert into finance_rsu_sales (account_id, window_cutoff, shares) values ('${ACCOUNT}', '2026-10-01', 1)`,
         ]) {
           expect((await failure(c, sql)).code, `${role}: ${sql}`).toBe("42501");
         }
@@ -290,6 +294,30 @@ describe.skipIf(!SERVER)("database", () => {
       await c.query(`set local role service_role`);
       expect((await c.query(`select count(*)::int as n from finance_balances`)).rows[0].n).toBe(1);
       await c.query(`reset role`);
+    });
+
+    it("holds RSUs on an asset only, their rules with a plan, a grant by its number and a sale by its window", async () => {
+      await account();
+      const rules = JSON.stringify({ currency: "USD", windows: { months: [3, 9], cutoff_day: 15 }, profiles: { standard: { rates: [40] } } });
+      expect((await failure(c, `update finance_accounts set rsu_rules = $1 where id = $2`, [rules, ACCOUNT])).code).toBe("23514");
+      expect((await failure(c, `update finance_accounts set rsu_plan = 'acme' where id = $1`, [ACCOUNT])).code).toBe("23514");
+      await c.query(`update finance_accounts set rsu_plan = 'tiktok', rsu_rules = $1 where id = $2`, [rules, ACCOUNT]);
+      expect((await failure(c, `update finance_accounts set kind = 'liability', category = 'loan' where id = $1`, [ACCOUNT])).code).toBe("23514");
+
+      const grant = (no: string, tranches = '[{"vests_on":"2026-01-01","shares":10}]', profile = "standard") =>
+        `insert into finance_rsu_grants (account_id, grant_no, profile, tranches) values ('${ACCOUNT}', '${no}', '${profile}', '${tranches}')`;
+      await c.query(grant("G1"));
+      expect((await failure(c, grant("G1"))).code).toBe("23505");
+      for (const bad of [grant(" "), grant("G2", "[]"), grant("G3", '{"vests_on":"2026-01-01"}'), grant("G4", undefined, "Not A Profile")]) {
+        expect((await failure(c, bad)).code, bad).toBe("23514");
+      }
+      const sale = (cutoff: string, shares = 5) => `insert into finance_rsu_sales (account_id, window_cutoff, shares) values ('${ACCOUNT}', '${cutoff}', ${shares})`;
+      await c.query(sale("2026-03-15"));
+      expect((await failure(c, sale("2026-03-15"))).code).toBe("23505");
+      expect((await failure(c, sale("2026-09-15", 0))).code).toBe("23514");
+      // Deleting the account takes its grants and sales with it.
+      await c.query(`delete from finance_accounts where id = $1`, [ACCOUNT]);
+      expect((await c.query(`select (select count(*) from finance_rsu_grants)::int + (select count(*) from finance_rsu_sales)::int as n`)).rows[0].n).toBe(0);
     });
 
     it("pins a balance to its account's currency, and the account's currency to its balances", async () => {

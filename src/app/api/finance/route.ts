@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { todayInSG } from "@/lib/dates";
+import { isRealDay, todayInSG } from "@/lib/dates";
 import { isFinanceCurrency, ratesOn } from "@/lib/fx";
 import {
   addMonths, decimalPlaces, FIRST_INTEREST_PLACES, hasLevelPayment, isCategory, isKind, isLoanDayCount, isLoanMethod, isPrepaymentMode, isRegion,
@@ -8,7 +8,10 @@ import {
   type FinanceAccount, type Kind, type LoanTerms,
 } from "@/lib/finance";
 import {
-  financeDatabase, financeJson as json, isFinanceRequest, isUuid, readAccount, readAccounts, readLoanEvents, reason, streamFinance, withLoanEvents,
+  isRsuPlan, parseRsuRules, parseTranches, RSU_PLANS, rsuWindow, windowCutoffs, type RsuGrant, type RsuRules,
+} from "@/lib/rsu";
+import {
+  financeDatabase, financeJson as json, isFinanceRequest, isUuid, readAccount, readAccounts, readAccountEvents, reason, streamFinance, withAccountEvents,
 } from "@/lib/finance-server";
 
 /** The owner's money. Every request is checked -- the owner's session, or the
@@ -26,11 +29,6 @@ function optionalText(value: unknown, field: string, max = 200): string | null |
   const trimmed = value.trim();
   if (trimmed.length > max) throw new Invalid(`${field} is longer than ${max} characters`);
   return trimmed || null;
-}
-
-const DAY = /^\d{4}-\d{2}-\d{2}$/;
-function isRealDay(day: unknown): day is string {
-  return typeof day === "string" && DAY.test(day) && new Date(`${day}T00:00:00Z`).toISOString().startsWith(day);
 }
 
 export async function GET(req: NextRequest) {
@@ -72,6 +70,11 @@ export async function POST(req: NextRequest) {
       case "deleteLoanRateChange": return await deleteLoanRateChange(db, body.id);
       case "addLoanPrepayment": return await addLoanPrepayment(db, body);
       case "deleteLoanPrepayment": return await deleteLoanPrepayment(db, body.id);
+      case "addRsuGrant": return await addRsuGrant(db, body);
+      case "updateRsuGrant": return await updateRsuGrant(db, body.id, body.updates);
+      case "deleteRsuGrant": return await deleteRsuGrant(db, body.id);
+      case "addRsuSale": return await addRsuSale(db, body);
+      case "deleteRsuSale": return await deleteRsuSale(db, body.id);
       default:
         return json({ error: "Invalid action" }, 400);
     }
@@ -84,7 +87,7 @@ export async function POST(req: NextRequest) {
 type AccountFields = Partial<Pick<FinanceAccount,
   | "name" | "institution" | "owner" | "region" | "currency" | "kind" | "category" | "note" | "sort_order"
   | "liquidity" | "long_term" | "loan_principal" | "loan_rate" | "loan_start" | "loan_term_months" | "loan_method"
-  | "loan_payment" | "loan_first_interest" | "loan_maturity" | "loan_day_count">>;
+  | "loan_payment" | "loan_first_interest" | "loan_maturity" | "loan_day_count" | "rsu_plan" | "rsu_rules">>;
 
 /** A number that may also be cleared: null, or a number `ok` accepts. */
 function nullableNumber(value: unknown, field: string, ok: (n: number) => boolean, what: string): number | null {
@@ -96,6 +99,9 @@ function nullableNumber(value: unknown, field: string, ok: (n: number) => boolea
 const LOAN_FIELDS = ["loan_principal", "loan_rate", "loan_start", "loan_term_months", "loan_method"] as const;
 /** What the bank states beyond the terms. Each is optional on its own. */
 const LOAN_EXTRAS = ["loan_payment", "loan_first_interest", "loan_maturity", "loan_day_count"] as const;
+/** Columns added after the accounts table, left out of a write while empty so
+ *  it works before their migration is applied. */
+const LATER_COLUMNS = [...LOAN_EXTRAS, "rsu_plan", "rsu_rules"] as const;
 
 const PERCENT = "an annual percentage, from 0 to under 100";
 const LEVEL_ONLY = (field: string) => `${field} is a level monthly payment, which only an annuity (等额本息) or flat (等本等息) loan has`;
@@ -200,7 +206,29 @@ function accountFields(input: Record<string, unknown>, kind: Kind): AccountField
     if (input.loan_day_count !== null && !isLoanDayCount(input.loan_day_count)) throw new Invalid("loan_day_count must be 30/360, actual/365, actual/360 or null");
     out.loan_day_count = input.loan_day_count;
   }
+  if ("rsu_plan" in input) {
+    if (input.rsu_plan !== null && !isRsuPlan(input.rsu_plan)) throw new Invalid(`rsu_plan must be ${RSU_PLANS.join(", ")} or null`);
+    out.rsu_plan = input.rsu_plan;
+  }
+  if ("rsu_rules" in input) {
+    if (input.rsu_rules === null) out.rsu_rules = null;
+    else {
+      const parsed = parseRsuRules(input.rsu_rules);
+      if ("problem" in parsed) throw new Invalid(parsed.problem);
+      out.rsu_rules = parsed.rules;
+    }
+  }
   return out;
+}
+
+/** RSUs belong to an asset, and their rules to a plan. Rules that drop a
+ *  profile a grant follows would leave that grant counted nowhere. */
+function checkRsu(account: Record<string, unknown>, grants: RsuGrant[] = []) {
+  if (account.rsu_plan != null && account.kind !== "asset") throw new Invalid("Only an asset holds RSUs");
+  if (account.rsu_rules != null && account.rsu_plan == null) throw new Invalid("rsu_rules belong to an RSU plan; with no plan, clear them too");
+  const rules = account.rsu_rules as RsuRules | null | undefined;
+  const orphan = rules ? grants.find((g) => !(g.profile in rules.profiles)) : undefined;
+  if (orphan) throw new Invalid(`${orphan.grant_no} follows the profile ${orphan.profile}, which these rules do not have`);
 }
 
 async function createAccount(db: SupabaseClient, input: unknown) {
@@ -211,12 +239,13 @@ async function createAccount(db: SupabaseClient, input: unknown) {
   }
   const fields = accountFields(a, a.kind);
   checkLoanTerms(fields);
+  checkRsu(fields);
   // Empty is what they start as anyway. Left out, the insert also works before
   // their migration is applied.
-  for (const f of LOAN_EXTRAS) if (fields[f] === null) delete fields[f];
+  for (const f of LATER_COLUMNS) if (fields[f] === null) delete fields[f];
   const { data, error } = await db.from("finance_accounts").insert(fields).select().single();
   if (error) throw error;
-  return { ...data, rate_changes: [], prepayments: [] };
+  return { ...data, rate_changes: [], prepayments: [], rsu_grants: [], rsu_sales: [] };
 }
 
 async function balanceCount(db: SupabaseClient, accountId: string): Promise<number> {
@@ -240,8 +269,11 @@ async function updateAccount(db: SupabaseClient, id: unknown, input: unknown) {
   }
   const fields: Record<string, unknown> = accountFields(updates, kind);
   checkLoanTerms({ ...current, ...fields });
+  if ("rsu_plan" in fields || "rsu_rules" in fields || "kind" in fields) {
+    checkRsu({ ...current, ...fields }, (await readAccountEvents(db, id)).rsuGrants);
+  }
   // A column its migration has not added yet has nothing to clear.
-  for (const f of LOAN_EXTRAS) if (fields[f] === null && !(f in current)) delete fields[f];
+  for (const f of LATER_COLUMNS) if (fields[f] === null && !(f in current)) delete fields[f];
   if ("archived" in updates) {
     if (typeof updates.archived !== "boolean") throw new Invalid("archived must be true or false");
     fields.archived_at = updates.archived ? new Date().toISOString() : null;
@@ -252,7 +284,7 @@ async function updateAccount(db: SupabaseClient, id: unknown, input: unknown) {
   }
   const { data, error } = await db.from("finance_accounts").update(fields).eq("id", id).select().single();
   if (error) throw error;
-  return json(withLoanEvents([data as FinanceAccount], await readLoanEvents(db, id))[0]);
+  return json(withAccountEvents([data as FinanceAccount], await readAccountEvents(db, id))[0]);
 }
 
 /** The loan behind an action on one: the account, and its terms. */
@@ -345,6 +377,134 @@ async function deleteLoanPrepayment(db: SupabaseClient, id: unknown) {
   const { data, error } = await db.from("finance_loan_prepayments").delete().eq("id", id).select("account_id");
   if (error) throw error;
   if (!data?.length) return json({ error: "No such prepayment" }, 404);
+  return json(await readAccount(db, data[0].account_id));
+}
+
+/** The RSU account behind an action on one: the account, and its rules. */
+async function rsuAccountFor(db: SupabaseClient, accountId: unknown): Promise<{ account: FinanceAccount; rules: RsuRules } | Response> {
+  if (!isUuid(accountId)) throw new Invalid("account_id is required: the RSU account's");
+  const account = await readAccount(db, accountId);
+  if (!account) return json({ error: "No such account" }, 404);
+  const parsed = parseRsuRules(account.rsu_rules);
+  if (!isRsuPlan(account.rsu_plan) || !("rules" in parsed)) throw new Invalid("That account has no RSU plan: set its rsu_plan and rsu_rules first");
+  return { account, rules: parsed.rules };
+}
+
+/** A grant's fields, checked against its account's rules. A new one needs its
+ *  number, profile and tranches; an update, only what it changes. */
+function grantFields(input: Record<string, unknown>, rules: RsuRules, isNew: boolean): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (isNew || "grant_no" in input) {
+    const grantNo = optionalText(input.grant_no, "grant_no", 40);
+    if (!grantNo) throw new Invalid("grant_no is required: the grant's number, as its plan gives it");
+    out.grant_no = grantNo;
+  }
+  if ("label" in input) out.label = optionalText(input.label, "label", 80) ?? null;
+  if (isNew || "profile" in input) {
+    if (typeof input.profile !== "string" || !Object.hasOwn(rules.profiles, input.profile)) {
+      throw new Invalid(`profile must be one of the account's: ${Object.keys(rules.profiles).join(", ")}`);
+    }
+    out.profile = input.profile;
+  }
+  for (const f of ["granted_on", "vest_start"]) {
+    if (!(f in input)) continue;
+    if (input[f] !== null && !isRealDay(input[f])) throw new Invalid(`${f} must be a date, YYYY-MM-DD, or null`);
+    out[f] = input[f];
+  }
+  if ("signed" in input) {
+    if (typeof input.signed !== "boolean") throw new Invalid("signed must be true or false: false for a grant offered and not yet accepted");
+    out.signed = input.signed;
+  }
+  if (isNew || "tranches" in input) {
+    const parsed = parseTranches(input.tranches);
+    if ("problem" in parsed) throw new Invalid(parsed.problem);
+    out.tranches = parsed.tranches;
+  }
+  if ("note" in input) out.note = optionalText(input.note, "note", 500) ?? null;
+  return out;
+}
+
+const grantTaken = (grantNo: unknown) => `There is already a grant ${String(grantNo)} on this account.`;
+
+/** A grant of RSUs, with its tranches. Answers the account, with its grants as
+ *  they now stand. */
+async function addRsuGrant(db: SupabaseClient, input: Record<string, unknown>) {
+  const found = await rsuAccountFor(db, input.account_id);
+  if (found instanceof Response) return found;
+  const fields = grantFields(input, found.rules, true);
+  if (found.account.rsu_grants?.some((g) => g.grant_no === fields.grant_no)) return json({ error: grantTaken(fields.grant_no) }, 409);
+  const { error } = await db.from("finance_rsu_grants").insert({ account_id: found.account.id, ...fields });
+  if (error) {
+    if (error.code === "23505") return json({ error: grantTaken(fields.grant_no) }, 409);
+    throw error;
+  }
+  return json(await readAccount(db, found.account.id));
+}
+
+/** Changes a grant: signs a proposed one, corrects its tranches. */
+async function updateRsuGrant(db: SupabaseClient, id: unknown, input: unknown) {
+  if (!isUuid(id)) throw new Invalid("id is required: the grant's");
+  const { data: current, error: readError } = await db.from("finance_rsu_grants").select("account_id").eq("id", id).maybeSingle();
+  if (readError) throw readError;
+  if (!current) return json({ error: "No such grant" }, 404);
+  const found = await rsuAccountFor(db, current.account_id);
+  if (found instanceof Response) return found;
+  const fields = grantFields((input ?? {}) as Record<string, unknown>, found.rules, false);
+  if (Object.keys(fields).length === 0) throw new Invalid("Nothing to change");
+  if ("grant_no" in fields && found.account.rsu_grants?.some((g) => g.grant_no === fields.grant_no && g.id !== id)) {
+    return json({ error: grantTaken(fields.grant_no) }, 409);
+  }
+  const { error } = await db.from("finance_rsu_grants").update(fields).eq("id", id);
+  if (error) {
+    if (error.code === "23505") return json({ error: grantTaken(fields.grant_no) }, 409);
+    throw error;
+  }
+  return json(await readAccount(db, found.account.id));
+}
+
+async function deleteRsuGrant(db: SupabaseClient, id: unknown) {
+  if (!isUuid(id)) throw new Invalid("id is required: the grant's");
+  const { data, error } = await db.from("finance_rsu_grants").delete().eq("id", id).select("account_id");
+  if (error) throw error;
+  if (!data?.length) return json({ error: "No such grant" }, 404);
+  return json(await readAccount(db, data[0].account_id));
+}
+
+/** Shares sold in a window, which later windows' quotas are net of. No more
+ *  than were held by its cutoff: vested, and not sold in a window before. The
+ *  window's own cap is the plan's estimate, not a limit on what was sold. */
+async function addRsuSale(db: SupabaseClient, input: Record<string, unknown>) {
+  const found = await rsuAccountFor(db, input.account_id);
+  if (found instanceof Response) return found;
+  const { account, rules } = found;
+  const cutoff = input.window_cutoff;
+  if (!isRealDay(cutoff) || windowCutoffs(rules, cutoff, cutoff).length === 0) {
+    const months = rules.windows.months.map((m) => String(m).padStart(2, "0")).join(", ");
+    throw new Invalid(`window_cutoff must be a window's cutoff: day ${rules.windows.cutoff_day} of month ${months}, as YYYY-MM-DD`);
+  }
+  const shares = input.shares;
+  if (!Number.isInteger(shares) || (shares as number) <= 0) throw new Invalid("shares must be a whole number above 0");
+  const price = input.price == null ? null : nullableNumber(input.price, "price", (n) => n > 0, "a positive price per share, or null");
+  const tax = input.tax == null ? null : nullableNumber(input.tax, "tax", (n) => n >= 0, "the tax withheld, 0 or more, or null");
+  const note = optionalText(input.note, "note", 500) ?? null;
+  const taken = `There is already a sale in the ${cutoff} window. Delete it first to put another in its place.`;
+  if (account.rsu_sales?.some((s) => s.window_cutoff === cutoff)) return json({ error: taken }, 409);
+  const w = rsuWindow({ rules, grants: account.rsu_grants ?? [], sales: account.rsu_sales ?? [] }, cutoff);
+  const held = w.vested - w.sold_before;
+  if ((shares as number) > held) throw new Invalid(`That is more than the ${held} shares vested by ${cutoff} and not sold in a window before`);
+  const { error } = await db.from("finance_rsu_sales").insert({ account_id: account.id, window_cutoff: cutoff, shares, price, tax, note });
+  if (error) {
+    if (error.code === "23505") return json({ error: taken }, 409);
+    throw error;
+  }
+  return json(await readAccount(db, account.id));
+}
+
+async function deleteRsuSale(db: SupabaseClient, id: unknown) {
+  if (!isUuid(id)) throw new Invalid("id is required: the sale's");
+  const { data, error } = await db.from("finance_rsu_sales").delete().eq("id", id).select("account_id");
+  if (error) throw error;
+  if (!data?.length) return json({ error: "No such sale" }, 404);
   return json(await readAccount(db, data[0].account_id));
 }
 

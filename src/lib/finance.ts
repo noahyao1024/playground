@@ -1,4 +1,5 @@
 import { dayInSG, todayInSG } from "./dates";
+import { isRsuPlan, parseRsuRules, rsuLiquidity, rsuStatus, type RsuGrant, type RsuPlan, type RsuRules, type RsuSale, type RsuStatus, type RsuTerms } from "./rsu";
 
 /** Where an account is held. */
 export const REGIONS = ["CN", "SG", "OTHER"] as const;
@@ -123,6 +124,14 @@ export interface FinanceAccount {
   rate_changes?: LoanRateChange[];
   /** Its loan's prepayments, oldest first; the same, always there. */
   prepayments?: LoanPrepayment[];
+  /** For an asset holding RSUs: the plan they follow, and the owner's numbers
+   *  for it. Null for any other account. */
+  rsu_plan?: RsuPlan | null;
+  rsu_rules?: RsuRules | null;
+  /** Its RSU grants, by number, and what has been sold of them, by window; as
+   *  the loan lists, always there from the API. */
+  rsu_grants?: RsuGrant[];
+  rsu_sales?: RsuSale[];
   archived_at: string | null;
   created_at: string;
 }
@@ -196,18 +205,43 @@ export function isLongTerm(a: FinanceAccount): boolean {
 export const ILLIQUID_CATEGORIES: ReadonlySet<string> = new Set(["retirement", "property"]);
 
 /** The share of an asset that could be spent now, 0 to 1: as marked, or else
- *  none of CPF / 公积金 or property, and all of anything else. */
-export function liquidityOf(a: FinanceAccount): number {
-  if (a.liquidity == null) return ILLIQUID_CATEGORIES.has(a.category) ? 0 : 1;
+ *  -- for RSUs -- what the next window could buy of the shares held on `day`,
+ *  or else none of CPF / 公积金 or property, and all of anything else. */
+export function liquidityOf(a: FinanceAccount, day = todayInSG()): number {
+  if (a.liquidity == null) {
+    const rsu = a.rsu_plan ? rsuLiquidityOn(a, day) : null;
+    if (rsu != null) return rsu;
+    return ILLIQUID_CATEGORIES.has(a.category) ? 0 : 1;
+  }
   const share = Number(a.liquidity);
   return Number.isFinite(share) ? Math.min(1, Math.max(0, share)) : 1;
 }
 
-/** How much of an account's balance a lens counts: 1 all of it, 0 none. */
-export function weightOf(a: FinanceAccount, lens: Lens = {}): number {
+// Worked out once per account and day: the history asks for every balance of
+// every day it draws.
+const rsuLiquidityCache = new WeakMap<FinanceAccount, Map<string, number | null>>();
+function rsuLiquidityOn(a: FinanceAccount, day: string): number | null {
+  let byDay = rsuLiquidityCache.get(a);
+  if (!byDay) rsuLiquidityCache.set(a, (byDay = new Map()));
+  if (!byDay.has(day)) {
+    const terms = rsuTermsOf(a);
+    byDay.set(day, terms ? rsuLiquidity(terms, day) : null);
+  }
+  return byDay.get(day)!;
+}
+
+/** An asset's RSUs, if it holds any under a plan whose rules read right. */
+export function rsuTermsOf(a: FinanceAccount): RsuTerms | null {
+  if (a.kind !== "asset" || !isRsuPlan(a.rsu_plan) || !a.rsu_grants?.length) return null;
+  const parsed = parseRsuRules(a.rsu_rules);
+  return "rules" in parsed ? { plan: a.rsu_plan, rules: parsed.rules, grants: a.rsu_grants, sales: a.rsu_sales ?? [] } : null;
+}
+
+/** How much of an account's balance a lens counts on `day`: 1 all of it, 0 none. */
+export function weightOf(a: FinanceAccount, lens: Lens = {}, day = todayInSG()): number {
   if (lens.owner != null && (a.owner ?? "") !== lens.owner) return 0;
   if (lens.excludeLongTerm && isLongTerm(a)) return 0;
-  if (lens.liquidOnly && a.kind === "asset") return liquidityOf(a);
+  if (lens.liquidOnly && a.kind === "asset") return liquidityOf(a, day);
   return 1;
 }
 
@@ -294,7 +328,7 @@ function positionFrom(byId: Map<string, FinanceAccount>, latest: Iterable<Financ
   for (const balance of latest) {
     const account = byId.get(balance.account_id);
     if (!account || !countsOn(account, day)) continue;
-    const weight = weightOf(account, lens);
+    const weight = weightOf(account, lens, day);
     if (weight === 0) continue;
     const value = scaled(valueOf(balance), weight);
     const sign = account.kind === "asset" ? 1 : -1;
@@ -846,6 +880,8 @@ export type AccountSummary = FinanceAccount & {
   latest: (Pick<FinanceBalance, "as_of" | "amount" | "cny_rate" | "sgd_rate" | "rate_date"> & { value: Money }) | null;
   /** For a loan with terms, where its schedule stands today. */
   loan: LoanStatus | null;
+  /** For RSUs, where the shares stand today, and what the next window may buy. */
+  rsu: RsuStatus | null;
 };
 
 /** Where things stand, worked out the way the page works it out -- for anything
@@ -888,8 +924,9 @@ export function summarize(accounts: FinanceAccount[], balances: FinanceBalance[]
     by_category: Object.fromEntries(Object.entries(latest?.byCategory ?? {}).map(([key, value]) => [key, rounded(value)])),
     accounts: sortAccounts(accounts).map((a) => {
       const b = last.get(a.id);
-      const weight = weightOf(a, lens);
+      const weight = weightOf(a, lens, today);
       const terms = loanTermsOf(a);
+      const rsu = rsuTermsOf(a);
       return {
         ...a,
         display_name: displayName(a),
@@ -907,6 +944,7 @@ export function summarize(accounts: FinanceAccount[], balances: FinanceBalance[]
           }
           : null,
         loan: terms ? loanStatus(terms, today) : null,
+        rsu: rsu ? rsuStatus(rsu, today) : null,
       };
     }),
     history: history.map((p) => ({ day: p.day, ...roundedTotals(p) })),
