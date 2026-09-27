@@ -105,7 +105,7 @@ function ApiAccess() {
           </div>
           <p className="text-xs text-muted-foreground">
             Give your agent the token and the API&rsquo;s description, <span className="break-all font-mono">{spec}</span>.
-            It sends the token as <span className="font-mono">Authorization: Bearer &hellip;</span>
+            It sends the token as <span className="font-mono">Authorization: Bearer &hellip;</span> with every request, the description&rsquo;s too.
           </p>
           <Button variant="outline" size="sm" className="justify-self-start" onClick={() => setMade(null)}>Done</Button>
         </section>

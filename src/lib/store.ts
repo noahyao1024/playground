@@ -109,14 +109,22 @@ export type CardType = "visa" | "mastercard" | "amex" | "discover" | "unionpay" 
 export interface PaymentMethod {
   id: string;
   label: string;
-  cardholder_name: string;
   card_type: CardType;
   last4: string;
-  expiry_month: number;
-  expiry_year: number;
   is_default: boolean;
   created_at?: string;
+  /** Only for the people who edit the split bill: the public key reads the
+   *  columns above, and these come from /api/data (fetchCardDetails). */
+  cardholder_name?: string;
+  expiry_month?: number;
+  expiry_year?: number;
 }
+
+/** What only editors see of a card. */
+export type CardDetails = Required<Pick<PaymentMethod, "id" | "cardholder_name" | "expiry_month" | "expiry_year">>;
+
+/** The columns of payment_methods the public key may read. */
+export const PUBLIC_CARD_COLUMNS = "id, label, card_type, last4, is_default, created_at";
 
 export function detectCardType(cardNumber: string): CardType {
   const n = cardNumber.replace(/\D/g, "");
@@ -129,6 +137,36 @@ export function detectCardType(cardNumber: string): CardType {
   if (/^35(?:2[89]|[3-8])/.test(n)) return "jcb";
   if (/^3(?:0[0-5]|[68])/.test(n)) return "diners";
   return "unknown";
+}
+
+/** How the form shows a saved card's number: only its last four are kept. */
+export const maskedCard = (last4: string) => `**** **** **** ${last4}`;
+
+/** The brand of the card the form holds: the one it had, while its number is
+ *  still shown masked, or else what the number says. */
+export function cardTypeOfForm(cardNumber: string, editing: Pick<PaymentMethod, "card_type" | "last4"> | null): CardType {
+  return editing && cardNumber === maskedCard(editing.last4) ? editing.card_type : detectCardType(cardNumber);
+}
+
+/** A card as the form describes it, ready to save. Editing shows the number
+ *  masked to its last four digits, which say nothing of the brand: left masked,
+ *  the card keeps the brand it has. */
+export function cardFromForm(
+  form: { label: string; cardholderName: string; cardNumber: string; expiryMonth: number; expiryYear: number; isDefault: boolean },
+  editing: Pick<PaymentMethod, "card_type" | "last4"> | null,
+  labels: Record<string, string>,
+): Omit<PaymentMethod, "id" | "created_at"> {
+  const digits = form.cardNumber.replace(/\D/g, "");
+  const card_type = cardTypeOfForm(form.cardNumber, editing);
+  return {
+    label: form.label.trim() || `${labels[card_type]} ****${digits.slice(-4)}`,
+    cardholder_name: form.cardholderName.trim(),
+    card_type,
+    last4: digits.slice(-4),
+    expiry_month: form.expiryMonth,
+    expiry_year: form.expiryYear,
+    is_default: form.isDefault,
+  };
 }
 
 export function maskCardNumber(cardNumber: string): string {
@@ -204,7 +242,7 @@ export async function fetchSubscriptionData(): Promise<SubscriptionData> {
       db.from("charges").select("*").is("deleted_at", null)
         .order("created_at").order("id").range(from, to)
     ),
-    supabase.from("payment_methods").select("*").order("created_at"),
+    supabase.from("payment_methods").select(PUBLIC_CARD_COLUMNS).order("created_at"),
     fetchAllRows<WalletEntry>((from, to) =>
       db.from("wallet_entries").select("*")
         .order("created_at", { ascending: false }).order("id", { ascending: false })
@@ -219,6 +257,23 @@ export async function fetchSubscriptionData(): Promise<SubscriptionData> {
     payment_methods: (payment_methods ?? []) as PaymentMethod[],
     wallet_entries,
   };
+}
+
+/** Cardholder names and expiry dates, for the people who edit the split bill.
+ *  Asked of the server, which checks who is asking; without Supabase, the cards
+ *  in localStorage already carry them. */
+export async function fetchCardDetails(): Promise<CardDetails[]> {
+  if (!supabase) {
+    return readLocal().payment_methods.map((p) => ({
+      id: p.id, cardholder_name: p.cardholder_name ?? "", expiry_month: p.expiry_month ?? 0, expiry_year: p.expiry_year ?? 0,
+    }));
+  }
+  const res = await fetch("/api/data?details=payment_methods", { cache: "no-store" });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
+  return (await res.json()).payment_methods as CardDetails[];
 }
 
 // ─── Services ────────────────────────────────────────────────────────

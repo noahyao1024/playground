@@ -1,11 +1,14 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { financeOpenApi } from "@/lib/finance-openapi";
+import { financeJson as json, isFinanceRequest } from "@/lib/finance-server";
 
-/** What /api/finance takes and returns, for an agent to read before calling it.
- *  Public: it describes shapes, never data, and the repo defining them is public
- *  too. Served for the host it was asked on, so a preview describes itself. */
-export function GET(req: NextRequest) {
-  return NextResponse.json(financeOpenApi(new URL(req.url).origin), {
-    headers: { "Cache-Control": "public, max-age=300" },
-  });
+/** What /api/finance takes and returns, for an agent to read before calling it,
+ *  with the same token as every other call: to anyone else it would only say
+ *  that the owner's accounts are here. Served for the host it was asked on, so
+ *  a preview describes itself. */
+export const dynamic = "force-dynamic";
+
+export async function GET(req: NextRequest) {
+  if (!(await isFinanceRequest(req))) return json({ error: "Unauthorized" }, 401);
+  return json(financeOpenApi(new URL(req.url).origin));
 }

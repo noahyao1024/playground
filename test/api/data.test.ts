@@ -9,7 +9,7 @@ vi.mock("@/lib/auth", () => ({
   isAllowedEmail: (email: string | null | undefined) => email === "hi@noahyao.me",
 }));
 
-const { POST } = await import("@/app/api/data/route");
+const { GET, POST } = await import("@/app/api/data/route");
 
 const charge = { subscriber_id: "a", service_id: "s", period_start: "2026-08", period_end: "2026-08", months: 1, monthly_cost: 10, currency: "SGD", exchange_rate: 5.3, total_cny: 53 };
 
@@ -19,7 +19,10 @@ beforeEach(async () => {
   db = await startPostgrest(
     {
       charges: [{ id: "c1", ...charge, paid: false, deleted_at: null }],
-      payment_methods: [{ id: "pm1", is_default: true }, { id: "pm2", is_default: false }],
+      payment_methods: [
+        { id: "pm1", is_default: true, cardholder_name: "Ann Lee", expiry_month: 4, expiry_year: 2031, created_at: "2026-01-01" },
+        { id: "pm2", is_default: false, cardholder_name: "Wal Tan", expiry_month: 9, expiry_year: 2029, created_at: "2026-02-01" },
+      ],
       services: [{ id: "s-used" }, { id: "s-free" }],
       subscriptions: [{ id: "sub1", service_id: "s-used", subscriber_id: "a" }],
     },
@@ -43,6 +46,40 @@ async function post(payload: Row) {
   const res = await POST(new NextRequest("http://localhost/api/data", { method: "POST", body: JSON.stringify(payload) }));
   return { status: res.status, body: await res.json() };
 }
+
+describe("GET /api/data", () => {
+  const get = async (query = "?details=payment_methods") => {
+    const res = await GET(new NextRequest(`http://localhost/api/data${query}`));
+    return { status: res.status, cache: res.headers.get("cache-control"), body: await res.json() };
+  };
+
+  it("gives editors the card details the public key cannot read, and nothing more", async () => {
+    const { status, cache, body } = await get();
+    expect(status).toBe(200);
+    expect(cache).toBe("private, no-store");
+    expect(body.payment_methods).toMatchObject([
+      { id: "pm1", cardholder_name: "Ann Lee", expiry_month: 4, expiry_year: 2031 },
+      { id: "pm2", cardholder_name: "Wal Tan", expiry_month: 9, expiry_year: 2029 },
+    ]);
+    // Only the details are asked for; PostgREST returns what is selected.
+    const asked = db.requests.filter((r) => r.table === "payment_methods").map((r) => new URLSearchParams(r.params).get("select"));
+    expect(asked).toEqual(["id,cardholder_name,expiry_month,expiry_year"]);
+  });
+
+  it("refuses anyone not signed in with an allowed address, before asking the database", async () => {
+    session.current = null;
+    expect((await get()).status).toBe(401);
+    session.current = { user: { email: "someone@else.com" } };
+    expect((await get()).status).toBe(401);
+    expect(db.requests).toHaveLength(0);
+  });
+
+  it("reads nothing else", async () => {
+    expect((await get("?details=wallet_entries")).status).toBe(400);
+    expect((await get("")).status).toBe(400);
+    expect(db.requests).toHaveLength(0);
+  });
+});
 
 describe("POST /api/data", () => {
   it("refuses anyone not signed in with an allowed address", async () => {

@@ -160,9 +160,8 @@ export function financeOpenApi(origin: string) {
       "/api/finance/openapi": {
         get: {
           operationId: "getOpenApi",
-          summary: "This description",
-          security: [],
-          responses: { 200: ok("OpenAPI 3.1", { type: "object" }) },
+          summary: "This description, asked for with the token like every other call",
+          responses: { 200: ok("OpenAPI 3.1", { type: "object" }), 401: error("Not the owner") },
         },
       },
     },
