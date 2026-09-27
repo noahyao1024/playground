@@ -146,16 +146,18 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   empty — so merge first, then apply.
   RSUs are an asset with `rsu_plan` (`RSU_PLANS` in `src/lib/rsu.ts`, `tiktok` for now). The
   plan is the mechanism, in code; its numbers — the window months and cutoff day, each
-  profile's rates by full years vested — are the owner's, copied from the employer's pages,
-  and live only in `rsu_rules` in the database. Never put them, or the grants, in this
-  repository: the tests use made-up rules. Grants and sales are in the private
+  profile's rates by full years vested, the price over time (`prices`) — are the owner's,
+  copied from the employer's pages, and live only in `rsu_rules` in the database. Never put
+  them, or the grants, in this repository: the tests use made-up rules and prices. Grants and sales are in the private
   `finance_rsu_grants` and `finance_rsu_sales`, read as the loan tables are, so the code runs
   before their migration too. A window buys the floor of Σ shares × rate over the tranches
   vested by its cutoff, summed exactly in hundredths of a percent, less what was sold in the
-  windows before (`rsuWindow`); a grant not yet `signed` counts only where asked. With
-  `liquidity` null an RSU account's liquid share is what the next window may still buy of
-  the shares held, worked out for each day — read it through `liquidityOf(a, day)`. Its
-  balance is still recorded by hand: the held shares at a price.
+  windows before (`rsuWindow`); a grant not yet `signed` counts only where asked. A window is
+  priced at the plan's price in effect by its cutoff (`priceOn`). With `liquidity` null an
+  RSU account's liquid share is what a window within `LIQUID_WITHIN_MONTHS` (3) may still
+  buy of the shares held, and none while no window is that near, worked out for each day —
+  read it through `liquidityOf(a, day)`. Its balance is still recorded by hand: the held
+  shares at a price.
   The owner's own agents get in as the owner with a bearer token: one made on the page
   (/finance → API access, `/api/finance/tokens`), stored only as its SHA-256 in the private
   `finance_api_tokens`, or `FINANCE_API_TOKEN` (`src/lib/finance-server.ts`). Tokens are made

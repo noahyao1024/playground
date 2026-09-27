@@ -1,4 +1,4 @@
-import { dayInSG, todayInSG } from "./dates";
+import { addMonths, dayInSG, todayInSG } from "./dates";
 import { isRsuPlan, parseRsuRules, rsuLiquidity, rsuStatus, type RsuGrant, type RsuPlan, type RsuRules, type RsuSale, type RsuStatus, type RsuTerms } from "./rsu";
 
 /** Where an account is held. */
@@ -205,8 +205,9 @@ export function isLongTerm(a: FinanceAccount): boolean {
 export const ILLIQUID_CATEGORIES: ReadonlySet<string> = new Set(["retirement", "property"]);
 
 /** The share of an asset that could be spent now, 0 to 1: as marked, or else
- *  -- for RSUs -- what the next window could buy of the shares held on `day`,
- *  or else none of CPF / 公积金 or property, and all of anything else. */
+ *  -- for RSUs -- what a window within three months of `day` could buy of the
+ *  shares held then, none without one, or else none of CPF / 公积金 or
+ *  property, and all of anything else. */
 export function liquidityOf(a: FinanceAccount, day = todayInSG()): number {
   if (a.liquidity == null) {
     const rsu = a.rsu_plan ? rsuLiquidityOn(a, day) : null;
@@ -495,19 +496,7 @@ export function loanTermsOf(a: FinanceAccount): LoanTerms | null {
   };
 }
 
-/** Days in a month, `month` counted from 1. */
-const daysIn = (year: number, month: number) => new Date(Date.UTC(year, month, 0)).getUTCDate();
-
-/** `day` moved on by `months`, to the same day of the month -- or the month's
- *  last day when it is shorter: 31 January plus a month is 28 February. */
-export function addMonths(day: string, months: number): string {
-  const [y, m, d] = day.split("-").map(Number);
-  const total = y * 12 + (m - 1) + months;
-  const year = Math.floor(total / 12);
-  const month = total - year * 12 + 1;
-  const date = Math.min(d, daysIn(year, month));
-  return `${year}-${String(month).padStart(2, "0")}-${String(date).padStart(2, "0")}`;
-}
+export { addMonths };
 
 /** Days from one day to another in a 360-day year, every month thirty days
  *  and a 31st counted as the 30th -- the way a Chinese bank counts a broken

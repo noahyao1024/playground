@@ -102,15 +102,18 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
   when each vests and how many shares. A window counts every tranche vested by
   its cutoff at the rate its grant's profile sets for the full years since it
   vested, takes the floor of the sum, and less what was sold in the windows
-  before, that is what it may buy. Give a window and the price, and the **RSUs**
-  card shows the shares and what they come to, before and after tax, in the
-  plan's currency, CNY and SGD. The plan's numbers — which months the windows
-  fall in, the cutoff day, the rates — are the owner's, copied from the
-  employer's own pages into the account's rules: they live only in the
-  database, never in this repository. A grant offered and not yet signed
-  counts only where asked. With its liquidity unset, an RSU account counts as
-  liquid what the next window may still buy of the shares held, worked out for
-  each day; its balance is still what is recorded — the shares held at a price.
+  before, that is what it may buy. Pick a window, and the **RSUs** card shows
+  the shares and what they come to, before and after tax, in the plan's
+  currency, CNY and SGD — at the plan's price in effect by the window's cutoff
+  (the latest, for a window still to come), or a price typed over it. The
+  plan's numbers — which months the windows fall in, the cutoff day, the
+  rates, and its price over time — are the owner's, copied from the employer's
+  own pages into the account's rules: they live only in the database, never in
+  this repository. A grant offered and not yet signed counts only where asked.
+  With its liquidity unset, an RSU account counts as liquid what a window
+  within **three months** may still buy of the shares held, and nothing while
+  no window is that near — worked out for each day of the history. Its
+  balance is still what is recorded: the shares held at the price.
 
 ## Finance API, for agents
 

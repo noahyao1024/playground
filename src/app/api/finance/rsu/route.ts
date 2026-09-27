@@ -2,12 +2,14 @@ import { NextRequest } from "next/server";
 import { isRealDay, todayInSG } from "@/lib/dates";
 import { rsuTermsOf } from "@/lib/finance";
 import { financeDatabase, financeJson as json, isFinanceRequest, isUuid, readAccount, reason } from "@/lib/finance-server";
-import { nextWindow, rsuOutlook, rsuPosition, rsuProceeds, rsuWindow, windowCutoffs } from "@/lib/rsu";
+import { nextWindow, priceOn, rsuOutlook, rsuPosition, rsuProceeds, rsuWindow, windowCutoffs } from "@/lib/rsu";
 
 /** One RSU account worked out for a window: which tranches count and at what
- *  rate, what the window may buy, and -- given the price, and a tax rate if
- *  known -- what that comes to. A proposed grant is left out, as the employer's
- *  own estimate leaves it out, and what it would add is given beside. */
+ *  rate, what the window may buy, and what that comes to -- at the price given,
+ *  or else the plan's price in effect by the cutoff (the latest, for a window
+ *  still to come), less tax at the rate given. A proposed grant is left out, as
+ *  the employer's own estimate leaves it out, and what it would add is given
+ *  beside. */
 export const dynamic = "force-dynamic";
 
 /** How many windows the outlook runs to. */
@@ -37,6 +39,8 @@ export async function GET(req: NextRequest) {
       return json({ error: "window must be a window's cutoff, YYYY-MM-DD" }, 400);
     }
     const window = rsuWindow(terms, cutoff);
+    const planPrice = priceOn(terms.rules, cutoff);
+    const at = price ?? planPrice?.price ?? null;
     const proposed = terms.grants.some((g) => !g.signed);
     const withProposed = proposed ? rsuWindow(terms, cutoff, { includeProposed: true }) : null;
     return json({
@@ -48,8 +52,14 @@ export async function GET(req: NextRequest) {
       with_proposed: withProposed && {
         vested: withProposed.vested, cumulative: withProposed.cumulative, quota: withProposed.quota, remaining: withProposed.remaining,
       },
-      proceeds: price === null ? null : { price, tax_rate: taxRate, ...rsuProceeds(window.remaining, price, taxRate) },
-      outlook: rsuOutlook(terms, today, OUTLOOK),
+      proceeds: at === null ? null : {
+        price: at,
+        // The day the plan's price took effect; null for a price given.
+        price_effective_date: price === null ? planPrice!.effective_date : null,
+        tax_rate: taxRate,
+        ...rsuProceeds(window.remaining, at, taxRate),
+      },
+      outlook: rsuOutlook(terms, today, OUTLOOK).map((w) => ({ ...w, price: price ?? priceOn(terms.rules, w.cutoff)?.price ?? null })),
       outlook_with_proposed: proposed ? rsuOutlook(terms, today, OUTLOOK, { includeProposed: true }) : null,
     });
   } catch (err) {

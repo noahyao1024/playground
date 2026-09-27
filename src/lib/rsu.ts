@@ -6,7 +6,7 @@
  *  kept with the account (`rsu_rules`), private like the rest of finance: they
  *  come from the employer's own estimate page, and this repository is public. */
 
-import { isRealDay } from "./dates";
+import { addMonths, isRealDay } from "./dates";
 import { isFinanceCurrency } from "./fx";
 
 /** tiktok: double-trigger RSUs that a private company buys back, in windows.
@@ -26,6 +26,10 @@ export function isRsuPlan(value: unknown): value is RsuPlan {
  *  been vested: under one year, one, two... The last holds for longer. */
 export type RsuProfile = { label?: string; rates: number[] };
 
+/** The price per share from the day it took effect, as the plan's own price
+ *  trend lists it. */
+export type RsuPrice = { effective_date: string; price: number };
+
 export type RsuRules = {
   /** What the share price is quoted in. */
   currency: string;
@@ -37,6 +41,9 @@ export type RsuRules = {
   /** The last cutoff the rules were checked against the employer's own figures.
    *  Later windows are projections. */
   verified_through?: string | null;
+  /** The price per share over time, oldest first: a window is priced at the
+   *  one in effect by its cutoff, and one still to come at the latest. */
+  prices?: RsuPrice[];
 };
 
 export type RsuTranche = { vests_on: string; shares: number };
@@ -82,6 +89,8 @@ export type RsuTerms = { plan: RsuPlan; rules: RsuRules; grants: RsuGrant[]; sal
 // ─── Reading what is stored ──────────────────────────────────────────
 
 const PROFILE = /^[a-z0-9_]{1,40}$/;
+/** A price written out, as the plan's page writes it: "100.00". */
+const DECIMAL = /^\s*\d+(\.\d+)?\s*$/;
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -114,14 +123,46 @@ export function parseRsuRules(value: unknown): { rules: RsuRules } | { problem: 
     parsed[name] = { ...(typeof p.label === "string" && p.label.trim() ? { label: p.label.trim() } : {}), rates: rates as number[] };
   }
   if (verified_through != null && !isRealDay(verified_through)) return { problem: "rsu_rules.verified_through must be a date, YYYY-MM-DD, or null" };
+  const prices = parsePrices(value.prices);
+  if ("problem" in prices) return prices;
   return {
     rules: {
       currency,
       windows: { months: [...(months as number[])].sort((a, b) => a - b), cutoff_day: cutoffDay as number },
       profiles: parsed,
       verified_through: (verified_through as string | null | undefined) ?? null,
+      prices: prices.prices,
     },
   };
+}
+
+/** A price trend as the plan's page gives it -- [{effective_date, price}], the
+ *  price a number or a string of one, "100.00" -- in order; or what is wrong. */
+function parsePrices(value: unknown): { prices: RsuPrice[] } | { problem: string } {
+  if (value == null) return { prices: [] };
+  if (!Array.isArray(value) || value.length > 200) return { problem: "rsu_rules.prices must list up to 200 {effective_date, price}" };
+  const prices: RsuPrice[] = [];
+  for (const p of value) {
+    const price = isObject(p) && typeof p.price === "string" && DECIMAL.test(p.price) ? Number(p.price) : isObject(p) ? p.price : null;
+    if (!isObject(p) || !isRealDay(p.effective_date) || typeof price !== "number" || !Number.isFinite(price) || price <= 0) {
+      return { problem: "each of rsu_rules.prices must be {effective_date: YYYY-MM-DD, price: above 0}" };
+    }
+    prices.push({ effective_date: p.effective_date, price });
+  }
+  prices.sort((a, b) => (a.effective_date < b.effective_date ? -1 : a.effective_date > b.effective_date ? 1 : 0));
+  if (prices.some((p, i) => i > 0 && p.effective_date === prices[i - 1].effective_date)) return { problem: "rsu_rules.prices: one price a day" };
+  return { prices };
+}
+
+/** The plan's price on a day: the last to take effect by then. Null before the
+ *  first, or with none. */
+export function priceOn(rules: Pick<RsuRules, "prices">, day: string): RsuPrice | null {
+  let found: RsuPrice | null = null;
+  for (const p of rules.prices ?? []) {
+    if (p.effective_date > day) break;
+    found = p;
+  }
+  return found;
 }
 
 /** Rules as typed into the account's form: JSON, checked as the server checks
@@ -325,26 +366,43 @@ export function rsuProceeds(shares: number, price: number, taxRate: number | nul
   return { gross, tax, net: tax == null ? null : Math.round((gross - tax) * 100) / 100 };
 }
 
-/** What the next window could turn of today's holding into money, as a share of
- *  it: an RSU account's liquidity when none is set by hand. */
+/** How near a window has to be for what it may buy to count as liquid: shares a
+ *  window within this many months could sell are as good as money; the rest,
+ *  and all of them while none is that near, are not. */
+export const LIQUID_WITHIN_MONTHS = 3;
+
+/** What a window within reach could turn of the holding into money, as a share
+ *  of it: an RSU account's liquidity when none is set by hand. */
 export function rsuLiquidity(terms: RsuTerms, day: string): number {
   return rsuStatus(terms, day).liquidity;
 }
 
 /** Where an RSU account stands on a day, as the summary gives it: the shares,
- *  and the next window without its tranche-by-tranche lines. */
+ *  the next window without its tranche-by-tranche lines, what counts as liquid,
+ *  and the price. */
 export function rsuStatus(terms: RsuTerms, day: string) {
   const position = rsuPosition(terms, day);
-  const w = rsuWindow(terms, nextWindow(terms.rules, day));
+  const next = rsuWindow(terms, nextWindow(terms.rules, day));
+  // The windows within reach may buy, together, what the last of them may:
+  // whatever goes unsold in one carries into the next one's quota.
+  const reach = windowCutoffs(terms.rules, day, addMonths(day, LIQUID_WITHIN_MONTHS)).at(-1) ?? null;
+  const within = reach === null ? 0 : reach === next.cutoff ? next.remaining : rsuWindow(terms, reach).remaining;
+  // No more than is held that day: a tranche vesting before the cutoff is not held yet.
+  const liquidShares = Math.min(position.held, within);
+  const price = priceOn(terms.rules, day);
   return {
     plan: terms.plan,
     currency: terms.rules.currency,
     position,
     next_window: {
-      cutoff: w.cutoff, projected: w.projected, vested: w.vested, cumulative: w.cumulative,
-      sold_before: w.sold_before, quota: w.quota, sold: w.sold, remaining: w.remaining,
+      cutoff: next.cutoff, projected: next.projected, vested: next.vested, cumulative: next.cumulative,
+      sold_before: next.sold_before, quota: next.quota, sold: next.sold, remaining: next.remaining,
     },
-    liquidity: position.held > 0 ? Math.min(1, w.remaining / position.held) : 0,
+    liquid: { within_months: LIQUID_WITHIN_MONTHS, window: reach, shares: liquidShares },
+    liquidity: position.held > 0 ? liquidShares / position.held : 0,
+    /** The plan's price that day, and the shares held at it, in its currency. */
+    price,
+    value: price ? Math.round(position.held * price.price * 100) / 100 : null,
   };
 }
 export type RsuStatus = ReturnType<typeof rsuStatus>;
