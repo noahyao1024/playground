@@ -1,11 +1,12 @@
 import { CATEGORIES, KINDS, LOAN_DAY_COUNTS, LOAN_METHODS, PREPAYMENT_MODES, REGIONS } from "./finance";
 import { FINANCE_CURRENCIES } from "./fx";
+import { RSU_PLANS } from "./rsu";
 
 /** The actions POST /api/finance takes. The route's switch is what handles them;
  *  a test holds the two to each other. */
 export const FINANCE_ACTIONS = [
   "createAccount", "updateAccount", "deleteAccount", "recordBalances", "deleteBalance", "addLoanRateChange", "deleteLoanRateChange",
-  "addLoanPrepayment", "deleteLoanPrepayment",
+  "addLoanPrepayment", "deleteLoanPrepayment", "addRsuGrant", "updateRsuGrant", "deleteRsuGrant", "addRsuSale", "deleteRsuSale",
 ] as const;
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
@@ -62,6 +63,11 @@ const accountFields = {
     enum: [...LOAN_DAY_COUNTS, null],
     description: "How interest is counted. 30/360: a month's interest is a year's / 12, as Chinese banks count it. actual/365: by the day, a year of 365 -- daily rest, as Singapore banks count a home loan. actual/360: by the day, a year of 360. Null: 30/360. Only with the terms.",
   }),
+  rsu_plan: nullable("string", {
+    enum: [...RSU_PLANS, null],
+    description: "An asset holding RSUs: the plan they follow. tiktok: double-trigger RSUs a private company buys back in windows, each tranche counting once vested by a window's cutoff, at the rate its profile sets for the full years it has been vested; a window buys the floor of the sum, less every share sold in windows before. Set with rsu_rules.",
+  }),
+  rsu_rules: { oneOf: [ref("RsuRules"), { type: "null" }], description: "The plan's numbers, which are the owner's: only with rsu_plan. Every grant's profile must stay in them." },
 };
 
 const flagParameter = (name: string, description: string) => ({
@@ -82,6 +88,7 @@ export function financeOpenApi(origin: string) {
         "**Days.** An account not recorded on a day carries its last balance before it forward. Recording a day again replaces that day's balance for each account sent. An archived account stops counting the day after it was archived, in Singapore (UTC+8), which is also the timezone `as_of` may not be later than today in.",
         "**Family.** Each account may name its `owner`; an asset's `liquidity` says how much of it could be spent now; a liability may carry loan terms, from which the summary works out its repayment schedule.",
         "**Loans.** A loan is scheduled the way a bank's repayment plan (还款计划) has it, to the cent: each month's interest is what is owed times the monthly rate, rounded half up; annuity takes it out of the level payment, equal_principal repays P/n to the cent; the last repayment clears what is left. Where the bank's plan differs, give its stated `loan_payment` and `loan_first_interest`, and `loan_maturity` when the contract ends after the last monthly day. At a stated payment an annuity's balance is carried unrounded, as 建设银行 carries it, and shown to the cent: each repayment's principal is what the shown balance fell by, its interest the rest of the payment. `loan_day_count` counts interest by the day instead. A rate change is kept as history (`addLoanRateChange`): from its first repayment the rate is the new one and the payment the one given, or what repays the balance then owed over the repayments left. A prepayment (`addLoanPrepayment`) comes off what is owed on its day, interest running on what was owed before it up to that day; after it the payment stays and the loan ends sooner, or the end stays and the payment falls. `GET /api/finance/loan-schedule` lists every repayment.",
+        "**RSUs.** An asset with `rsu_plan` holds shares granted in tranches (`addRsuGrant`), sold only as the plan allows. Under tiktok a window buys the floor of Σ(tranche shares × its profile's rate for the full years vested by the window's cutoff), less the shares sold in windows before (`addRsuSale`); a grant not yet signed counts only where asked. `GET /api/finance/rsu` works a window out, tranche by tranche, and prices it; the summary gives each RSU account's position and next window. With `liquidity` null, an RSU account's liquid share is what the next window may still buy of the shares held: record its balance as the held shares at their price.",
         "For where things stand, read `GET /api/finance/summary` rather than recomputing it from `GET /api/finance`.",
       ].join("\n\n"),
     },
@@ -132,13 +139,13 @@ export function financeOpenApi(origin: string) {
             },
           },
           responses: {
-            200: ok("createAccount, updateAccount and the loan actions: the account, with its rate changes and prepayments as they now stand. recordBalances: the balances written and the day their rates are from. deleteAccount and deleteBalance: `{ok: true}`.", {
+            200: ok("createAccount, updateAccount and the loan and RSU actions: the account, with its rate changes, prepayments, RSU grants and sales as they now stand. recordBalances: the balances written and the day their rates are from. deleteAccount and deleteBalance: `{ok: true}`.", {
               oneOf: [ref("Account"), ref("Recorded"), { type: "object", properties: { ok: { const: true } } }],
             }),
             400: error("The request does not make sense: the message says what"),
             401: error("Not the owner"),
-            404: error("updateAccount, addLoanRateChange and addLoanPrepayment: no such account. deleteLoanRateChange and deleteLoanPrepayment: no such one."),
-            409: error("deleteAccount on an account with balances (archive it instead), a new currency for one, or a second rate change or prepayment on the same day for one loan"),
+            404: error("updateAccount, addLoanRateChange, addLoanPrepayment, addRsuGrant and addRsuSale: no such account. The update and delete actions: no such one."),
+            409: error("deleteAccount on an account with balances (archive it instead), a new currency for one, a second rate change or prepayment on the same day for one loan, a grant number used twice, or a second sale in one window"),
             502: error("recordBalances: the day's rates could not be had. Nothing was written; try again."),
           },
         },
@@ -154,6 +161,25 @@ export function financeOpenApi(origin: string) {
             400: error("No id, or not an id"),
             401: error("Not the owner"),
             404: error("No such account, or it has no loan terms"),
+          },
+        },
+      },
+      "/api/finance/rsu": {
+        get: {
+          operationId: "getRsuWindow",
+          summary: "One RSU account's window, worked out and priced",
+          description: "Which tranches count in the window and at what rate, what it may buy, and what that comes to at a price. A grant not yet signed is left out, as the employer's estimate leaves it; with_proposed and outlook_with_proposed give what it would add.",
+          parameters: [
+            { name: "id", in: "query", required: true, schema: uuid, description: "The RSU account." },
+            { name: "window", in: "query", required: false, schema: day, description: "A window's cutoff. Absent: the next one on or after today." },
+            { name: "price", in: "query", required: false, schema: { type: "number", exclusiveMinimum: 0 }, description: "Per share, in the rules' currency, to price what the window may still buy." },
+            { name: "tax_rate", in: "query", required: false, schema: { type: "number", minimum: 0, exclusiveMaximum: 1 }, description: "0.22 for 22%, to give what is left after tax." },
+          ],
+          responses: {
+            200: ok("The window", ref("RsuCalculation")),
+            400: error("No id, a window that is not a cutoff, or a price or tax_rate out of range"),
+            401: error("Not the owner"),
+            404: error("No such account, or it holds no RSUs"),
           },
         },
       },
@@ -197,6 +223,18 @@ export function financeOpenApi(origin: string) {
               items: ref("LoanPrepayment"),
               readOnly: true,
               description: "Its loan's prepayments, oldest first; empty for most accounts. Changed with addLoanPrepayment and deleteLoanPrepayment.",
+            },
+            rsu_grants: {
+              type: "array",
+              items: ref("RsuGrant"),
+              readOnly: true,
+              description: "Its RSU grants, by number; empty for most accounts. Changed with addRsuGrant, updateRsuGrant and deleteRsuGrant.",
+            },
+            rsu_sales: {
+              type: "array",
+              items: ref("RsuSale"),
+              readOnly: true,
+              description: "What has been sold of its RSUs, by window. Changed with addRsuSale and deleteRsuSale.",
             },
             archived_at: nullable("string", { format: "date-time", description: "Set while archived." }),
             created_at: { type: "string", format: "date-time" },
@@ -259,6 +297,168 @@ export function financeOpenApi(origin: string) {
               properties: { payment: { type: "number" }, principal: { type: "number" }, interest: { type: "number" } },
               description: "The repayments added up.",
             },
+          },
+        },
+        RsuRules: {
+          type: "object",
+          required: ["currency", "windows", "profiles"],
+          properties: {
+            currency: { type: "string", enum: [...FINANCE_CURRENCIES], description: "What the share price is quoted in." },
+            windows: {
+              type: "object",
+              required: ["months", "cutoff_day"],
+              properties: {
+                months: { type: "array", items: { type: "integer", minimum: 1, maximum: 12 }, minItems: 1, uniqueItems: true, description: "The months a window falls in." },
+                cutoff_day: { type: "integer", minimum: 1, maximum: 28, description: "Its cutoff's day of the month: a tranche counts once vested on or before it." },
+              },
+            },
+            profiles: {
+              type: "object",
+              additionalProperties: {
+                type: "object",
+                required: ["rates"],
+                properties: {
+                  label: { type: "string", maxLength: 40 },
+                  rates: { type: "array", items: { type: "number", minimum: 0, maximum: 100 }, minItems: 1, maxItems: 10, description: "Percent a window buys of a tranche, by the full years it has been vested: under one, one, two... The last holds beyond; counting on it marks a window projected." },
+                },
+              },
+              description: "By name (lowercase letters, digits, _); each grant follows one.",
+            },
+            verified_through: nullable("string", { format: "date", description: "The last cutoff checked against the employer's own estimate. Later windows are projected." }),
+          },
+        },
+        RsuGrant: {
+          type: "object",
+          required: ["id", "account_id", "grant_no", "profile", "signed", "tranches"],
+          properties: {
+            id: uuid,
+            account_id: uuid,
+            grant_no: { type: "string", maxLength: 40, description: "As the employer numbers it; one per account." },
+            label: nullable("string", { maxLength: 80, description: "What kind of grant." }),
+            profile: { type: "string", description: "Which of the account's rsu_rules profiles it sells by." },
+            granted_on: nullable("string", { format: "date" }),
+            vest_start: nullable("string", { format: "date", description: "The day its vesting is counted from." }),
+            signed: { type: "boolean", description: "False for a grant offered and not yet accepted, which counts only where asked." },
+            tranches: {
+              type: "array",
+              minItems: 1,
+              items: { type: "object", required: ["vests_on", "shares"], properties: { vests_on: day, shares: { type: "integer", minimum: 1 } } },
+              description: "Oldest first, one a day.",
+            },
+            note: nullable("string", { maxLength: 500 }),
+            created_at: { type: "string", format: "date-time" },
+          },
+        },
+        RsuSale: {
+          type: "object",
+          required: ["id", "account_id", "window_cutoff", "shares"],
+          properties: {
+            id: uuid,
+            account_id: uuid,
+            window_cutoff: { ...day, description: "The cutoff of the window it was sold in; one sale a window." },
+            shares: { type: "integer", minimum: 1 },
+            price: nullable("number", { description: "Per share, in the rules' currency." }),
+            tax: nullable("number", { description: "Withheld, in the same currency." }),
+            note: nullable("string", { maxLength: 500 }),
+            created_at: { type: "string", format: "date-time" },
+          },
+        },
+        RsuPosition: {
+          type: "object",
+          description: "Where the shares stand on a day: signed grants only, a proposed one apart.",
+          properties: {
+            as_of: day,
+            granted: { type: "integer" },
+            vested: { type: "integer" },
+            unvested: { type: "integer" },
+            sold: { type: "integer", description: "In windows cut off by as_of." },
+            held: { type: "integer", description: "Vested and not sold." },
+            proposed: { type: "integer", description: "In grants not yet signed." },
+          },
+        },
+        RsuWindow: {
+          type: "object",
+          properties: {
+            cutoff: day,
+            projected: { type: "boolean", description: "Past verified_through, or counting a tranche vested longer than its profile's rates go." },
+            vested: { type: "integer", description: "Shares vested by the cutoff." },
+            cumulative: { type: "integer", description: "The floor of every counted tranche's shares × rate: what this window and all before it could buy." },
+            sold_before: { type: "integer" },
+            quota: { type: "integer", description: "cumulative less sold_before: what the window may buy." },
+            sold: { type: "integer", description: "Already sold in it." },
+            remaining: { type: "integer", description: "What it may still buy." },
+            lines: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  grant_no: { type: "string" },
+                  signed: { type: "boolean" },
+                  vests_on: day,
+                  shares: { type: "integer" },
+                  full_years: { type: "integer", description: "Vested by the cutoff, the anniversary itself counting." },
+                  rate: { type: "number", description: "Percent." },
+                  sellable: { type: "number", description: "shares × rate, before the sum is rounded down." },
+                  extrapolated: { type: "boolean" },
+                },
+              },
+              description: "Every tranche the window counts, oldest first.",
+            },
+          },
+        },
+        RsuOutlook: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              cutoff: day,
+              projected: { type: "boolean" },
+              vested: { type: "integer" },
+              cumulative: { type: "integer" },
+              quota: { type: "integer", description: "cumulative less what was really sold before." },
+              if_sold_in_full: { type: "integer", description: "What it may buy if every window from the first here is sold in full." },
+            },
+          },
+          description: "The windows from today on.",
+        },
+        RsuStatus: {
+          type: "object",
+          description: "An RSU account today: the shares, and the next window without its lines.",
+          properties: {
+            plan: { type: "string", enum: [...RSU_PLANS] },
+            currency: { type: "string" },
+            position: ref("RsuPosition"),
+            next_window: ref("RsuWindow"),
+            liquidity: { type: "number", description: "What the next window may still buy of the shares held, as a share of them: the account's liquidity while none is set by hand." },
+          },
+        },
+        RsuCalculation: {
+          type: "object",
+          properties: {
+            account_id: uuid,
+            plan: { type: "string", enum: [...RSU_PLANS] },
+            currency: { type: "string", description: "The rules' currency, which the prices are in." },
+            position: ref("RsuPosition"),
+            window: ref("RsuWindow"),
+            with_proposed: {
+              oneOf: [{ type: "object", properties: { vested: { type: "integer" }, cumulative: { type: "integer" }, quota: { type: "integer" }, remaining: { type: "integer" } } }, { type: "null" }],
+              description: "The window counting grants not yet signed; null with none.",
+            },
+            proceeds: {
+              oneOf: [{
+                type: "object",
+                properties: {
+                  price: { type: "number" },
+                  tax_rate: nullable("number"),
+                  gross: { type: "number", description: "window.remaining × price, before tax." },
+                  tax: nullable("number"),
+                  net: nullable("number", { description: "After tax; null without tax_rate." }),
+                },
+              }, { type: "null" }],
+              description: "Null without a price.",
+            },
+            outlook: ref("RsuOutlook"),
+            outlook_with_proposed: { oneOf: [ref("RsuOutlook"), { type: "null" }] },
           },
         },
         Balance: {
@@ -325,13 +525,14 @@ export function financeOpenApi(origin: string) {
                   ref("Account"),
                   {
                     type: "object",
-                    required: ["display_name", "is_long_term", "weight", "counted", "latest", "loan"],
+                    required: ["display_name", "is_long_term", "weight", "counted", "latest", "loan", "rsu"],
                     properties: {
                       display_name: { type: "string", description: "Institution and name, as the page shows them: 微信余额, DBS Multiplier." },
                       is_long_term: { type: "boolean", description: "long_term, with the category's default applied." },
                       weight: { type: "number", description: "The share of its balance the filters count: 1, 0, or its liquidity." },
                       counted: { type: "boolean", description: "Whether it is in as_of's totals: open then, recorded by then, and not filtered out." },
                       loan: { oneOf: [ref("LoanStatus"), { type: "null" }], description: "For a liability with loan terms." },
+                      rsu: { oneOf: [ref("RsuStatus"), { type: "null" }], description: "For an asset holding RSUs." },
                       latest: {
                         oneOf: [
                           {
@@ -449,6 +650,63 @@ export function financeOpenApi(origin: string) {
           type: "object",
           required: ["action", "id"],
           properties: { action: { const: "deleteLoanPrepayment" }, id: { ...uuid, description: "The prepayment's." } },
+        },
+        addRsuGrant: {
+          type: "object",
+          required: ["action", "account_id", "grant_no", "profile", "tranches"],
+          properties: {
+            action: { const: "addRsuGrant" },
+            account_id: { ...uuid, description: "An asset with rsu_plan and rsu_rules." },
+            grant_no: { type: "string", maxLength: 40, description: "One per account." },
+            label: nullable("string", { maxLength: 80 }),
+            profile: { type: "string", description: "One of the account's rsu_rules profiles." },
+            granted_on: nullable("string", { format: "date" }),
+            vest_start: nullable("string", { format: "date" }),
+            signed: { type: "boolean", description: "Absent: true. False for a grant offered and not yet accepted." },
+            tranches: { type: "array", minItems: 1, maxItems: 200, items: { type: "object", required: ["vests_on", "shares"], properties: { vests_on: day, shares: { type: "integer", minimum: 1 } } }, description: "In any order; one a day." },
+            note: nullable("string", { maxLength: 500 }),
+          },
+        },
+        updateRsuGrant: {
+          type: "object",
+          required: ["action", "id", "updates"],
+          properties: {
+            action: { const: "updateRsuGrant" },
+            id: { ...uuid, description: "The grant's." },
+            updates: {
+              type: "object",
+              properties: {
+                grant_no: { type: "string" }, label: nullable("string"), profile: { type: "string" }, granted_on: nullable("string", { format: "date" }),
+                vest_start: nullable("string", { format: "date" }), signed: { type: "boolean" }, note: nullable("string"),
+                tranches: { type: "array", items: { type: "object", properties: { vests_on: day, shares: { type: "integer", minimum: 1 } } } },
+              },
+              description: "Only what changes: signed true once a proposed grant is accepted, or tranches corrected.",
+            },
+          },
+        },
+        deleteRsuGrant: {
+          type: "object",
+          required: ["action", "id"],
+          properties: { action: { const: "deleteRsuGrant" }, id: { ...uuid, description: "The grant's." } },
+        },
+        addRsuSale: {
+          type: "object",
+          required: ["action", "account_id", "window_cutoff", "shares"],
+          properties: {
+            action: { const: "addRsuSale" },
+            account_id: { ...uuid, description: "An asset with rsu_plan and rsu_rules." },
+            window_cutoff: { ...day, description: "A window's cutoff, per the rules; one sale a window." },
+            shares: { type: "integer", minimum: 1, description: "No more than held by the cutoff: vested, less sold in windows before. The window's quota is the plan's estimate, not a limit." },
+            price: nullable("number", { exclusiveMinimum: 0, description: "Per share, in the rules' currency." }),
+            tax: nullable("number", { minimum: 0, description: "Withheld, in the same currency." }),
+            note: nullable("string", { maxLength: 500 }),
+          },
+          description: "Later windows' quotas are net of it. To correct a sale, delete it and add it again.",
+        },
+        deleteRsuSale: {
+          type: "object",
+          required: ["action", "id"],
+          properties: { action: { const: "deleteRsuSale" }, id: { ...uuid, description: "The sale's." } },
         },
       },
     },

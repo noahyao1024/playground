@@ -10,16 +10,18 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { NumberInput } from "@/components/ui/number-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import { todayInSG } from "@/lib/dates";
 import {
   CATEGORIES, FIRST_INTEREST_PLACES, ILLIQUID_CATEGORIES, LOAN_DAY_COUNTS, LOAN_DAY_COUNT_LABELS, LOAN_METHODS, LOAN_METHOD_LABELS,
   PREPAYMENT_MODES, PREPAYMENT_MODE_LABELS, REGIONS, REGION_LABELS, addMonths, decimalPlaces, displayName, hasLevelPayment, isCategory,
-  loanSchedule, loanStatus, loanTermsOf,
+  loanSchedule, loanStatus, loanTermsOf, rsuTermsOf,
   type FinanceAccount, type Kind, type LoanDayCount, type LoanMethod, type LoanPeriod, type LoanPrepayment, type LoanRateChange, type LoanTerms,
   type PrepaymentMode, type Region,
 } from "@/lib/finance";
 import { dayLabel, original } from "@/lib/finance-format";
 import { FINANCE_CURRENCIES } from "@/lib/fx";
+import { RSU_PLANS, RSU_PLAN_LABELS, isRsuPlan, rsuLiquidity, rulesFromText, type RsuPlan, type RsuRules } from "@/lib/rsu";
 import { cn } from "@/lib/utils";
 import { financeAction, messageOf } from "./api";
 import { LoanScheduleTable } from "./loan-schedule-table";
@@ -50,12 +52,25 @@ type Form = {
   firstInterest: number;
   maturity: string;
   dayCount: LoanDayCount;
+  /** An asset's RSU plan, and its rules as JSON text. */
+  rsuPlan: RsuPlan | "none";
+  rsuRules: string;
 };
 
 const NO_LOAN = {
   loan_principal: null, loan_rate: null, loan_start: null, loan_term_months: null, loan_method: null,
   loan_payment: null, loan_first_interest: null, loan_maturity: null, loan_day_count: null,
 };
+const NO_RSU = { rsu_plan: null, rsu_rules: null };
+
+/** The shape of a plan's rules, with made-up numbers: the real ones are the
+ *  owner's, from the employer's own pages, and live only in the database. */
+const RULES_EXAMPLE = JSON.stringify({
+  currency: "USD",
+  windows: { months: [3, 9], cutoff_day: 15 },
+  profiles: { standard: { label: "Standard", rates: [25, 50, 75] } },
+  verified_through: null,
+}, null, 2);
 const TERM_YEARS = [10, 15, 20, 25, 30];
 const METHOD_OPTIONS = LOAN_METHODS.map((m) => ({ value: m, label: LOAN_METHOD_LABELS[m] }));
 const METHOD_HINTS: Record<LoanMethod, string> = {
@@ -83,7 +98,7 @@ function formOf(account: FinanceAccount | null): Form {
   if (!account) {
     return {
       kind: "asset", name: "", institution: "", owner: "", region: "SG", currency: "SGD", category: "cash", note: "",
-      liquidity: null, longTerm: null, ...blankLoan,
+      liquidity: null, longTerm: null, ...blankLoan, rsuPlan: "none", rsuRules: "",
     };
   }
   const terms = loanTermsOf(account);
@@ -105,7 +120,18 @@ function formOf(account: FinanceAccount | null): Form {
         dayCount: terms.dayCount ?? "30/360",
       }
       : blankLoan),
+    rsuPlan: isRsuPlan(account.rsu_plan) ? account.rsu_plan : "none",
+    rsuRules: account.rsu_rules ? JSON.stringify(account.rsu_rules, null, 2) : "",
   };
+}
+
+/** What rules say, in a line: when the windows fall, and what they sell by. */
+function describeRules(r: RsuRules): string {
+  const months = r.windows.months.map((m) => new Date(Date.UTC(2000, m - 1, 1)).toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" }));
+  const when = months.length > 1 ? `${months.slice(0, -1).join(", ")} and ${months.at(-1)}` : months[0];
+  const profiles = Object.keys(r.profiles).length;
+  return `Windows in ${when}, cut off on day ${r.windows.cutoff_day} · ${profiles} ${profiles === 1 ? "profile" : "profiles"} · priced in ${r.currency}`
+    + (r.verified_through ? ` · checked through ${dayLabel(r.verified_through)}` : "");
 }
 
 /** What the form's loan terms still lack, or null when they make a loan. */
@@ -211,6 +237,13 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
   const schedule = terms ? loanSchedule(terms).periods : [];
   // Rate changes go onto a loan already saved: the server checks them against its terms.
   const savedLoan = account && loanTermsOf(account) ? account : null;
+  const rsu = form.kind === "asset" && form.rsuPlan !== "none" ? rulesFromText(form.rsuRules) : null;
+  // What the next window may buy of the shares held today: what "liquid"
+  // follows for RSUs until it is set by hand. Needs the grants already saved.
+  const rsuTerms = account && form.rsuPlan !== "none" && rsu && "rules" in rsu
+    ? rsuTermsOf({ ...account, kind: "asset", rsu_plan: form.rsuPlan, rsu_rules: rsu.rules })
+    : null;
+  const windowShare = rsuTerms ? rsuLiquidity(rsuTerms, today) : null;
 
   function eventsSaved(saved: FinanceAccount) {
     setRateChanges(saved.rate_changes ?? []);
@@ -222,6 +255,7 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
     e.preventDefault();
     if (!form.name.trim()) { toast.error("Give the account a name"); return; }
     if (form.kind === "liability" && problem) { toast.error(problem); return; }
+    if (rsu && "problem" in rsu) { toast.error(rsu.problem); return; }
     setSaving(true);
     try {
       const fields: Record<string, unknown> = {
@@ -236,10 +270,14 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
         // Each kind keeps only what applies to it: an asset that used to be a
         // debt sheds its loan terms, a debt its liquidity.
         ...(form.kind === "asset"
-          ? { liquidity: form.liquidity, long_term: null, ...NO_LOAN }
+          ? {
+            liquidity: form.liquidity, long_term: null, ...NO_LOAN,
+            ...(rsu && "rules" in rsu ? { rsu_plan: form.rsuPlan, rsu_rules: rsu.rules } : NO_RSU),
+          }
           : {
             liquidity: null,
             long_term: form.longTerm,
+            ...NO_RSU,
             ...(form.hasLoan
               ? {
                 loan_principal: form.principal, loan_rate: form.rate, loan_start: form.start, loan_term_months: form.months, loan_method: form.method,
@@ -351,40 +389,106 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
       </div>
 
       {form.kind === "asset" ? (
-        <div className="grid gap-2 rounded-lg border px-3 py-2.5">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <Label htmlFor="account-liquid">Liquid</Label>
-              <p className="text-xs text-muted-foreground">Could be spent or sold now. Off for CPF, 公积金, property.</p>
-            </div>
-            <Switch
-              id="account-liquid"
-              checked={liquidShare > 0}
-              onCheckedChange={(on) => set({ liquidity: on ? 1 : 0 })}
-            />
-          </div>
-          {liquidShare > 0 && (
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs text-muted-foreground">
-                Share that is: less than 100 for shares partly under water, counting only what you would sell today.
-              </p>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <NumberInput
-                  aria-label="Liquid share, percent"
-                  value={Math.round(liquidShare * 1000) / 10}
-                  emptyValue={Number.NaN}
-                  step="any"
-                  inputMode="decimal"
-                  className="h-8 w-20 text-right tabular-nums"
-                  // Above 0 only: "0.5" passes through "0" as it is typed, and
-                  // turning it off is the switch's job, not the field's.
-                  onValueChange={(pct) => { if (pct > 0 && pct <= 100) set({ liquidity: pct / 100 }); }}
-                />
-                <span className="text-sm text-muted-foreground">%</span>
+        <>
+          {form.rsuPlan !== "none" && form.liquidity == null ? (
+            <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
+              <div>
+                <Label>Liquid</Label>
+                <p className="text-xs text-muted-foreground">
+                  As the buyback windows allow: what the next one may buy of the shares held
+                  {windowShare != null ? `, ${Math.round(windowShare * 1000) / 10}% today` : ""}. Worked out day by day.
+                </p>
               </div>
+              <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => set({ liquidity: windowShare ?? 0 })}>
+                Set by hand
+              </Button>
+            </div>
+          ) : (
+            <div className="grid gap-2 rounded-lg border px-3 py-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <Label htmlFor="account-liquid">Liquid</Label>
+                  <p className="text-xs text-muted-foreground">Could be spent or sold now. Off for CPF, 公积金, property.</p>
+                </div>
+                <Switch
+                  id="account-liquid"
+                  checked={liquidShare > 0}
+                  onCheckedChange={(on) => set({ liquidity: on ? 1 : 0 })}
+                />
+              </div>
+              {liquidShare > 0 && (
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-xs text-muted-foreground">
+                    Share that is: less than 100 for shares partly under water, counting only what you would sell today.
+                  </p>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <NumberInput
+                      aria-label="Liquid share, percent"
+                      value={Math.round(liquidShare * 1000) / 10}
+                      emptyValue={Number.NaN}
+                      step="any"
+                      inputMode="decimal"
+                      className="h-8 w-20 text-right tabular-nums"
+                      // Above 0 only: "0.5" passes through "0" as it is typed, and
+                      // turning it off is the switch's job, not the field's.
+                      onValueChange={(pct) => { if (pct > 0 && pct <= 100) set({ liquidity: pct / 100 }); }}
+                    />
+                    <span className="text-sm text-muted-foreground">%</span>
+                  </div>
+                </div>
+              )}
+              {form.rsuPlan !== "none" && (
+                <button
+                  type="button"
+                  onClick={() => set({ liquidity: null })}
+                  className="justify-self-start text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                >
+                  Follow the buyback windows instead
+                </button>
+              )}
             </div>
           )}
-        </div>
+
+          {(form.category === "investment" || form.rsuPlan !== "none") && (
+            <div className="grid gap-2 rounded-lg border px-3 py-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <Label>RSUs</Label>
+                  <p className="text-xs text-muted-foreground">Shares granted in tranches, sold in the plan&rsquo;s buyback windows.</p>
+                </div>
+                <Select value={form.rsuPlan} onValueChange={(v) => set({ rsuPlan: v as RsuPlan | "none" })}>
+                  <SelectTrigger aria-label="RSU plan" className="h-9 w-32 shrink-0">
+                    <SelectValue>{(v: string | null) => (isRsuPlan(v) ? RSU_PLAN_LABELS[v] : "None")}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">None</SelectItem>
+                    {RSU_PLANS.map((p) => <SelectItem key={p} value={p}>{RSU_PLAN_LABELS[p]}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              {form.rsuPlan !== "none" ? (
+                <div className="grid gap-1.5">
+                  <Label htmlFor="account-rsu-rules">
+                    Rules <span className="font-normal text-muted-foreground">&mdash; from the plan&rsquo;s own pages, as JSON</span>
+                  </Label>
+                  <Textarea
+                    id="account-rsu-rules" rows={9} spellCheck={false} className="font-mono md:text-xs" placeholder={RULES_EXAMPLE}
+                    aria-invalid={rsu !== null && "problem" in rsu && form.rsuRules.trim() !== ""}
+                    value={form.rsuRules} onChange={(e) => set({ rsuRules: e.target.value })}
+                  />
+                  <p className="text-xs text-muted-foreground" aria-live="polite">
+                    {rsu && "rules" in rsu ? describeRules(rsu.rules) : rsu?.problem}
+                  </p>
+                  {!account?.rsu_grants?.length && (
+                    <p className="text-xs text-muted-foreground">Its grants go on the RSU card, once the account is saved.</p>
+                  )}
+                </div>
+              ) : (account?.rsu_grants?.length ?? 0) > 0 && (
+                <p className="text-xs text-muted-foreground">Its grants stay, counted nowhere, until a plan is set again.</p>
+              )}
+            </div>
+          )}
+        </>
       ) : (
         <>
           <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5">

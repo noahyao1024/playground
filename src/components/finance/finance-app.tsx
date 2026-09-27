@@ -21,6 +21,7 @@ import { LensBar, describeLens } from "./lens-bar";
 import { LoansCard } from "./loans-card";
 import { RecordDialog } from "./record-dialog";
 import { RecordsCard } from "./records-card";
+import { RsuCard } from "./rsu-card";
 import { Segmented } from "./segmented";
 import { TrendChart, type TrendRow, type TrendSeries } from "./trend-chart";
 
@@ -319,6 +320,14 @@ export function FinanceApp() {
           />
 
           <LoansCard accounts={accounts} last={last} today={todayInSG()} />
+
+          <RsuCard
+            accounts={accounts}
+            today={todayInSG()}
+            onSaved={(saved) => patch((d) => ({ ...d, accounts: withAccount(d.accounts, saved) }))}
+            onRecorded={(written) => patch((d) => ({ ...d, balances: withBalances(d.balances, written) }))}
+            onConfirm={setConfirmation}
+          />
 
           {latest && <Breakdown position={latest} unit={unit} />}
 

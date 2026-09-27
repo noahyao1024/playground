@@ -3,6 +3,7 @@ import { NextRequest } from "next/server";
 import { FINANCE_ACTIONS } from "@/lib/finance-openapi";
 import { CATEGORIES, KINDS, LOAN_METHODS, REGIONS } from "@/lib/finance";
 import { FINANCE_CURRENCIES } from "@/lib/fx";
+import { RSU_PLANS } from "@/lib/rsu";
 
 type Spec = {
   openapi: string;
@@ -88,5 +89,6 @@ describe("the OpenAPI description", () => {
     expect(account.currency.enum).toEqual([...FINANCE_CURRENCIES]);
     expect(new Set(account.category.enum)).toEqual(new Set(KINDS.flatMap((k) => Object.keys(CATEGORIES[k]))));
     expect(account.loan_method.enum).toEqual([...LOAN_METHODS, null]);
+    expect(account.rsu_plan.enum).toEqual([...RSU_PLANS, null]);
   });
 });

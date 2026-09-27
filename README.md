@@ -97,6 +97,20 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
   stays and the payment falls (减少月供). **Loans → Repayment plan** lists every
   repayment, to set beside the bank's app. The schedule is the plan; the
   balance recorded for the loan is the truth.
+- An asset may hold **RSUs** under a plan — `tiktok` for now: double-trigger
+  units a private company buys back in windows. Each grant lists its tranches,
+  when each vests and how many shares. A window counts every tranche vested by
+  its cutoff at the rate its grant's profile sets for the full years since it
+  vested, takes the floor of the sum, and less what was sold in the windows
+  before, that is what it may buy. Give a window and the price, and the **RSUs**
+  card shows the shares and what they come to, before and after tax, in the
+  plan's currency, CNY and SGD. The plan's numbers — which months the windows
+  fall in, the cutoff day, the rates — are the owner's, copied from the
+  employer's own pages into the account's rules: they live only in the
+  database, never in this repository. A grant offered and not yet signed
+  counts only where asked. With its liquidity unset, an RSU account counts as
+  liquid what the next window may still buy of the shares held, worked out for
+  each day; its balance is still what is recorded — the shares held at a price.
 
 ## Finance API, for agents
 
@@ -122,10 +136,11 @@ curl -s https://playground.noahyao.me/api/finance/summary \
 | | |
 |---|---|
 | `GET /api/finance/openapi` | OpenAPI 3.1 description of all of this, with the same token. |
-| `GET /api/finance/summary` | Where things stand, worked out: totals, change since the last record, each account's newest balance and loan schedule, history. Takes the page's filters: `?exclude_long_term=1&liquid_only=1&owner=Daisy`. |
-| `GET /api/finance` | Every account and balance, as stored; each account with its loan's `rate_changes` and `prepayments`. |
+| `GET /api/finance/summary` | Where things stand, worked out: totals, change since the last record, each account's newest balance, loan schedule and RSU position, history. Takes the page's filters: `?exclude_long_term=1&liquid_only=1&owner=Daisy`. |
+| `GET /api/finance` | Every account and balance, as stored; each account with its loan's `rate_changes` and `prepayments`, and its `rsu_grants` and `rsu_sales`. |
 | `GET /api/finance/loan-schedule?id=…` | One loan's every repayment to the cent — date, payment, principal, interest, balance — and the totals. |
-| `POST /api/finance` | `{"action": …}`: `createAccount`, `updateAccount`, `deleteAccount`, `recordBalances`, `deleteBalance`, `addLoanRateChange`, `deleteLoanRateChange`, `addLoanPrepayment`, `deleteLoanPrepayment`. |
+| `GET /api/finance/rsu?id=…&window=…&price=…&tax_rate=…` | One RSU account in a window, tranche by tranche: what it may buy, what that comes to at the price, and the windows ahead. |
+| `POST /api/finance` | `{"action": …}`: `createAccount`, `updateAccount`, `deleteAccount`, `recordBalances`, `deleteBalance`, `addLoanRateChange`, `deleteLoanRateChange`, `addLoanPrepayment`, `deleteLoanPrepayment`, `addRsuGrant`, `updateRsuGrant`, `deleteRsuGrant`, `addRsuSale`, `deleteRsuSale`. |
 
 To revoke it, replace the value and redeploy; the old one stops working with
 that deployment.

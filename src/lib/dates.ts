@@ -26,3 +26,8 @@ export function dayInSG(at: Date | string): string {
 export function monthInSG(): string {
   return todayInSG().slice(0, 7);
 }
+
+/** A real calendar day, YYYY-MM-DD: 2026-02-30 has the shape and is not one. */
+export function isRealDay(day: unknown): day is string {
+  return typeof day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(day) && new Date(`${day}T00:00:00Z`).toISOString().startsWith(day);
+}
