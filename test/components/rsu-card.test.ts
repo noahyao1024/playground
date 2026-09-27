@@ -58,6 +58,26 @@ describe("the RSU card", () => {
     expect(render([account({ archived_at: "2026-01-01T00:00:00Z" })])).toBe("");
   });
 
+  it("prices the window at the plan's price, and says whose price it is", () => {
+    const prices = [{ effective_date: "2025-09-01", price: 100 }, { effective_date: "2026-03-01", price: 110.5 }];
+    const shown = text(render([account({ rsu_rules: { ...rules, prices } })]));
+    expect(shown).toContain("100.00 USD a share since 1 Sep 2025");
+    // March's window, still to come, at the latest price: 76 × 110.50.
+    expect(shown).toContain("76 × 110.50 USD · the latest price, from 1 Mar 2026");
+    expect(shown).toContain("Before tax 8,398.00 USD");
+    expect(shown).toContain("Prices (2)");
+  });
+
+  it("says what counts as liquid: what a window within three months may buy, or nothing", () => {
+    const shown = (today: string) => text(render([account({ currency: "USD", rsu_rules: { ...rules, prices: [{ effective_date: "2025-09-01", price: 100 }] } })], today));
+    // 31 December: March's window is within reach, and may buy 76 of the 142 held.
+    expect(shown("2025-12-31")).toContain(
+      "The 142 shares held come to 14,200.00 USD at today’s price. Counted liquid: 53.5%, what the Mar 2026 window, within 3 months, may still buy of them.",
+    );
+    // 1 October: the next window is March's, five and a half months off.
+    expect(shown("2025-10-01")).toContain("Counted liquid: none, as no window falls within 3 months; the next is Mar 2026.");
+  });
+
   it("asks for a grant when there is none yet", () => {
     expect(text(render([account({ rsu_grants: [] })]))).toContain("No grants yet");
   });

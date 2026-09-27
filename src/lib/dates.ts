@@ -27,6 +27,20 @@ export function monthInSG(): string {
   return todayInSG().slice(0, 7);
 }
 
+/** Days in a month, `month` counted from 1. */
+const daysIn = (year: number, month: number) => new Date(Date.UTC(year, month, 0)).getUTCDate();
+
+/** `day` moved on by `months`, to the same day of the month -- or the month's
+ *  last day when it is shorter: 31 January plus a month is 28 February. */
+export function addMonths(day: string, months: number): string {
+  const [y, m, d] = day.split("-").map(Number);
+  const total = y * 12 + (m - 1) + months;
+  const year = Math.floor(total / 12);
+  const month = total - year * 12 + 1;
+  const date = Math.min(d, daysIn(year, month));
+  return `${year}-${String(month).padStart(2, "0")}-${String(date).padStart(2, "0")}`;
+}
+
 /** A real calendar day, YYYY-MM-DD: 2026-02-30 has the shape and is not one. */
 export function isRealDay(day: unknown): day is string {
   return typeof day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(day) && new Date(`${day}T00:00:00Z`).toISOString().startsWith(day);

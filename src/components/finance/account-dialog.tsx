@@ -21,7 +21,7 @@ import {
 } from "@/lib/finance";
 import { dayLabel, original } from "@/lib/finance-format";
 import { FINANCE_CURRENCIES } from "@/lib/fx";
-import { RSU_PLANS, RSU_PLAN_LABELS, isRsuPlan, rsuLiquidity, rulesFromText, type RsuPlan, type RsuRules } from "@/lib/rsu";
+import { LIQUID_WITHIN_MONTHS, RSU_PLANS, RSU_PLAN_LABELS, isRsuPlan, rsuLiquidity, rulesFromText, type RsuPlan, type RsuRules } from "@/lib/rsu";
 import { cn } from "@/lib/utils";
 import { financeAction, messageOf } from "./api";
 import { LoanScheduleTable } from "./loan-schedule-table";
@@ -70,6 +70,7 @@ const RULES_EXAMPLE = JSON.stringify({
   windows: { months: [3, 9], cutoff_day: 15 },
   profiles: { standard: { label: "Standard", rates: [25, 50, 75] } },
   verified_through: null,
+  prices: [{ effective_date: "2026-03-01", price: 100 }],
 }, null, 2);
 const TERM_YEARS = [10, 15, 20, 25, 30];
 const METHOD_OPTIONS = LOAN_METHODS.map((m) => ({ value: m, label: LOAN_METHOD_LABELS[m] }));
@@ -130,7 +131,9 @@ function describeRules(r: RsuRules): string {
   const months = r.windows.months.map((m) => new Date(Date.UTC(2000, m - 1, 1)).toLocaleDateString("en-GB", { month: "short", timeZone: "UTC" }));
   const when = months.length > 1 ? `${months.slice(0, -1).join(", ")} and ${months.at(-1)}` : months[0];
   const profiles = Object.keys(r.profiles).length;
+  const latest = r.prices?.at(-1);
   return `Windows in ${when}, cut off on day ${r.windows.cutoff_day} · ${profiles} ${profiles === 1 ? "profile" : "profiles"} · priced in ${r.currency}`
+    + (latest ? `, ${original(latest.price, r.currency, { code: false })} since ${dayLabel(latest.effective_date)}` : "")
     + (r.verified_through ? ` · checked through ${dayLabel(r.verified_through)}` : "");
 }
 
@@ -395,8 +398,8 @@ function AccountForm({ account, hasBalances, owners, nameRef, onClose, onSaved }
               <div>
                 <Label>Liquid</Label>
                 <p className="text-xs text-muted-foreground">
-                  As the buyback windows allow: what the next one may buy of the shares held
-                  {windowShare != null ? `, ${Math.round(windowShare * 1000) / 10}% today` : ""}. Worked out day by day.
+                  As the buyback windows allow: what a window within {LIQUID_WITHIN_MONTHS} months may buy of the shares held, and none
+                  while no window is that near{windowShare != null ? ` \u2014 ${Math.round(windowShare * 1000) / 10}% today` : ""}. Worked out day by day.
                 </p>
               </div>
               <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => set({ liquidity: windowShare ?? 0 })}>

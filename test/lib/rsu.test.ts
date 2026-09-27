@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  fullYears, nextWindow, parseRsuRules, parseTranches, rsuLiquidity, rsuOutlook, rsuPosition, rsuProceeds, rsuWindow,
+  fullYears, nextWindow, parseRsuRules, parseTranches, priceOn, rsuLiquidity, rsuOutlook, rsuPosition, rsuProceeds, rsuStatus, rsuWindow,
   rulesFromText, tranchesFromText, windowCutoffs, type RsuGrant, type RsuRules, type RsuSale,
 } from "@/lib/rsu";
 
@@ -126,10 +126,38 @@ describe("where the shares stand", () => {
     expect(rsuPosition({ grants, sales: [sale("2026-03-15", 5)] }, "2026-03-14").sold).toBe(0);
   });
 
-  it("makes the next window's remaining quota a share of what is held today", () => {
-    // Held on 2025-12-31: 142. The March window may buy 76.
-    expect(rsuLiquidity({ plan: "tiktok", rules, grants, sales: [] }, "2025-12-31")).toBeCloseTo(76 / 142, 12);
-    expect(rsuLiquidity({ plan: "tiktok", rules, grants: [], sales: [] }, "2025-12-31")).toBe(0);
+  it("counts as liquid what a window within three months may buy, as a share of what is held", () => {
+    const terms = { plan: "tiktok" as const, rules, grants, sales: [] };
+    // Held on 2025-12-31: 142. The March window, 2.5 months off, may buy 76.
+    expect(rsuLiquidity(terms, "2025-12-31")).toBeCloseTo(76 / 142, 12);
+    expect(rsuStatus(terms, "2025-12-31").liquid).toEqual({ within_months: 3, window: "2026-03-15", shares: 76 });
+    // Three months to the day is within reach; a day more is not, and nothing is liquid.
+    expect(rsuLiquidity(terms, "2025-12-15")).toBeCloseTo(76 / 142, 12);
+    expect(rsuLiquidity(terms, "2025-12-14")).toBe(0);
+    expect(rsuStatus(terms, "2025-12-14").liquid).toEqual({ within_months: 3, window: null, shares: 0 });
+    // Just past a cutoff, the next window is six months off.
+    expect(rsuLiquidity(terms, "2025-09-16")).toBe(0);
+    expect(rsuLiquidity({ ...terms, grants: [] }, "2025-12-31")).toBe(0);
+  });
+
+  it("counts two windows within reach together: what goes unsold in the first carries into the second", () => {
+    const close = { ...rules, windows: { months: [3, 4], cutoff_day: 15 } };
+    const terms = { plan: "tiktok" as const, rules: close, grants: [...grants, grant("G6", "full", [["2026-04-01", 10]])], sales: [] };
+    // 15 March may buy 76; by 15 April 10 more have vested at 100%: 86.8 -> 86.
+    // Held on 1 February: 142, and 86 of them could be sold by mid-April.
+    const status = rsuStatus(terms, "2026-02-01");
+    expect(status.next_window).toMatchObject({ cutoff: "2026-03-15", remaining: 76 });
+    expect(status.liquid).toEqual({ within_months: 3, window: "2026-04-15", shares: 86 });
+    expect(status.liquidity).toBeCloseTo(86 / 142, 12);
+  });
+
+  it("gives no more as liquid than is held that day", () => {
+    // Everything at 100%, and a tranche that vests the day before the cutoff:
+    // the window may buy 22, but on 1 March only 12 are held.
+    const all = { ...rules, profiles: { full: { rates: [100] } } };
+    const terms = { plan: "tiktok" as const, rules: all, grants: [grant("A", "full", [["2025-05-20", 12], ["2026-03-14", 10]])], sales: [] };
+    expect(rsuStatus(terms, "2026-03-01").liquid).toEqual({ within_months: 3, window: "2026-03-15", shares: 12 });
+    expect(rsuLiquidity(terms, "2026-03-01")).toBe(1);
   });
 
   it("prices a sale to the cent, before tax and after it when a rate is given", () => {
@@ -142,7 +170,7 @@ describe("where the shares stand", () => {
 describe("reading what is stored", () => {
   it("checks the rules and puts them in order", () => {
     const parsed = parseRsuRules({ ...rules, windows: { months: [9, 3], cutoff_day: 15 }, verified_through: undefined });
-    expect(parsed).toEqual({ rules: { ...rules, windows: { months: [3, 9], cutoff_day: 15 }, verified_through: null } });
+    expect(parsed).toEqual({ rules: { ...rules, windows: { months: [3, 9], cutoff_day: 15 }, verified_through: null, prices: [] } });
   });
 
   it("says what is wrong with rules that will not do", () => {
@@ -158,6 +186,12 @@ describe("reading what is stored", () => {
       [{ ...rules, profiles: { p: { rates: [120] } } }, /rates/],
       [{ ...rules, profiles: { p: { rates: [50.123] } } }, /two decimal places/],
       [{ ...rules, verified_through: "2027-02-30" }, /verified_through/],
+      [{ ...rules, prices: {} }, /prices must list/],
+      [{ ...rules, prices: [{ effective_date: "2026-02-30", price: 1 }] }, /each of rsu_rules.prices/],
+      [{ ...rules, prices: [{ effective_date: "2026-03-01", price: 0 }] }, /each of rsu_rules.prices/],
+      [{ ...rules, prices: [{ effective_date: "2026-03-01", price: "12abc" }] }, /each of rsu_rules.prices/],
+      [{ ...rules, prices: [{ effective_date: "2026-03-01", price: "1e3" }] }, /each of rsu_rules.prices/],
+      [{ ...rules, prices: [{ effective_date: "2026-03-01", price: 1 }, { effective_date: "2026-03-01", price: 2 }] }, /one price a day/],
     ];
     for (const [value, message] of bad) {
       const parsed = parseRsuRules(value);
@@ -165,8 +199,27 @@ describe("reading what is stored", () => {
     }
   });
 
+  it("keeps a price trend in order, its prices numbers however they were written", () => {
+    const parsed = parseRsuRules({ ...rules, prices: [{ effective_date: "2026-03-01", price: "110.50" }, { effective_date: "2025-09-01", price: 100 }] });
+    expect("rules" in parsed && parsed.rules.prices).toEqual([{ effective_date: "2025-09-01", price: 100 }, { effective_date: "2026-03-01", price: 110.5 }]);
+  });
+
+  it("prices a day at the price in effect by then", () => {
+    const priced = { prices: [{ effective_date: "2025-09-01", price: 100 }, { effective_date: "2026-03-01", price: 110.5 }] };
+    expect(priceOn(priced, "2025-08-31")).toBeNull();
+    expect(priceOn(priced, "2025-09-01")).toEqual({ effective_date: "2025-09-01", price: 100 });
+    expect(priceOn(priced, "2026-02-28")?.price).toBe(100);
+    expect(priceOn(priced, "2026-03-01")?.price).toBe(110.5);
+    expect(priceOn(priced, "2030-01-01")?.price).toBe(110.5);
+    expect(priceOn({}, "2026-03-01")).toBeNull();
+    // The summary's status: today's price, and what is held at it.
+    const status = rsuStatus({ plan: "tiktok", rules: { ...rules, ...priced }, grants, sales: [] }, "2025-12-31");
+    expect(status).toMatchObject({ price: { effective_date: "2025-09-01", price: 100 }, value: 14_200 });
+    expect(rsuStatus({ plan: "tiktok", rules, grants, sales: [] }, "2025-12-31")).toMatchObject({ price: null, value: null });
+  });
+
   it("reads rules typed as JSON, and says why when they will not do", () => {
-    expect(rulesFromText(JSON.stringify(rules, null, 2))).toEqual({ rules });
+    expect(rulesFromText(JSON.stringify(rules, null, 2))).toEqual({ rules: { ...rules, prices: [] } });
     expect(rulesFromText("  \n")).toEqual({ problem: "Paste the plan's rules, as JSON" });
     expect(rulesFromText("{currency: USD}")).toEqual({ problem: "The rules are not JSON: check the brackets, quotes and commas" });
     expect(rulesFromText(JSON.stringify({ ...rules, profiles: {} }))).toEqual({ problem: "rsu_rules.profiles must name at least one profile" });

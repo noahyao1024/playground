@@ -81,7 +81,7 @@ describe("an RSU account", () => {
     const valid = { name: "Equity 2", region: "SG", currency: "SGD", kind: "asset", category: "investment" };
     const { status, body } = await post({ action: "createAccount", account: { ...valid, rsu_plan: "tiktok", rsu_rules: rules } });
     expect(status).toBe(200);
-    expect(body).toMatchObject({ rsu_plan: "tiktok", rsu_rules: rules, rsu_grants: [], rsu_sales: [] });
+    expect(body).toMatchObject({ rsu_plan: "tiktok", rsu_rules: { ...rules, prices: [] }, rsu_grants: [], rsu_sales: [] });
 
     const bad: Array<[Row, RegExp]> = [
       [{ ...valid, kind: "liability", category: "loan", rsu_plan: "tiktok" }, /Only an asset holds RSUs/],
@@ -208,12 +208,44 @@ describe("GET /api/finance/rsu", () => {
     expect(body.window.lines).toHaveLength(4);
     // The unsigned grant's 20 at 40% add 8.
     expect(body.with_proposed).toEqual({ vested: 169, cumulative: 84, quota: 84, remaining: 84 });
-    expect(body.proceeds).toEqual({ price: 150, tax_rate: 0.2, gross: 11400, tax: 2280, net: 9120 });
+    expect(body.proceeds).toEqual({ price: 150, price_effective_date: null, tax_rate: 0.2, gross: 11400, tax: 2280, net: 9120 });
     // March 2027: 100 × 60% + 12 + 30 × 50% + 7 × 50% = 90.5; March 2028: 60 + 12 + 18 + 4.2 = 94.2.
     expect(body.outlook.map((w: Row) => [w.cutoff, w.if_sold_in_full])).toEqual([
       ["2026-03-15", 76], ["2026-09-15", 0], ["2027-03-15", 14], ["2027-09-15", 0], ["2028-03-15", 4], ["2028-09-15", 0], ["2029-03-15", 0], ["2029-09-15", 0],
     ]);
     expect(body.outlook_with_proposed[0].if_sold_in_full).toBe(84);
+  });
+
+  it("prices a window at the plan's price in effect by its cutoff, unless one is given", async () => {
+    on("2025-12-31");
+    const prices = [{ effective_date: "2025-09-01", price: 100 }, { effective_date: "2026-03-01", price: 110.5 }];
+    await standIn({}, { finance_accounts: [account(EQUITY, { name: "Equity", rsu_plan: "tiktok", rsu_rules: { ...rules, prices } })] });
+    const plan = (await rsu(`?id=${EQUITY}`)).body;
+    // March's window at the price from 1 March: 76 × 110.50.
+    expect(plan.proceeds).toEqual({ price: 110.5, price_effective_date: "2026-03-01", tax_rate: null, gross: 8398, tax: null, net: null });
+    expect(plan.outlook.map((w: Row) => w.price)).toEqual(Array(8).fill(110.5));
+    // September's, at the one before.
+    expect((await rsu(`?id=${EQUITY}&window=2025-09-15`)).body.proceeds).toMatchObject({ price: 100, price_effective_date: "2025-09-01", gross: 5200 });
+    const given = (await rsu(`?id=${EQUITY}&price=150`)).body;
+    expect(given.proceeds).toMatchObject({ price: 150, price_effective_date: null, gross: 11_400 });
+    expect(given.outlook[0].price).toBe(150);
+
+    const summary = await (await SUMMARY(request("/api/finance/summary"))).json();
+    expect(summary.accounts.find((a: Row) => a.id === EQUITY).rsu).toMatchObject({
+      price: { effective_date: "2025-09-01", price: 100 },
+      value: 14_200,
+      liquid: { within_months: 3, window: "2026-03-15", shares: 76 },
+    });
+  });
+
+  it("keeps a price trend given as the plan writes it, prices as numbers, in order", async () => {
+    const prices = [{ effective_date: "2026-03-01", price: "110.50" }, { effective_date: "2025-09-01", price: "100.00" }];
+    const { status, body } = await post({ action: "updateAccount", id: EQUITY, updates: { rsu_rules: { ...rules, prices } } });
+    expect(status).toBe(200);
+    expect(body.rsu_rules.prices).toEqual([{ effective_date: "2025-09-01", price: 100 }, { effective_date: "2026-03-01", price: 110.5 }]);
+    const bad = await post({ action: "updateAccount", id: EQUITY, updates: { rsu_rules: { ...rules, prices: [{ effective_date: "2026-03-01", price: "n/a" }] } } });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error).toMatch(/rsu_rules.prices/);
   });
 
   it("works a window it is asked for, and leaves the price out when none is given", async () => {
@@ -253,16 +285,19 @@ describe("the summary and the page's read", () => {
     expect(summary.accounts.find((a: Row) => a.id === CASH).rsu).toBeNull();
   });
 
-  it("counts each day of the history as liquid as that day's next window allowed", async () => {
+  it("counts each day of the history as liquid as the windows within three months of it allowed", async () => {
     on("2025-12-31");
     const balance = (id: string, as_of: string, amount: number): Row => ({
       id, account_id: EQUITY, as_of, currency: "SGD", amount, cny_rate: 5.3, sgd_rate: 1, rate_date: as_of,
     });
-    await standIn({}, { finance_balances: [balance("b0", "2025-09-01", 11_200), balance("b1", "2025-12-31", 28_400)] });
+    await standIn({}, {
+      finance_balances: [balance("b0", "2025-09-01", 11_200), balance("b1", "2025-10-01", 12_000), balance("b2", "2025-12-31", 28_400)],
+    });
     const summary = await (await SUMMARY(request("/api/finance/summary?liquid_only=1"))).json();
-    // 1 September: 112 held, of which September's window may buy 52. 31 December:
+    // 1 September: 112 held, of which September's window may buy 52. 1 October:
+    // the next window is March's, five and a half months off: none. 31 December:
     // 142 held, of which March's may buy 76.
-    expect(summary.history.map((p: Row) => [p.day, (p.assets as Row).sgd])).toEqual([["2025-09-01", 5_200], ["2025-12-31", 15_200]]);
+    expect(summary.history.map((p: Row) => [p.day, (p.assets as Row).sgd])).toEqual([["2025-09-01", 5_200], ["2025-10-01", 0], ["2025-12-31", 15_200]]);
   });
 
   it("reads no RSUs before their tables exist", async () => {

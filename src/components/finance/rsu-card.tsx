@@ -8,18 +8,21 @@ import { Label } from "@/components/ui/label";
 import { NumberInput } from "@/components/ui/number-input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { liquidityOf, sortAccounts, type FinanceAccount, type FinanceBalance } from "@/lib/finance";
-import { dayLabel, original } from "@/lib/finance-format";
+import { Input } from "@/components/ui/input";
+import { addMonths } from "@/lib/dates";
+import { sortAccounts, type FinanceAccount, type FinanceBalance } from "@/lib/finance";
+import { dayLabel, original, percent } from "@/lib/finance-format";
 import { ratesOn, type DayRates } from "@/lib/fx";
 import {
-  RSU_PLAN_LABELS, isRsuPlan, nextWindow, parseRsuRules, rsuOutlook, rsuPosition, rsuProceeds, rsuWindow, windowCutoffs,
-  type RsuGrant, type RsuRules, type RsuSale,
+  LIQUID_WITHIN_MONTHS, RSU_PLAN_LABELS, isRsuPlan, nextWindow, parseRsuRules, priceOn, rsuOutlook, rsuProceeds, rsuStatus, rsuWindow,
+  windowCutoffs, type RsuGrant, type RsuPlan, type RsuPrice, type RsuRules, type RsuSale,
 } from "@/lib/rsu";
 import { cn } from "@/lib/utils";
 import { AccountName } from "./account-name";
 import { financeAction, messageOf } from "./api";
 import type { Confirmation } from "./confirm-dialog";
 import { RsuGrantDialog } from "./rsu-grant-dialog";
+import { RsuPriceChart } from "./rsu-price-chart";
 
 /** How far the outlook looks. */
 const OUTLOOK = 8;
@@ -30,17 +33,18 @@ const windowLabel = (cutoff: string) => new Date(`${cutoff}T00:00:00Z`).toLocale
 /** A share of the holding, as the accounts list gives one: 45.8%. */
 const share = (ratio: number) => `${Math.round(ratio * 1000) / 10}%`;
 
-/** The price and tax rate last used for an account, remembered on this device. */
-function remembered(id: string): { price: number; tax: number } {
+/** The tax rate last used for an account, remembered on this device. A price
+ *  typed over the plan's is a what-if, and is not. */
+function rememberedTax(id: string): number {
   try {
     const saved = JSON.parse(window.localStorage.getItem(`finance.rsu.${id}`) ?? "{}");
-    return { price: Number(saved.price) || Number.NaN, tax: Number.isFinite(saved.tax) ? saved.tax : Number.NaN };
+    return Number.isFinite(saved.tax) ? saved.tax : Number.NaN;
   } catch {
-    return { price: Number.NaN, tax: Number.NaN };
+    return Number.NaN;
   }
 }
-function remember(id: string, value: { price: number; tax: number }) {
-  try { window.localStorage.setItem(`finance.rsu.${id}`, JSON.stringify(value)); } catch { /* private mode: not remembered */ }
+function rememberTax(id: string, tax: number) {
+  try { window.localStorage.setItem(`finance.rsu.${id}`, JSON.stringify({ tax })); } catch { /* private mode: not remembered */ }
 }
 
 /** RSUs, account by account: where the shares stand, and what a window would
@@ -63,7 +67,7 @@ export function RsuCard({ accounts, today, onSaved, onRecorded, onConfirm }: {
     <section className="rounded-2xl bg-card p-5 ring-1 ring-foreground/10 sm:p-6">
       <h2 className="text-base font-medium">RSUs</h2>
       <p className="mt-0.5 text-xs text-muted-foreground">
-        What a buyback window would turn into money: pick the window, give the price.
+        What a buyback window would turn into money: pick the window; the price is the plan&rsquo;s, unless you give one.
       </p>
       <div className="mt-1 divide-y divide-border/60">
         {holdings.map(({ account, rules }) => (
@@ -97,9 +101,13 @@ function Holding({ account, rules, today, onSaved, onRecorded, onConfirm }: {
   const [chosen, setChosen] = useState(() => nextWindow(rules, today));
   const cutoff = windows.includes(chosen) ? chosen : nextWindow(rules, today);
 
-  const [{ price, tax }, setInputs] = useState(() => remembered(account.id));
-  const setPrice = (p: number) => { setInputs((v) => ({ ...v, price: p })); remember(account.id, { price: p, tax }); };
-  const setTax = (t: number) => { setInputs((v) => ({ ...v, tax: t })); remember(account.id, { price, tax: t }); };
+  // A price typed over the plan's, for a what-if; NaN uses the plan's.
+  const [typed, setTyped] = useState(Number.NaN);
+  const [tax, setTaxState] = useState(() => rememberedTax(account.id));
+  const setTax = (t: number) => { setTaxState(t); rememberTax(account.id, t); };
+  const given = typed > 0;
+  /** The price a window sells at: the one typed, or the plan's in effect by its cutoff. */
+  const priceAt = (day: string) => (given ? typed : priceOn(rules, day)?.price ?? Number.NaN);
 
   const [fx, setFx] = useState<DayRates | null>(null);
   useEffect(() => {
@@ -110,14 +118,22 @@ function Holding({ account, rules, today, onSaved, onRecorded, onConfirm }: {
     return () => { alive = false; };
   }, [today, rules.currency, account.currency]);
 
-  const position = rsuPosition(terms, today);
+  const status = rsuStatus({ plan: account.rsu_plan as RsuPlan, ...terms }, today);
+  const position = status.position;
   const w = rsuWindow(terms, cutoff, { includeProposed: counted });
   const outlook = rsuOutlook(terms, today, OUTLOOK, { includeProposed: counted });
+  const windowPrice = priceOn(rules, cutoff);
+  const price = priceAt(cutoff);
   const priced = price > 0;
   const proceeds = priced ? rsuProceeds(w.remaining, price, Number.isFinite(tax) ? tax / 100 : null) : null;
   // One unit of the plan's currency in the account's: to value the holding as the account keeps it.
   const toAccount = rules.currency === account.currency ? 1 : fx ? fx.rates[rules.currency].cny / fx.rates[account.currency].cny : null;
-  const heldValue = priced && toAccount !== null ? Math.round(position.held * price * toAccount * 100) / 100 : null;
+  // Today's value of what is held: at the price typed, or the plan's today.
+  const priceToday = priceAt(today);
+  const heldValue = priceToday > 0 && toAccount !== null ? Math.round(position.held * priceToday * toAccount * 100) / 100 : null;
+  const latest = status.price;
+  const yearAgo = priceOn(rules, addMonths(today, -12));
+  const lastWindowPrice = rules.prices?.at(-1);
   const [showLines, setShowLines] = useState(false);
   const [grantOpen, setGrantOpen] = useState<RsuGrant | "new" | null>(null);
 
@@ -155,6 +171,12 @@ function Holding({ account, rules, today, onSaved, onRecorded, onConfirm }: {
         <span>{position.unvested} still to vest</span>
         {position.sold > 0 && <span>{position.sold} sold</span>}
         {position.proposed > 0 && <span>{position.proposed} in a grant not yet signed</span>}
+        {latest && (
+          <span>
+            {original(latest.price, rules.currency)} a share since {dayLabel(latest.effective_date)}
+            {yearAgo && yearAgo !== latest && `, ${percent(latest.price / yearAgo.price - 1)} on a year before`}
+          </span>
+        )}
       </p>
 
       {grants.length === 0 ? (
@@ -179,7 +201,10 @@ function Holding({ account, rules, today, onSaved, onRecorded, onConfirm }: {
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor={`rsu-price-${account.id}`} className="text-xs">Price, {rules.currency}</Label>
-              <NumberInput id={`rsu-price-${account.id}`} value={price} emptyValue={Number.NaN} step="any" inputMode="decimal" className="h-9 text-right tabular-nums" onValueChange={setPrice} />
+              <NumberInput
+                id={`rsu-price-${account.id}`} value={typed} emptyValue={Number.NaN} step="any" inputMode="decimal" className="h-9 text-right tabular-nums"
+                placeholder={windowPrice ? original(windowPrice.price, rules.currency, { code: false }) : "Price"} onValueChange={setTyped}
+              />
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor={`rsu-tax-${account.id}`} className="text-xs">Tax, % <span className="font-normal text-muted-foreground">(optional)</span></Label>
@@ -202,7 +227,12 @@ function Holding({ account, rules, today, onSaved, onRecorded, onConfirm }: {
           {proceeds && (
             <div className="mt-3 rounded-lg bg-muted/60 px-3 py-2.5">
               <p className="text-xs text-muted-foreground">
-                {w.remaining} × {original(price, rules.currency, { code: false })} {rules.currency}
+                {w.remaining} × {original(price, rules.currency)}
+                {given
+                  ? " · the price given"
+                  : windowPrice && (windowPrice === lastWindowPrice && cutoff > today
+                    ? ` · the latest price, from ${dayLabel(windowPrice.effective_date)}`
+                    : ` · the price from ${dayLabel(windowPrice.effective_date)}`)}
                 {w.projected && <span> · a projection: past what the rules were checked against</span>}
               </p>
               <dl className="mt-1.5 grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
@@ -218,7 +248,10 @@ function Holding({ account, rules, today, onSaved, onRecorded, onConfirm }: {
 
           <div className="mt-4">
             <p className="text-sm font-medium">Window by window</p>
-            <p className="text-xs text-muted-foreground">If every window from the next is sold in full{priced ? `, at ${original(price, rules.currency)}` : ""}.</p>
+            <p className="text-xs text-muted-foreground">
+              If every window from the next is sold in full
+              {given ? `, at ${original(typed, rules.currency)}` : lastWindowPrice ? `, each at the price by its cutoff: the latest, ${original(lastWindowPrice.price, rules.currency)}, for one still to come` : ""}.
+            </p>
             <div className="@container mt-1.5 overflow-x-auto">
               <table className="w-full text-sm tabular-nums">
                 <thead className="text-xs text-muted-foreground">
@@ -226,7 +259,7 @@ function Holding({ account, rules, today, onSaved, onRecorded, onConfirm }: {
                     <th className="py-1.5 pr-2 text-left font-normal">Window</th>
                     <th className="px-2 text-right font-normal">Sellable, all</th>
                     <th className="px-2 text-right font-normal">This one</th>
-                    {priced && <th className="pl-2 text-right font-normal">Before tax</th>}
+                    {(given || lastWindowPrice) && <th className="pl-2 text-right font-normal">Before tax</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -235,7 +268,9 @@ function Holding({ account, rules, today, onSaved, onRecorded, onConfirm }: {
                       <td className="py-1.5 pr-2">{windowLabel(o.cutoff)}{o.projected && <span title="Past what the rules were checked against"> *</span>}</td>
                       <td className="px-2 text-right">{o.cumulative}</td>
                       <td className="px-2 text-right font-medium">{o.if_sold_in_full}</td>
-                      {priced && <td className="pl-2 text-right">{original(o.if_sold_in_full * price, rules.currency, { whole: true, code: false })}</td>}
+                      {(given || lastWindowPrice) && (
+                        <td className="pl-2 text-right">{priceAt(o.cutoff) > 0 ? original(o.if_sold_in_full * priceAt(o.cutoff), rules.currency, { whole: true, code: false }) : "–"}</td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -247,10 +282,12 @@ function Holding({ account, rules, today, onSaved, onRecorded, onConfirm }: {
           {heldValue !== null && (
             <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>
-                The {position.held} shares held come to {original(heldValue, account.currency)} at this price.
-                {account.liquidity == null
-                  ? ` Counted liquid: what the next window may still buy of them, ${share(liquidityOf(account, today))}.`
-                  : ` Counted liquid: ${share(liquidityOf(account, today))}, as set on the account.`}
+                The {position.held} shares held come to {original(heldValue, account.currency)} at {given ? "the price given" : "today\u2019s price"}.{" "}
+                {account.liquidity != null
+                  ? `Counted liquid: ${share(Number(account.liquidity))}, as set on the account.`
+                  : status.liquid.window
+                    ? `Counted liquid: ${share(status.liquidity)}, what the ${windowLabel(status.liquid.window)} window, within ${LIQUID_WITHIN_MONTHS} months, may still buy of them.`
+                    : `Counted liquid: none, as no window falls within ${LIQUID_WITHIN_MONTHS} months; the next is ${windowLabel(status.next_window.cutoff)}.`}
               </span>
               <Button variant="outline" size="sm" onClick={recordValue}><PenLine /> Record as today&rsquo;s balance</Button>
             </div>
@@ -284,6 +321,22 @@ function Holding({ account, rules, today, onSaved, onRecorded, onConfirm }: {
           description: "Later windows are worked out as if it had not been sold.",
           action: "Delete",
           run: async () => { await act("deleteRsuSale", { id: s.id }, "Sale deleted"); },
+        })}
+      />
+
+      <Prices
+        id={account.id}
+        rules={rules}
+        today={today}
+        onSave={(prices, done) => act("updateAccount", { id: account.id, updates: { rsu_rules: { ...rules, prices } } }, done)}
+        onDelete={(p) => onConfirm({
+          title: `Delete the price from ${dayLabel(p.effective_date)}?`,
+          description: "A window it priced takes the price before it instead.",
+          action: "Delete",
+          run: async () => {
+            const prices = (rules.prices ?? []).filter((x) => x.effective_date !== p.effective_date);
+            await act("updateAccount", { id: account.id, updates: { rsu_rules: { ...rules, prices } } }, "Price deleted");
+          },
         })}
       />
 
@@ -478,6 +531,95 @@ function Sales({ account, rules, sales, windows, defaults, onAdd, onDelete }: {
               </div>
               <div className="col-span-2 flex gap-2 sm:col-span-5">
                 <Button size="sm" onClick={save}>Record</Button>
+                <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>Cancel</Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The plan's price over time: the trend, and the list of prices -- the same
+ *  numbers, and where a new one is added as the plan announces it. */
+function Prices({ id, rules, today, onSave, onDelete }: {
+  id: string;
+  rules: RsuRules;
+  today: string;
+  onSave: (prices: RsuPrice[], done: string) => Promise<boolean>;
+  onDelete: (p: RsuPrice) => void;
+}) {
+  const prices = rules.prices ?? [];
+  const [open, setOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [form, setForm] = useState({ day: today, price: Number.NaN });
+  const start = () => {
+    setForm({ day: today, price: Number.NaN });
+    setAdding(true);
+    setOpen(true);
+  };
+  async function save() {
+    if (!form.day) { toast.error("Give the day the price took effect"); return; }
+    if (!(form.price > 0)) { toast.error("Enter the price per share"); return; }
+    if (prices.some((p) => p.effective_date === form.day)) { toast.error(`There is already a price from ${dayLabel(form.day)}`); return; }
+    const next = [...prices, { effective_date: form.day, price: form.price }].sort((a, b) => a.effective_date.localeCompare(b.effective_date));
+    if (await onSave(next, `Added the price from ${dayLabel(form.day)}`)) setAdding(false);
+  }
+  const newestFirst = [...prices].reverse();
+  return (
+    <div className="mt-2">
+      <div className="flex items-center justify-between gap-2">
+        <Disclosure open={open} onToggle={() => setOpen((v) => !v)} label={`Prices (${prices.length})`} />
+        <Button variant="ghost" size="sm" className="mt-3" onClick={start}><Plus /> Add price</Button>
+      </div>
+      {open && (
+        <div className="mt-1 space-y-2">
+          {prices.length === 0 && !adding && (
+            <p className="text-xs text-muted-foreground">No prices yet. Each window is priced at the one in effect by its cutoff.</p>
+          )}
+          <RsuPriceChart prices={prices} currency={rules.currency} today={today} />
+          {prices.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm tabular-nums">
+                <thead className="text-xs text-muted-foreground">
+                  <tr className="border-b">
+                    <th className="py-1.5 pr-2 text-left font-normal">From</th>
+                    <th className="px-2 text-right font-normal">Price, {rules.currency}</th>
+                    <th className="px-2 text-right font-normal">Change</th>
+                    <th className="w-8" aria-label="Delete" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {newestFirst.map((p, i) => {
+                    const before = newestFirst[i + 1];
+                    return (
+                      <tr key={p.effective_date} className="border-b border-border/40">
+                        <td className="py-1 pr-2">{dayLabel(p.effective_date)}</td>
+                        <td className="px-2 text-right">{original(p.price, rules.currency, { code: false })}</td>
+                        <td className="px-2 text-right text-muted-foreground">{before ? percent(p.price / before.price - 1) : ""}</td>
+                        <td className="text-right">
+                          <Button variant="ghost" size="sm" aria-label={`Delete the price from ${dayLabel(p.effective_date)}`} onClick={() => onDelete(p)}><Trash2 /></Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {adding && (
+            <div className="grid grid-cols-2 items-end gap-2 sm:grid-cols-4">
+              <div className="grid gap-1">
+                <Label htmlFor={`rsu-price-day-${id}`} className="text-xs">From</Label>
+                <Input id={`rsu-price-day-${id}`} type="date" className="h-9" value={form.day} onChange={(e) => setForm((f) => ({ ...f, day: e.target.value }))} />
+              </div>
+              <div className="grid gap-1">
+                <Label htmlFor={`rsu-price-new-${id}`} className="text-xs">Price, {rules.currency}</Label>
+                <NumberInput id={`rsu-price-new-${id}`} value={form.price} emptyValue={Number.NaN} step="any" inputMode="decimal" className="h-9 text-right tabular-nums" onValueChange={(v) => setForm((f) => ({ ...f, price: v }))} />
+              </div>
+              <div className="col-span-2 flex gap-2">
+                <Button size="sm" onClick={save}>Add</Button>
                 <Button variant="ghost" size="sm" onClick={() => setAdding(false)}>Cancel</Button>
               </div>
             </div>

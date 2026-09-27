@@ -1,6 +1,6 @@
 import { CATEGORIES, KINDS, LOAN_DAY_COUNTS, LOAN_METHODS, PREPAYMENT_MODES, REGIONS } from "./finance";
 import { FINANCE_CURRENCIES } from "./fx";
-import { RSU_PLANS } from "./rsu";
+import { LIQUID_WITHIN_MONTHS, RSU_PLANS } from "./rsu";
 
 /** The actions POST /api/finance takes. The route's switch is what handles them;
  *  a test holds the two to each other. */
@@ -88,7 +88,7 @@ export function financeOpenApi(origin: string) {
         "**Days.** An account not recorded on a day carries its last balance before it forward. Recording a day again replaces that day's balance for each account sent. An archived account stops counting the day after it was archived, in Singapore (UTC+8), which is also the timezone `as_of` may not be later than today in.",
         "**Family.** Each account may name its `owner`; an asset's `liquidity` says how much of it could be spent now; a liability may carry loan terms, from which the summary works out its repayment schedule.",
         "**Loans.** A loan is scheduled the way a bank's repayment plan (还款计划) has it, to the cent: each month's interest is what is owed times the monthly rate, rounded half up; annuity takes it out of the level payment, equal_principal repays P/n to the cent; the last repayment clears what is left. Where the bank's plan differs, give its stated `loan_payment` and `loan_first_interest`, and `loan_maturity` when the contract ends after the last monthly day. At a stated payment an annuity's balance is carried unrounded, as 建设银行 carries it, and shown to the cent: each repayment's principal is what the shown balance fell by, its interest the rest of the payment. `loan_day_count` counts interest by the day instead. A rate change is kept as history (`addLoanRateChange`): from its first repayment the rate is the new one and the payment the one given, or what repays the balance then owed over the repayments left. A prepayment (`addLoanPrepayment`) comes off what is owed on its day, interest running on what was owed before it up to that day; after it the payment stays and the loan ends sooner, or the end stays and the payment falls. `GET /api/finance/loan-schedule` lists every repayment.",
-        "**RSUs.** An asset with `rsu_plan` holds shares granted in tranches (`addRsuGrant`), sold only as the plan allows. Under tiktok a window buys the floor of Σ(tranche shares × its profile's rate for the full years vested by the window's cutoff), less the shares sold in windows before (`addRsuSale`); a grant not yet signed counts only where asked. `GET /api/finance/rsu` works a window out, tranche by tranche, and prices it; the summary gives each RSU account's position and next window. With `liquidity` null, an RSU account's liquid share is what the next window may still buy of the shares held: record its balance as the held shares at their price.",
+        "**RSUs.** An asset with `rsu_plan` holds shares granted in tranches (`addRsuGrant`), sold only as the plan allows. Under tiktok a window buys the floor of Σ(tranche shares × its profile's rate for the full years vested by the window's cutoff), less the shares sold in windows before (`addRsuSale`); a grant not yet signed counts only where asked. `GET /api/finance/rsu` works a window out, tranche by tranche, and prices it; the summary gives each RSU account's position, next window and price. The rules carry the plan's price trend (`prices`): a window is priced at the price in effect by its cutoff, one still to come at the latest. With `liquidity` null, an RSU account's liquid share is what a window within " + LIQUID_WITHIN_MONTHS + " months may still buy of the shares held, and none while no window is that near: record its balance as the held shares at their price.",
         "For where things stand, read `GET /api/finance/summary` rather than recomputing it from `GET /api/finance`.",
       ].join("\n\n"),
     },
@@ -168,11 +168,11 @@ export function financeOpenApi(origin: string) {
         get: {
           operationId: "getRsuWindow",
           summary: "One RSU account's window, worked out and priced",
-          description: "Which tranches count in the window and at what rate, what it may buy, and what that comes to at a price. A grant not yet signed is left out, as the employer's estimate leaves it; with_proposed and outlook_with_proposed give what it would add.",
+          description: "Which tranches count in the window and at what rate, what it may buy, and what that comes to: at the price given, or else at the plan's price in effect by the cutoff -- the latest, for a window still to come. A grant not yet signed is left out, as the employer's estimate leaves it; with_proposed and outlook_with_proposed give what it would add.",
           parameters: [
             { name: "id", in: "query", required: true, schema: uuid, description: "The RSU account." },
             { name: "window", in: "query", required: false, schema: day, description: "A window's cutoff. Absent: the next one on or after today." },
-            { name: "price", in: "query", required: false, schema: { type: "number", exclusiveMinimum: 0 }, description: "Per share, in the rules' currency, to price what the window may still buy." },
+            { name: "price", in: "query", required: false, schema: { type: "number", exclusiveMinimum: 0 }, description: "Per share, in the rules' currency, to price what the window may still buy. Absent: the plan's price in effect by the cutoff." },
             { name: "tax_rate", in: "query", required: false, schema: { type: "number", minimum: 0, exclusiveMaximum: 1 }, description: "0.22 for 22%, to give what is left after tax." },
           ],
           responses: {
@@ -325,6 +325,19 @@ export function financeOpenApi(origin: string) {
               description: "By name (lowercase letters, digits, _); each grant follows one.",
             },
             verified_through: nullable("string", { format: "date", description: "The last cutoff checked against the employer's own estimate. Later windows are projected." }),
+            prices: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["effective_date", "price"],
+                properties: {
+                  effective_date: day,
+                  price: { type: "number", exclusiveMinimum: 0, description: "Per share, in the rules' currency. Given as a string -- \"100.00\", as the plan's price trend writes it -- it is kept as a number." },
+                },
+              },
+              maxItems: 200,
+              description: "The plan's price over time, one a day, kept oldest first. A window is priced at the one in effect by its cutoff.",
+            },
           },
         },
         RsuGrant: {
@@ -417,19 +430,33 @@ export function financeOpenApi(origin: string) {
               cumulative: { type: "integer" },
               quota: { type: "integer", description: "cumulative less what was really sold before." },
               if_sold_in_full: { type: "integer", description: "What it may buy if every window from the first here is sold in full." },
+              price: nullable("number", { description: "From GET /api/finance/rsu only: the price given, or else the plan's in effect by the cutoff." }),
             },
           },
           description: "The windows from today on.",
         },
         RsuStatus: {
           type: "object",
-          description: "An RSU account today: the shares, and the next window without its lines.",
+          description: "An RSU account today: the shares, the next window without its lines, what counts as liquid, and the price.",
           properties: {
             plan: { type: "string", enum: [...RSU_PLANS] },
             currency: { type: "string" },
             position: ref("RsuPosition"),
             next_window: ref("RsuWindow"),
-            liquidity: { type: "number", description: "What the next window may still buy of the shares held, as a share of them: the account's liquidity while none is set by hand." },
+            liquid: {
+              type: "object",
+              properties: {
+                within_months: { type: "integer", description: `How near a window has to be to count: ${LIQUID_WITHIN_MONTHS}.` },
+                window: nullable("string", { format: "date", description: "The last window cut off within that many months; null with none." }),
+                shares: { type: "integer", description: "What it may still buy, and those before it with it, no more than are held." },
+              },
+            },
+            liquidity: { type: "number", description: "liquid.shares as a share of the shares held: the account's liquidity while none is set by hand. 0 while no window is near enough." },
+            price: {
+              oneOf: [{ type: "object", properties: { effective_date: day, price: { type: "number" } } }, { type: "null" }],
+              description: "The plan's price today, and the day it took effect; null without a price trend.",
+            },
+            value: nullable("number", { description: "The shares held at that price, in the rules' currency." }),
           },
         },
         RsuCalculation: {
@@ -449,13 +476,14 @@ export function financeOpenApi(origin: string) {
                 type: "object",
                 properties: {
                   price: { type: "number" },
+                  price_effective_date: nullable("string", { format: "date", description: "When the plan's price used took effect; null for a price given." }),
                   tax_rate: nullable("number"),
                   gross: { type: "number", description: "window.remaining × price, before tax." },
                   tax: nullable("number"),
                   net: nullable("number", { description: "After tax; null without tax_rate." }),
                 },
               }, { type: "null" }],
-              description: "Null without a price.",
+              description: "Null with no price given and none in the rules.",
             },
             outlook: ref("RsuOutlook"),
             outlook_with_proposed: { oneOf: [ref("RsuOutlook"), { type: "null" }] },
