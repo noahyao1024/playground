@@ -199,6 +199,49 @@ describe.skipIf(!SERVER)("database", () => {
     });
   });
 
+  describe("the public key and the split bill", () => {
+    const TABLES = ["services", "subscribers", "subscriptions", "charges", "payment_methods", "wallet_entries"];
+    const SETTLE = ["settle_charge(uuid, uuid, text)", "settle_person(uuid, uuid, text)", "unsettle_charge(uuid, text)"];
+    const may = async (sql: string, params: unknown[]) => (await c.query(`select ${sql} as ok`, params)).rows[0].ok as boolean;
+
+    it("can read it, and hold no privilege to write it or to call the settle functions", async () => {
+      for (const role of ["anon", "authenticated"]) {
+        for (const table of TABLES) {
+          expect(await may(`has_table_privilege($1, $2, 'select')`, [role, table]), `${role} select ${table}`).toBe(table !== "payment_methods");
+          for (const privilege of ["insert", "update", "delete", "truncate"]) {
+            expect(await may(`has_table_privilege($1, $2, $3)`, [role, table, privilege]), `${role} ${privilege} ${table}`).toBe(false);
+          }
+        }
+        for (const fn of SETTLE) expect(await may(`has_function_privilege($1, $2, 'execute')`, [role, fn]), `${role} ${fn}`).toBe(false);
+      }
+      for (const fn of SETTLE) expect(await may(`has_function_privilege('service_role', $1, 'execute')`, [fn])).toBe(true);
+      expect(await may(`has_table_privilege('service_role', 'charges', 'insert')`, [])).toBe(true);
+    });
+
+    it("sees which card pays, but not the holder's name or the expiry", async () => {
+      await c.query(`insert into payment_methods (label, cardholder_name, card_type, last4, expiry_month, expiry_year) values ('Main', 'Ann Lee', 'visa', '4242', 4, 2031)`);
+      await c.query(`set local role anon`);
+      expect((await c.query(`select label, card_type, last4, is_default from payment_methods`)).rows).toEqual([
+        { label: "Main", card_type: "visa", last4: "4242", is_default: false },
+      ]);
+      for (const sql of [`select * from payment_methods`, `select cardholder_name from payment_methods`, `select expiry_year from payment_methods`]) {
+        expect((await failure(c, sql)).code, sql).toBe("42501");
+      }
+      expect((await failure(c, `select settle_charge($1, $2, null)`, [LIVE, W])).code).toBe("42501");
+      await c.query(`reset role`);
+    });
+
+    it("can call no function in public: each migration that adds one revokes it", async () => {
+      const { rows } = await c.query(`
+        select p.oid::regprocedure::text as fn from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public'
+          and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')
+          and (has_function_privilege('anon', p.oid, 'execute') or has_function_privilege('authenticated', p.oid, 'execute'))
+        order by 1`);
+      expect(rows.map((r) => r.fn)).toEqual([]);
+    });
+  });
+
   describe("finance", () => {
     it("keeps an API token only as a well-formed, unique hash, under a name", async () => {
       const hash = "ab".repeat(32);

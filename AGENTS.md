@@ -148,8 +148,9 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   (/finance → API access, `/api/finance/tokens`), stored only as its SHA-256 in the private
   `finance_api_tokens`, or `FINANCE_API_TOKEN` (`src/lib/finance-server.ts`). Tokens are made
   and revoked only from the owner's signed-in session, never with a token — one that could mint
-  tokens could outlive its own revoking. `/api/finance/openapi` describes the API and a test
-  holds it to the route.
+  tokens could outlive its own revoking. `/api/finance/openapi` describes the API, to the same
+  token, and a test holds it to the route. `/finance` is a 404 to anyone but the owner, even
+  signed out; the owner comes in by `/auth/signin?callbackUrl=/finance`.
 - Chart colours are `--series-1` to `--series-3` in `globals.css`, a palette checked for
   colour-blind separation with separate dark steps. Marks wear them; text never does.
 
@@ -167,6 +168,11 @@ Two conventions worth knowing before adding code:
   `search_path` (a `create or replace function` must say `set search_path = public, pg_temp`
   itself, since it resets the setting), and every foreign key has an index that starts with its
   columns. A new migration that breaks either fails CI before it reaches the live project.
+- The public key reads the split bill and nothing more, also held to in `test/sql`: no write
+  privilege on its tables, no `select` on a card's holder name or expiry (the page names its
+  columns; editors get those from `GET /api/data`), and no function in `public` it may call.
+  Postgres grants a new function to everyone, so a migration that adds one says
+  `revoke execute on function f(…) from public, anon, authenticated`.
 
 GitHub runs scheduled jobs late, routinely by hours. A job that has not fired yet is not
 evidence it is broken; check `gh run list --workflow=<name>` for `event=schedule`.

@@ -18,7 +18,6 @@ import {
 const pageNames: Record<string, string> = {
   "/split-bill": "Split Bill",
   "/machines": "Machines",
-  "/finance": "Finance",
 };
 
 export function Navbar() {
@@ -26,7 +25,10 @@ export function Navbar() {
   const { theme, setTheme } = useTheme();
   const { data: session } = useSession();
 
-  const currentPage = Object.entries(pageNames).find(([path]) =>
+  // /finance is named for its owner only: to anyone else it is a missing page,
+  // and the breadcrumb would give it away.
+  const names = isFinanceOwner(session?.user?.email) ? { ...pageNames, "/finance": "Finance" } : pageNames;
+  const currentPage = Object.entries(names).find(([path]) =>
     pathname.startsWith(path)
   );
 

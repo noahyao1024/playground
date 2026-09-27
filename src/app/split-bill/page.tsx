@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   fetchSubscriptionData,
+  fetchCardDetails,
   addService as apiAddService,
   updateService as apiUpdateService,
   deleteService as apiDeleteService,
@@ -27,7 +28,9 @@ import {
   addPaymentMethod as apiAddPaymentMethod,
   updatePaymentMethod as apiUpdatePaymentMethod,
   deletePaymentMethod as apiDeletePaymentMethod,
-  detectCardType,
+  cardFromForm,
+  cardTypeOfForm,
+  maskedCard,
   currentMonth as getCurrentMonth,
   CURRENCIES,
   type SubscriptionData,
@@ -35,6 +38,7 @@ import {
   type Subscription,
   type ChargeRecord,
   type PaymentMethod,
+  type CardDetails,
   type WalletKind,
   type Currency,
 } from "@/lib/store";
@@ -391,6 +395,8 @@ export default function SubscriptionPage() {
   const [walletForm, setWalletForm] = useState({ amount: 0, kind: "topup" as WalletKind, note: "" });
   const [addPmOpen, setAddPmOpen] = useState(false);
   const [editingPm, setEditingPm] = useState<PaymentMethod | null>(null);
+  // Cardholder names and expiry dates, by card: editors only, asked of the server.
+  const [cardDetails, setCardDetails] = useState<Record<string, CardDetails>>({});
   const [pmForm, setPmForm] = useState({ label: "", cardholderName: "", cardNumber: "", expiryMonth: new Date().getMonth() + 1, expiryYear: new Date().getFullYear() + 1, isDefault: false });
   const [payChargeMethodOpen, setPayChargeMethodOpen] = useState<string | null>(null);
   const [subPayMethodOpen, setSubPayMethodOpen] = useState<string | null>(null);
@@ -431,6 +437,18 @@ export default function SubscriptionPage() {
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, []);
+
+  // The public key reads cards without their holder or expiry; editors get those
+  // from the server, again whenever the cards change.
+  const cards = data?.payment_methods;
+  useEffect(() => {
+    if (!canEdit || !cards) return;
+    let alive = true;
+    fetchCardDetails()
+      .then((rows) => { if (alive) setCardDetails(Object.fromEntries(rows.map((r) => [r.id, r]))); })
+      .catch((err) => console.error("Failed to load card details:", err));
+    return () => { alive = false; };
+  }, [canEdit, cards]);
 
   // Fetch live exchange rates
   useEffect(() => {
@@ -877,15 +895,7 @@ export default function SubscriptionPage() {
     const digits = pmForm.cardNumber.replace(/\D/g, "");
     if (digits.length < 4) { toast.error("Enter a valid card number"); return; }
     if (!pmForm.cardholderName.trim()) { toast.error("Enter cardholder name"); return; }
-    const pm = {
-      label: pmForm.label.trim() || `${CARD_TYPE_LABELS[detectCardType(digits)]} ****${digits.slice(-4)}`,
-      cardholder_name: pmForm.cardholderName.trim(),
-      card_type: detectCardType(digits),
-      last4: digits.slice(-4),
-      expiry_month: pmForm.expiryMonth,
-      expiry_year: pmForm.expiryYear,
-      is_default: pmForm.isDefault,
-    };
+    const pm = cardFromForm(pmForm, editingPm, CARD_TYPE_LABELS);
     try {
       if (editingPm) {
         await apiUpdatePaymentMethod(editingPm.id, pm);
@@ -1788,21 +1798,28 @@ export default function SubscriptionPage() {
                       )}
                     </div>
                     <div className="space-y-1 text-xs text-muted-foreground">
-                      <div className="flex justify-between"><span>Cardholder</span><span className="font-medium text-foreground">{pm.cardholder_name}</span></div>
+                      {cardDetails[pm.id] && (
+                        <div className="flex justify-between"><span>Cardholder</span><span className="font-medium text-foreground">{cardDetails[pm.id].cardholder_name}</span></div>
+                      )}
                       {pm.label && <div className="flex justify-between"><span>Label</span><span className="font-medium text-foreground">{pm.label}</span></div>}
-                      <div className="flex justify-between"><span>Expires</span><span className="font-medium text-foreground tabular-nums">{String(pm.expiry_month).padStart(2, "0")}/{pm.expiry_year}</span></div>
+                      {cardDetails[pm.id] && (
+                        <div className="flex justify-between"><span>Expires</span><span className="font-medium text-foreground tabular-nums">{String(cardDetails[pm.id].expiry_month).padStart(2, "0")}/{cardDetails[pm.id].expiry_year}</span></div>
+                      )}
                     </div>
                     {canEdit && (
                       <div className="flex gap-1 pt-1 border-t">
                         <button
                           onClick={() => {
+                            const details = cardDetails[pm.id];
+                            // Editing waits for the details, or saving would blank them.
+                            if (!details) { toast.error("Still loading this card's details"); return; }
                             setEditingPm(pm);
                             setPmForm({
                               label: pm.label,
-                              cardholderName: pm.cardholder_name,
-                              cardNumber: `**** **** **** ${pm.last4}`,
-                              expiryMonth: pm.expiry_month,
-                              expiryYear: pm.expiry_year,
+                              cardholderName: details.cardholder_name,
+                              cardNumber: maskedCard(pm.last4),
+                              expiryMonth: details.expiry_month,
+                              expiryYear: details.expiry_year,
                               isDefault: pm.is_default,
                             });
                             setAddPmOpen(true);
@@ -2040,11 +2057,11 @@ export default function SubscriptionPage() {
                   maxLength={19}
                 />
                 <div className="absolute right-3 top-2.5">
-                  <CardIcon type={detectCardType(pmForm.cardNumber)} className="h-4 w-4" />
+                  <CardIcon type={cardTypeOfForm(pmForm.cardNumber, editingPm)} className="h-4 w-4" />
                 </div>
               </div>
               {pmForm.cardNumber.replace(/\D/g, "").length >= 2 && (
-                <span className="text-[10px] text-muted-foreground">Detected: {CARD_TYPE_LABELS[detectCardType(pmForm.cardNumber)]}</span>
+                <span className="text-[10px] text-muted-foreground">Detected: {CARD_TYPE_LABELS[cardTypeOfForm(pmForm.cardNumber, editingPm)]}</span>
               )}
             </div>
             <div className="grid gap-1.5">

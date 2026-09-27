@@ -16,6 +16,25 @@ const DELETE_GUARDS: Record<string, Array<{ table: string; column: string; label
   ],
 };
 
+/** What only editors may read: the card details the public key is not granted
+ *  (see 20260927_split_bill_public_key_reads_only). */
+export async function GET(req: NextRequest) {
+  const session = await auth();
+  if (!session?.user || !isAllowedEmail(session.user.email)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (req.nextUrl.searchParams.get("details") !== "payment_methods") {
+    return NextResponse.json({ error: "Only ?details=payment_methods" }, { status: 400 });
+  }
+  const supabase = getServerSupabase();
+  if (!supabase) {
+    return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
+  }
+  const { data, error } = await supabase.from("payment_methods").select("id, cardholder_name, expiry_month, expiry_year").order("created_at");
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ payment_methods: data }, { headers: { "Cache-Control": "private, no-store" } });
+}
+
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user || !isAllowedEmail(session.user.email)) {

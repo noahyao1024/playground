@@ -22,9 +22,11 @@ Base UI · Supabase (Postgres + PostgREST) · NextAuth v5 with Google OAuth.
 Worth reading before changing anything that touches data.
 
 The anon key is **public on purpose** — it ships in the browser bundle. What
-keeps it safe is RLS: every table has one policy, `select … using (true)`, so
-that key can read and nothing more. A write attempted with it fails at the
-database.
+keeps it safe is RLS: every split-bill table has one policy, `select … using
+(true)`, so that key can read and nothing more — and it holds no write
+privilege to try with, nor may it call any function in `public`. A card's
+holder name and expiry date are not granted to it either: the page shows those
+to editors only, who get them from `GET /api/data`.
 
 Writes go through `/api/*` routes, which run server-side with the service-role
 key and gate on `isAllowedEmail(session.user.email)` against the allowlist in
@@ -41,10 +43,14 @@ from `anon` and `authenticated`: the public key reads nothing there, and only th
 service role, server-side, reaches them. `/api/finance` answers one address —
 `FINANCE_OWNER` in [`src/lib/access.ts`](src/lib/access.ts), narrower than the
 split bill's allowlist — with 401 for anyone else, and marks every response
-`private, no-store`. `/finance` shows a sign-in prompt when signed out and a 404
-to anyone else signed in. The navbar item and home-page card appear only for the
-owner, but they are conveniences; the page and the route are the gate. The one
-other way in is an API token, below.
+`private, no-store`. `/finance` is a 404 to everyone but the owner, signed in or
+not, and names itself to nobody else — no title, no breadcrumb. Signed out, the
+owner comes in by `/auth/signin?callbackUrl=/finance`. The navbar item appears
+only for the owner, but it is a convenience; the page and the route are the
+gate. The one other way in is an API token, below.
+
+Every response also carries `frame-ancestors 'none'` and its old-browser twin,
+`nosniff`, a referrer policy and a permissions policy (`next.config.ts`).
 
 ## Finance: how the numbers work
 
@@ -115,7 +121,7 @@ curl -s https://playground.noahyao.me/api/finance/summary \
 
 | | |
 |---|---|
-| `GET /api/finance/openapi` | OpenAPI 3.1 description of all of this. Public. |
+| `GET /api/finance/openapi` | OpenAPI 3.1 description of all of this, with the same token. |
 | `GET /api/finance/summary` | Where things stand, worked out: totals, change since the last record, each account's newest balance and loan schedule, history. Takes the page's filters: `?exclude_long_term=1&liquid_only=1&owner=Daisy`. |
 | `GET /api/finance` | Every account and balance, as stored; each account with its loan's `rate_changes` and `prepayments`. |
 | `GET /api/finance/loan-schedule?id=…` | One loan's every repayment to the cent — date, payment, principal, interest, balance — and the totals. |

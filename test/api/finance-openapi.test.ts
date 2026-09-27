@@ -1,6 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
-import { GET } from "@/app/api/finance/openapi/route";
 import { FINANCE_ACTIONS } from "@/lib/finance-openapi";
 import { CATEGORIES, KINDS, LOAN_METHODS, REGIONS } from "@/lib/finance";
 import { FINANCE_CURRENCIES } from "@/lib/fx";
@@ -12,8 +11,16 @@ type Spec = {
   components: { schemas: Record<string, { properties?: Record<string, { enum?: string[] }> }> };
 };
 
-async function spec(url = "https://playground.noahyao.me/api/finance/openapi"): Promise<{ status: number; cache: string | null; body: Spec }> {
-  const res = GET(new NextRequest(url));
+const session = vi.hoisted(() => ({ current: null as { user: { email: string } } | null }));
+vi.mock("@/lib/auth", () => ({ auth: async () => session.current }));
+const { GET } = await import("@/app/api/finance/openapi/route");
+
+const TOKEN = "3f9a0c1e7b2d4a6f8e0c2b4d6f8a0c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a";
+beforeEach(() => { session.current = { user: { email: "hi@noahyao.me" } }; });
+afterEach(() => { vi.unstubAllEnvs(); });
+
+async function spec(url = "https://playground.noahyao.me/api/finance/openapi", headers: Record<string, string> = {}): Promise<{ status: number; cache: string | null; body: Spec }> {
+  const res = await GET(new NextRequest(url, { headers }));
   return { status: res.status, cache: res.headers.get("cache-control"), body: await res.json() };
 }
 
@@ -30,15 +37,24 @@ function refs(node: unknown, found: string[] = []): string[] {
 }
 
 describe("the OpenAPI description", () => {
-  it("is public, cacheable, and describes the host it was asked on", async () => {
+  it("is the owner's, as everything else is: to anyone else it would say the accounts are here", async () => {
+    session.current = null;
+    expect((await spec()).status).toBe(401);
+    session.current = { user: { email: "someone@else.com" } };
+    expect((await spec()).status).toBe(401);
+    session.current = null;
+    vi.stubEnv("FINANCE_API_TOKEN", TOKEN);
+    expect((await spec(undefined, { authorization: `Bearer ${TOKEN}` })).status).toBe(200);
+  });
+
+  it("is not cached, and describes the host it was asked on", async () => {
     const { status, cache, body } = await spec("https://preview.example.vercel.app/api/finance/openapi");
     expect(status).toBe(200);
-    expect(cache).toBe("public, max-age=300");
+    expect(cache).toBe("private, no-store");
     expect(body.openapi).toBe("3.1.0");
     expect(body.servers).toEqual([{ url: "https://preview.example.vercel.app" }]);
-    // The description itself needs no token; everything else does.
-    expect(body.paths["/api/finance/openapi"].get.security).toEqual([]);
-    expect(body.paths["/api/finance/summary"].get.security).toBeUndefined();
+    // Every path takes the token, the description's included.
+    for (const path of Object.values(body.paths)) for (const op of Object.values(path)) expect(op.security).toBeUndefined();
   });
 
   it("points nowhere that does not exist", async () => {
