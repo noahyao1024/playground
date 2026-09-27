@@ -13,11 +13,16 @@ import {
 import {
   financeDatabase, financeJson as json, isFinanceRequest, isUuid, readAccount, readAccounts, readAccountEvents, reason, streamFinance, withAccountEvents,
 } from "@/lib/finance-server";
+import { quotesFor, type NoQuote, type Quote } from "@/lib/quotes";
+import { normalizeSymbol, type PositionInput } from "@/lib/stocks";
+import { revalueStocks, type Revaluation } from "@/lib/stocks-server";
 
 /** The owner's money. Every request is checked -- the owner's session, or the
  *  token an agent carries -- and every answer is marked uncacheable. What the
  *  actions take is described at /api/finance/openapi. */
 export const dynamic = "force-dynamic";
+// Importing or valuing stocks prices each position from the quote source.
+export const maxDuration = 60;
 
 class Invalid extends Error {}
 
@@ -75,6 +80,11 @@ export async function POST(req: NextRequest) {
       case "deleteRsuGrant": return await deleteRsuGrant(db, body.id);
       case "addRsuSale": return await addRsuSale(db, body);
       case "deleteRsuSale": return await deleteRsuSale(db, body.id);
+      case "importStockPositions": return await importStockPositions(db, body.account_id, body.positions, body.replace !== false);
+      case "addStockPosition": return await importStockPositions(db, body.account_id, [body], false);
+      case "updateStockPosition": return await updateStockPosition(db, body.id, body.updates);
+      case "deleteStockPosition": return await deleteStockPosition(db, body.id);
+      case "revalueStocks": return await revalueAction(db, body.account_id, body.prices);
       default:
         return json({ error: "Invalid action" }, 400);
     }
@@ -87,7 +97,7 @@ export async function POST(req: NextRequest) {
 type AccountFields = Partial<Pick<FinanceAccount,
   | "name" | "institution" | "owner" | "region" | "currency" | "kind" | "category" | "note" | "sort_order"
   | "liquidity" | "long_term" | "loan_principal" | "loan_rate" | "loan_start" | "loan_term_months" | "loan_method"
-  | "loan_payment" | "loan_first_interest" | "loan_maturity" | "loan_day_count" | "rsu_plan" | "rsu_rules">>;
+  | "loan_payment" | "loan_first_interest" | "loan_maturity" | "loan_day_count" | "rsu_plan" | "rsu_rules" | "liquid_min_gain">>;
 
 /** A number that may also be cleared: null, or a number `ok` accepts. */
 function nullableNumber(value: unknown, field: string, ok: (n: number) => boolean, what: string): number | null {
@@ -101,7 +111,7 @@ const LOAN_FIELDS = ["loan_principal", "loan_rate", "loan_start", "loan_term_mon
 const LOAN_EXTRAS = ["loan_payment", "loan_first_interest", "loan_maturity", "loan_day_count"] as const;
 /** Columns added after the accounts table, left out of a write while empty so
  *  it works before their migration is applied. */
-const LATER_COLUMNS = [...LOAN_EXTRAS, "rsu_plan", "rsu_rules"] as const;
+const LATER_COLUMNS = [...LOAN_EXTRAS, "rsu_plan", "rsu_rules", "liquid_min_gain"] as const;
 
 const PERCENT = "an annual percentage, from 0 to under 100";
 const LEVEL_ONLY = (field: string) => `${field} is a level monthly payment, which only an annuity (等额本息) or flat (等本等息) loan has`;
@@ -165,6 +175,9 @@ function accountFields(input: Record<string, unknown>, kind: Kind): AccountField
   }
   if ("liquidity" in input) {
     out.liquidity = nullableNumber(input.liquidity, "liquidity", (n) => n >= 0 && n <= 1, "a share from 0 to 1, or null");
+  }
+  if ("liquid_min_gain" in input) {
+    out.liquid_min_gain = nullableNumber(input.liquid_min_gain, "liquid_min_gain", (n) => n >= -100 && n <= 10000, "a percentage a position must be up by to count as liquid, as 10, or null for 10");
   }
   if ("long_term" in input) {
     if (input.long_term !== null && typeof input.long_term !== "boolean") throw new Invalid("long_term must be true, false or null");
@@ -245,7 +258,7 @@ async function createAccount(db: SupabaseClient, input: unknown) {
   for (const f of LATER_COLUMNS) if (fields[f] === null) delete fields[f];
   const { data, error } = await db.from("finance_accounts").insert(fields).select().single();
   if (error) throw error;
-  return { ...data, rate_changes: [], prepayments: [], rsu_grants: [], rsu_sales: [] };
+  return { ...data, rate_changes: [], prepayments: [], rsu_grants: [], rsu_sales: [], stock_positions: [] };
 }
 
 async function balanceCount(db: SupabaseClient, accountId: string): Promise<number> {
@@ -284,7 +297,11 @@ async function updateAccount(db: SupabaseClient, id: unknown, input: unknown) {
   }
   const { data, error } = await db.from("finance_accounts").update(fields).eq("id", id).select().single();
   if (error) throw error;
-  return json(withAccountEvents([data as FinanceAccount], await readAccountEvents(db, id))[0]);
+  const events = await readAccountEvents(db, id);
+  // A new threshold changes how much of today's value is liquid: record it
+  // again, at the prices already kept.
+  if ("liquid_min_gain" in fields && events.stockPositions.length > 0) await revalueStocks(db, { accountId: id, quotes: false });
+  return json(withAccountEvents([data as FinanceAccount], events)[0]);
 }
 
 /** The loan behind an action on one: the account, and its terms. */
@@ -506,6 +523,163 @@ async function deleteRsuSale(db: SupabaseClient, id: unknown) {
   if (error) throw error;
   if (!data?.length) return json({ error: "No such sale" }, 404);
   return json(await readAccount(db, data[0].account_id));
+}
+
+/** A brokerage account: an asset, open, holding no RSUs. */
+async function stockAccountFor(db: SupabaseClient, accountId: unknown): Promise<FinanceAccount | Response> {
+  if (!isUuid(accountId)) throw new Invalid("account_id is required: the account holding the stocks");
+  const account = await readAccount(db, accountId);
+  if (!account) return json({ error: "No such account" }, 404);
+  if (account.kind !== "asset") throw new Invalid("Only an asset holds stocks");
+  if (account.rsu_plan) throw new Invalid("An RSU account holds grants, not stock positions");
+  if (account.archived_at) throw new Invalid(`${account.name} is archived`);
+  return account;
+}
+
+/** Positions as given -- [{symbol, quantity, cost, currency?, note?}] -- checked. */
+function positionInputs(value: unknown): Array<PositionInput & { note: string | null }> {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 200) throw new Invalid("positions must list 1 to 200 {symbol, quantity, cost}");
+  const seen = new Set<string>();
+  return value.map((raw, i) => {
+    const p = (raw ?? {}) as Record<string, unknown>;
+    const symbol = typeof p.symbol === "string" ? normalizeSymbol(p.symbol) : null;
+    if (!symbol) throw new Invalid(`Position ${i + 1}: symbol must be as the market spells it -- AAPL, 0700.HK, 600519.SS, D05.SI`);
+    if (seen.has(symbol)) throw new Invalid(`${symbol} is listed twice`);
+    seen.add(symbol);
+    if (typeof p.quantity !== "number" || !(p.quantity > 0)) throw new Invalid(`${symbol}: quantity must be the shares held, above 0`);
+    if (typeof p.cost !== "number" || !(p.cost >= 0)) throw new Invalid(`${symbol}: cost must be the average cost of a share, 0 or more`);
+    if (p.currency != null && (typeof p.currency !== "string" || !/^[A-Z]{3}$/.test(p.currency))) {
+      throw new Invalid(`${symbol}: currency must be three capital letters, as USD`);
+    }
+    const note = optionalText(p.note, "note", 500) ?? null;
+    return { symbol, quantity: p.quantity, cost: p.cost, ...(p.currency ? { currency: p.currency as string } : {}), note };
+  });
+}
+
+/** An account after its positions changed, with what valuing it did. */
+async function stocksReply(db: SupabaseClient, accountId: string, revaluation: Revaluation) {
+  const { recorded, priced, failures, skipped, balances } = revaluation;
+  return json({ account: await readAccount(db, accountId), balances, recorded, priced, failures, skipped });
+}
+
+/** Positions into an account, each checked against the quote source -- a
+ *  symbol it does not know is refused, and the currency is the one the stock
+ *  trades in -- then valued, and today's balance recorded from them. With
+ *  `replace`, as from a broker's statement, what is not listed is removed. */
+async function importStockPositions(db: SupabaseClient, accountId: unknown, input: unknown, replace: boolean) {
+  const found = await stockAccountFor(db, accountId);
+  if (found instanceof Response) return found;
+  const account = found;
+  const inputs = positionInputs(input);
+  const held = account.stock_positions ?? [];
+  if (!replace) {
+    const taken = inputs.find((i) => held.some((p) => p.symbol === i.symbol));
+    if (taken) return json({ error: `${taken.symbol} is already held: change its shares or cost instead` }, 409);
+  }
+
+  const quotes = await quotesFor(inputs.map((i) => i.symbol));
+  const unknown: string[] = [], unreached: string[] = [];
+  for (const i of inputs) {
+    const q = quotes.get(i.symbol)!;
+    if ("error" in q) (q.final ? unknown : unreached).push(`${i.symbol} (${q.error})`);
+    else if (i.currency && i.currency !== q.currency) unknown.push(`${i.symbol} trades in ${q.currency}, not ${i.currency}`);
+    else if (!isFinanceCurrency(q.currency)) unknown.push(`${i.symbol} trades in ${q.currency}, which finance does not convert`);
+  }
+  if (unknown.length) throw new Invalid(`Nothing was imported: ${unknown.join("; ")}`);
+  if (unreached.length) return json({ error: `Nothing was imported: no price for ${unreached.join("; ")}. Try again in a minute.` }, 502);
+
+  const rows = inputs.map((i) => {
+    const q = quotes.get(i.symbol) as { currency: string; name: string | null };
+    return { account_id: account.id, symbol: i.symbol, quantity: i.quantity, cost: i.cost, currency: q.currency, name: q.name, note: i.note };
+  });
+  const { error } = await db.from("finance_stock_positions").upsert(rows, { onConflict: "account_id,symbol" });
+  if (error) throw error;
+  if (replace) {
+    const listed = new Set(inputs.map((i) => i.symbol));
+    const gone = held.filter((p) => !listed.has(p.symbol)).map((p) => p.id);
+    // A few at a time: the ids ride in the URL.
+    for (let i = 0; i < gone.length; i += 100) {
+      const { error: deleteError } = await db.from("finance_stock_positions").delete().in("id", gone.slice(i, i + 100));
+      if (deleteError) throw deleteError;
+    }
+  }
+  return valued(db, account.id, quotes);
+}
+
+/** Values an account after a change to its positions, and replies with it. */
+async function valued(db: SupabaseClient, accountId: string, quotes: boolean | Map<string, Quote | NoQuote>) {
+  try {
+    return await stocksReply(db, accountId, await revalueStocks(db, { accountId, quotes }));
+  } catch (err) {
+    return json({ error: `The positions are saved, but could not be valued: ${reason(err)}. Refresh the prices to try again.` }, 502);
+  }
+}
+
+/** Changes a position's shares, cost or note, and values the account again at
+ *  the prices already kept. */
+async function updateStockPosition(db: SupabaseClient, id: unknown, input: unknown) {
+  if (!isUuid(id)) throw new Invalid("id is required: the position's");
+  const updates = (input ?? {}) as Record<string, unknown>;
+  const fields: Record<string, unknown> = {};
+  if ("quantity" in updates) {
+    if (typeof updates.quantity !== "number" || !(updates.quantity > 0)) throw new Invalid("quantity must be the shares held, above 0");
+    fields.quantity = updates.quantity;
+  }
+  if ("cost" in updates) {
+    if (typeof updates.cost !== "number" || !(updates.cost >= 0)) throw new Invalid("cost must be the average cost of a share, 0 or more");
+    fields.cost = updates.cost;
+  }
+  if ("note" in updates) fields.note = optionalText(updates.note, "note", 500) ?? null;
+  if (Object.keys(fields).length === 0) throw new Invalid("Nothing to change: quantity, cost or note");
+  const { data, error } = await db.from("finance_stock_positions").update(fields).eq("id", id).select("account_id");
+  if (error) throw error;
+  if (!data?.length) return json({ error: "No such position" }, 404);
+  return valued(db, data[0].account_id, false);
+}
+
+/** Removes a position. The account is valued again without it -- at nothing,
+ *  with none left: what it holds is what it is worth. */
+async function deleteStockPosition(db: SupabaseClient, id: unknown) {
+  if (!isUuid(id)) throw new Invalid("id is required: the position's");
+  const { data, error } = await db.from("finance_stock_positions").delete().eq("id", id).select("account_id");
+  if (error) throw error;
+  if (!data?.length) return json({ error: "No such position" }, 404);
+  const accountId = data[0].account_id as string;
+  const account = await readAccount(db, accountId);
+  if (account && !account.stock_positions?.length && !account.archived_at) {
+    const day = todayInSG();
+    let rates;
+    try {
+      rates = await ratesOn(day, [account.currency]);
+    } catch (err) {
+      return json({ error: `The position is deleted, but the account could not be valued: ${reason(err)}` }, 502);
+    }
+    const unit = rates.rates[account.currency];
+    const { data: written, error: writeError } = await db.from("finance_balances").upsert({
+      account_id: accountId, as_of: day, currency: account.currency, amount: 0, cny_rate: unit.cny, sgd_rate: unit.sgd,
+      rate_date: rates.date, liquid_share: 0, note: "No positions left",
+    }, { onConflict: "account_id,as_of" }).select();
+    if (writeError) throw writeError;
+    return json({ account, balances: written ?? [], recorded: [accountId], priced: 0, failures: [], skipped: [] });
+  }
+  return valued(db, accountId, false);
+}
+
+/** Prices every stock account's positions -- or one account's -- from the
+ *  quote source, and records today's balances from them. `prices: "kept"`
+ *  values them at the prices already fetched. */
+async function revalueAction(db: SupabaseClient, accountId: unknown, prices: unknown) {
+  if (accountId != null && !isUuid(accountId)) throw new Invalid("account_id must be an account's id, or absent for all");
+  if (prices != null && prices !== "fetch" && prices !== "kept") throw new Invalid('prices must be "fetch" or "kept"');
+  let revaluation: Revaluation;
+  try {
+    revaluation = await revalueStocks(db, { accountId: accountId ?? undefined, quotes: prices !== "kept" });
+  } catch (err) {
+    return json({ error: `Could not value the stocks: ${reason(err)}` }, 502);
+  }
+  const accounts = (await readAccounts(db)).filter((a) => (a.stock_positions?.length ?? 0) > 0 && (!accountId || a.id === accountId));
+  const { recorded, priced, failures, skipped, balances } = revaluation;
+  return json({ accounts, balances, recorded, priced, failures, skipped });
 }
 
 async function deleteAccount(db: SupabaseClient, id: unknown) {

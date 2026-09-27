@@ -22,6 +22,7 @@ import { LoansCard } from "./loans-card";
 import { RecordDialog } from "./record-dialog";
 import { RecordsCard } from "./records-card";
 import { RsuCard } from "./rsu-card";
+import { StocksCard, type StocksReply } from "./stocks-card";
 import { Segmented } from "./segmented";
 import { TrendChart, type TrendRow, type TrendSeries } from "./trend-chart";
 
@@ -129,6 +130,14 @@ export function FinanceApp() {
   /** A save puts the server's own reply on screen, rather than reading every
    *  balance again: the cost of saving stays the same however long the history. */
   const patch = useCallback((update: (d: FinanceData) => FinanceData) => setData((d) => (d ? update(d) : d)), []);
+
+  /** A stock action's reply: the accounts as they now stand, and the balances
+   *  recorded from their positions. */
+  const stocksChanged = useCallback((reply: StocksReply) => patch((d) => ({
+    ...d,
+    accounts: [...(reply.accounts ?? []), ...(reply.account ? [reply.account] : [])].reduce(withAccount, d.accounts),
+    balances: withBalances(d.balances, reply.balances ?? []),
+  })), [patch]);
 
   function setUnit(next: Unit) {
     setUnitState(next);
@@ -328,6 +337,8 @@ export function FinanceApp() {
             onRecorded={(written) => patch((d) => ({ ...d, balances: withBalances(d.balances, written) }))}
             onConfirm={setConfirmation}
           />
+
+          <StocksCard accounts={accounts} onChanged={stocksChanged} onConfirm={setConfirmation} />
 
           {latest && <Breakdown position={latest} unit={unit} />}
 

@@ -1,12 +1,14 @@
 import { CATEGORIES, KINDS, LOAN_DAY_COUNTS, LOAN_METHODS, PREPAYMENT_MODES, REGIONS } from "./finance";
 import { FINANCE_CURRENCIES } from "./fx";
 import { LIQUID_WITHIN_MONTHS, RSU_PLANS } from "./rsu";
+import { LIQUID_MIN_GAIN } from "./stocks";
 
 /** The actions POST /api/finance takes. The route's switch is what handles them;
  *  a test holds the two to each other. */
 export const FINANCE_ACTIONS = [
   "createAccount", "updateAccount", "deleteAccount", "recordBalances", "deleteBalance", "addLoanRateChange", "deleteLoanRateChange",
   "addLoanPrepayment", "deleteLoanPrepayment", "addRsuGrant", "updateRsuGrant", "deleteRsuGrant", "addRsuSale", "deleteRsuSale",
+  "importStockPositions", "addStockPosition", "updateStockPosition", "deleteStockPosition", "revalueStocks",
 ] as const;
 
 const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
@@ -68,6 +70,19 @@ const accountFields = {
     description: "An asset holding RSUs: the plan they follow. tiktok: double-trigger RSUs a private company buys back in windows, each tranche counting once vested by a window's cutoff, at the rate its profile sets for the full years it has been vested; a window buys the floor of the sum, less every share sold in windows before. Set with rsu_rules.",
   }),
   rsu_rules: { oneOf: [ref("RsuRules"), { type: "null" }], description: "The plan's numbers, which are the owner's: only with rsu_plan. Every grant's profile must stay in them." },
+  liquid_min_gain: nullable("number", {
+    minimum: -100, maximum: 10000,
+    description: `For an account holding stocks: how far up a position has to be, in percent, to count as liquid -- more than this. Null: ${LIQUID_MIN_GAIN}. Changing it records today's balance again, its liquid share with it.`,
+  }),
+};
+
+/** A position as given to importStockPositions and addStockPosition. */
+const stockInput = {
+  symbol: { type: "string", description: "As the market spells it -- AAPL, 0700.HK, 600519.SS, 000001.SZ, D05.SI -- or as Futu writes it: US.AAPL, HK.00700, SH.600519. A bare six-digit code is taken as an A-share, a five-digit one starting 0 as Hong Kong's." },
+  quantity: { type: "number", exclusiveMinimum: 0, description: "The shares held." },
+  cost: { type: "number", minimum: 0, description: "The average cost of a share, in the currency it trades in." },
+  currency: { type: "string", pattern: "^[A-Z]{3}$", description: "Optional: checked against the quote's." },
+  note: nullable("string", { maxLength: 500 }),
 };
 
 const flagParameter = (name: string, description: string) => ({
@@ -89,6 +104,7 @@ export function financeOpenApi(origin: string) {
         "**Family.** Each account may name its `owner`; an asset's `liquidity` says how much of it could be spent now; a liability may carry loan terms, from which the summary works out its repayment schedule.",
         "**Loans.** A loan is scheduled the way a bank's repayment plan (还款计划) has it, to the cent: each month's interest is what is owed times the monthly rate, rounded half up; annuity takes it out of the level payment, equal_principal repays P/n to the cent; the last repayment clears what is left. Where the bank's plan differs, give its stated `loan_payment` and `loan_first_interest`, and `loan_maturity` when the contract ends after the last monthly day. At a stated payment an annuity's balance is carried unrounded, as 建设银行 carries it, and shown to the cent: each repayment's principal is what the shown balance fell by, its interest the rest of the payment. `loan_day_count` counts interest by the day instead. A rate change is kept as history (`addLoanRateChange`): from its first repayment the rate is the new one and the payment the one given, or what repays the balance then owed over the repayments left. A prepayment (`addLoanPrepayment`) comes off what is owed on its day, interest running on what was owed before it up to that day; after it the payment stays and the loan ends sooner, or the end stays and the payment falls. `GET /api/finance/loan-schedule` lists every repayment.",
         "**RSUs.** An asset with `rsu_plan` holds shares granted in tranches (`addRsuGrant`), sold only as the plan allows. Under tiktok a window buys the floor of Σ(tranche shares × its profile's rate for the full years vested by the window's cutoff), less the shares sold in windows before (`addRsuSale`); a grant not yet signed counts only where asked. `GET /api/finance/rsu` works a window out, tranche by tranche, and prices it; the summary gives each RSU account's position, next window and price. The rules carry the plan's price trend (`prices`): a window is priced at the price in effect by its cutoff, one still to come at the latest. With `liquidity` null, an RSU account's liquid share is what a window within " + LIQUID_WITHIN_MONTHS + " months may still buy of the shares held, and none while no window is that near: record its balance as the held shares at their price.",
+        "**Stocks.** An asset may hold stock positions (`importStockPositions`, `addStockPosition`): shares of a symbol, as the market spells it -- AAPL, 0700.HK, 600519.SS, 000001.SZ, D05.SI -- at an average cost in the currency it trades in. They are priced from Yahoo Finance, and the account's balance for the day is recorded from them: on every change, on `revalueStocks`, and every day by the Daily jobs workflow. A position up more than the account's `liquid_min_gain` percent counts as liquid, the rest not; the balance keeps its liquid share (`liquid_share`), so each day of the history counts what was liquid then.",
         "For where things stand, read `GET /api/finance/summary` rather than recomputing it from `GET /api/finance`.",
       ].join("\n\n"),
     },
@@ -139,14 +155,14 @@ export function financeOpenApi(origin: string) {
             },
           },
           responses: {
-            200: ok("createAccount, updateAccount and the loan and RSU actions: the account, with its rate changes, prepayments, RSU grants and sales as they now stand. recordBalances: the balances written and the day their rates are from. deleteAccount and deleteBalance: `{ok: true}`.", {
-              oneOf: [ref("Account"), ref("Recorded"), { type: "object", properties: { ok: { const: true } } }],
+            200: ok("createAccount, updateAccount and the loan and RSU actions: the account, with its rate changes, prepayments, RSU grants and sales and stock positions as they now stand. recordBalances: the balances written and the day their rates are from. The stock position actions: the account, and what valuing it did; revalueStocks: every account holding stocks, and the same (StockValuation). deleteAccount and deleteBalance: `{ok: true}`.", {
+              oneOf: [ref("Account"), ref("Recorded"), ref("StockValuation"), { type: "object", properties: { ok: { const: true } } }],
             }),
             400: error("The request does not make sense: the message says what"),
             401: error("Not the owner"),
-            404: error("updateAccount, addLoanRateChange, addLoanPrepayment, addRsuGrant and addRsuSale: no such account. The update and delete actions: no such one."),
-            409: error("deleteAccount on an account with balances (archive it instead), a new currency for one, a second rate change or prepayment on the same day for one loan, a grant number used twice, or a second sale in one window"),
-            502: error("recordBalances: the day's rates could not be had. Nothing was written; try again."),
+            404: error("updateAccount, addLoanRateChange, addLoanPrepayment, addRsuGrant, addRsuSale and the stock actions: no such account. The update and delete actions: no such one."),
+            409: error("deleteAccount on an account with balances (archive it instead), a new currency for one, a second rate change or prepayment on the same day for one loan, a grant number used twice, a second sale in one window, or addStockPosition for a symbol already held"),
+            502: error("recordBalances: the day's rates could not be had; nothing was written. importStockPositions and addStockPosition: a price could not be had; nothing was imported. The other stock actions: the change is kept, but the account could not be valued; revalueStocks later."),
           },
         },
       },
@@ -235,6 +251,12 @@ export function financeOpenApi(origin: string) {
               items: ref("RsuSale"),
               readOnly: true,
               description: "What has been sold of its RSUs, by window. Changed with addRsuSale and deleteRsuSale.",
+            },
+            stock_positions: {
+              type: "array",
+              items: ref("StockPosition"),
+              readOnly: true,
+              description: "Its stock positions, by symbol; empty for most accounts. Changed with the stock actions.",
             },
             archived_at: nullable("string", { format: "date-time", description: "Set while archived." }),
             created_at: { type: "string", format: "date-time" },
@@ -376,6 +398,45 @@ export function financeOpenApi(origin: string) {
             created_at: { type: "string", format: "date-time" },
           },
         },
+        StockPosition: {
+          type: "object",
+          required: ["id", "account_id", "symbol", "quantity", "cost", "currency"],
+          properties: {
+            id: uuid,
+            account_id: uuid,
+            symbol: { type: "string", description: "As the market spells it: AAPL, 0700.HK, 600519.SS, 000001.SZ, D05.SI." },
+            name: nullable("string", { description: "As the quote gives it." }),
+            quantity: { type: "number", exclusiveMinimum: 0 },
+            cost: { type: "number", minimum: 0, description: "The average cost of a share, in `currency`." },
+            currency: { type: "string", description: "What it trades in, as its quote gives it." },
+            price: nullable("number", { description: "The last price it was valued at, in `currency`." }),
+            fx: nullable("number", { description: "One unit of `currency` in the account's currency, when priced." }),
+            priced_at: nullable("string", { format: "date-time" }),
+            note: nullable("string", { maxLength: 500 }),
+            created_at: { type: "string", format: "date-time" },
+          },
+        },
+        StockPositionInput: { type: "object", required: ["symbol", "quantity", "cost"], properties: stockInput },
+        StockValuation: {
+          type: "object",
+          properties: {
+            account: { ...ref("Account"), description: "The stock position actions: the account, as it now stands." },
+            accounts: { type: "array", items: ref("Account"), description: "revalueStocks: every account holding stocks." },
+            balances: { type: "array", items: ref("Balance"), description: "Today's balances recorded from the positions." },
+            recorded: { type: "array", items: uuid, description: "The accounts those are for." },
+            priced: { type: "integer", description: "Positions given a price just now." },
+            failures: {
+              type: "array",
+              items: { type: "object", properties: { symbol: { type: "string" }, reason: { type: "string" } } },
+              description: "Symbols that could not be priced: they keep their last price.",
+            },
+            skipped: {
+              type: "array",
+              items: { type: "object", properties: { account_id: uuid, reason: { type: "string" } } },
+              description: "Accounts not recorded: a position has never been priced.",
+            },
+          },
+        },
         RsuPosition: {
           type: "object",
           description: "Where the shares stand on a day: signed grants only, a proposed one apart.",
@@ -502,6 +563,10 @@ export function financeOpenApi(origin: string) {
             sgd_rate: { type: "number", description: "SGD per one unit of `currency` on rate_date." },
             rate_date: day,
             note: nullable("string"),
+            liquid_share: nullable("number", {
+              minimum: 0, maximum: 1,
+              description: "The share of it that was liquid when recorded, for a stock account valued from its positions. Null follows the account.",
+            }),
             created_at: { type: "string", format: "date-time" },
             updated_at: nullable("string", { format: "date-time" }),
           },
@@ -553,7 +618,7 @@ export function financeOpenApi(origin: string) {
                   ref("Account"),
                   {
                     type: "object",
-                    required: ["display_name", "is_long_term", "weight", "counted", "latest", "loan", "rsu"],
+                    required: ["display_name", "is_long_term", "weight", "counted", "latest", "loan", "rsu", "stocks"],
                     properties: {
                       display_name: { type: "string", description: "Institution and name, as the page shows them: 微信余额, DBS Multiplier." },
                       is_long_term: { type: "boolean", description: "long_term, with the category's default applied." },
@@ -561,6 +626,23 @@ export function financeOpenApi(origin: string) {
                       counted: { type: "boolean", description: "Whether it is in as_of's totals: open then, recorded by then, and not filtered out." },
                       loan: { oneOf: [ref("LoanStatus"), { type: "null" }], description: "For a liability with loan terms." },
                       rsu: { oneOf: [ref("RsuStatus"), { type: "null" }], description: "For an asset holding RSUs." },
+                      stocks: {
+                        oneOf: [{
+                          type: "object",
+                          properties: {
+                            positions: { type: "integer" },
+                            value: { type: "number", description: "At the prices last fetched, in the account's currency." },
+                            cost: { type: "number" },
+                            gain: nullable("number", { description: "value against cost, as a share: 0.12 for 12%." }),
+                            liquid_value: { type: "number", description: "Of the positions up more than min_gain percent." },
+                            liquidity: { type: "number" },
+                            min_gain: { type: "number" },
+                            unpriced: { type: "array", items: { type: "string" }, description: "Symbols never priced, left out of the sums." },
+                            priced_at: nullable("string", { format: "date-time" }),
+                          },
+                        }, { type: "null" }],
+                        description: "For an asset holding stocks.",
+                      },
                       latest: {
                         oneOf: [
                           {
@@ -735,6 +817,51 @@ export function financeOpenApi(origin: string) {
           type: "object",
           required: ["action", "id"],
           properties: { action: { const: "deleteRsuSale" }, id: { ...uuid, description: "The sale's." } },
+        },
+        importStockPositions: {
+          type: "object",
+          required: ["action", "account_id", "positions"],
+          properties: {
+            action: { const: "importStockPositions" },
+            account_id: { ...uuid, description: "An open asset holding no RSUs." },
+            positions: { type: "array", minItems: 1, maxItems: 200, items: ref("StockPositionInput") },
+            replace: { type: "boolean", default: true, description: "Remove the positions not listed, as a broker's statement would. False adds and updates only." },
+          },
+          description: "Each symbol is checked against the quote source first: one it does not know refuses the lot. The account is then valued and today's balance recorded.",
+        },
+        addStockPosition: {
+          type: "object",
+          required: ["action", "account_id", "symbol", "quantity", "cost"],
+          properties: { action: { const: "addStockPosition" }, account_id: { ...uuid, description: "An open asset holding no RSUs." }, ...stockInput },
+        },
+        updateStockPosition: {
+          type: "object",
+          required: ["action", "id", "updates"],
+          properties: {
+            action: { const: "updateStockPosition" },
+            id: { ...uuid, description: "The position's." },
+            updates: {
+              type: "object",
+              properties: { quantity: stockInput.quantity, cost: stockInput.cost, note: stockInput.note },
+              description: "Only what changes. The account is valued again at the prices already kept.",
+            },
+          },
+        },
+        deleteStockPosition: {
+          type: "object",
+          required: ["action", "id"],
+          properties: { action: { const: "deleteStockPosition" }, id: { ...uuid, description: "The position's." } },
+          description: "The account is valued again without it: at nothing, with none left.",
+        },
+        revalueStocks: {
+          type: "object",
+          required: ["action"],
+          properties: {
+            action: { const: "revalueStocks" },
+            account_id: { ...uuid, description: "One account; absent, every account holding stocks." },
+            prices: { type: "string", enum: ["fetch", "kept"], default: "fetch", description: "fetch: price each position now. kept: at the prices already fetched." },
+          },
+          description: "Records today's balance of each account from its positions.",
         },
       },
     },

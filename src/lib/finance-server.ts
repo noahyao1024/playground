@@ -6,6 +6,7 @@ import { isFinanceOwner } from "@/lib/access";
 import { fetchAllRows, pagesOf } from "@/lib/paginate";
 import type { FinanceAccount, FinanceBalance, LoanPrepayment, LoanRateChange } from "@/lib/finance";
 import type { RsuGrant, RsuSale } from "@/lib/rsu";
+import type { StockPosition } from "@/lib/stocks";
 
 /** The server side of /api/finance/*: who may ask, and where the answers come
  *  from. Server-only -- it reads the service-role key and node:crypto. */
@@ -52,18 +53,26 @@ function readAccountRows<T>(db: SupabaseClient, table: string, key: string, acco
   });
 }
 
+/** Every stock position, or one account's, by symbol; none before their table exists. */
+export function readStockPositions(db: SupabaseClient, accountId?: string): Promise<StockPosition[]> {
+  return readAccountRows<StockPosition>(db, "finance_stock_positions", "symbol", accountId);
+}
+
 /** What is kept beside the accounts: what has happened to loans since their
  *  terms, and the RSU grants and sales. */
-export type AccountEvents = { rateChanges: LoanRateChange[]; prepayments: LoanPrepayment[]; rsuGrants: RsuGrant[]; rsuSales: RsuSale[] };
+export type AccountEvents = {
+  rateChanges: LoanRateChange[]; prepayments: LoanPrepayment[]; rsuGrants: RsuGrant[]; rsuSales: RsuSale[]; stockPositions: StockPosition[];
+};
 
 export async function readAccountEvents(db: SupabaseClient, accountId?: string): Promise<AccountEvents> {
-  const [rateChanges, prepayments, rsuGrants, rsuSales] = await Promise.all([
+  const [rateChanges, prepayments, rsuGrants, rsuSales, stockPositions] = await Promise.all([
     readAccountRows<LoanRateChange>(db, "finance_loan_rate_changes", "effective_date", accountId),
     readAccountRows<LoanPrepayment>(db, "finance_loan_prepayments", "paid_on", accountId),
     readAccountRows<RsuGrant>(db, "finance_rsu_grants", "grant_no", accountId),
     readAccountRows<RsuSale>(db, "finance_rsu_sales", "window_cutoff", accountId),
+    readAccountRows<StockPosition>(db, "finance_stock_positions", "symbol", accountId),
   ]);
-  return { rateChanges, prepayments, rsuGrants, rsuSales };
+  return { rateChanges, prepayments, rsuGrants, rsuSales, stockPositions };
 }
 
 function byAccount<T extends { account_id: string }>(rows: T[]): Map<string, T[]> {
@@ -80,13 +89,14 @@ function byAccount<T extends { account_id: string }>(rows: T[]): Map<string, T[]
  *  it, as the API hands them out. */
 export function withAccountEvents<T extends FinanceAccount>(accounts: T[], events: AccountEvents): T[] {
   const changes = byAccount(events.rateChanges), prepayments = byAccount(events.prepayments);
-  const grants = byAccount(events.rsuGrants), sales = byAccount(events.rsuSales);
+  const grants = byAccount(events.rsuGrants), sales = byAccount(events.rsuSales), positions = byAccount(events.stockPositions);
   return accounts.map((a) => ({
     ...a,
     rate_changes: changes.get(a.id) ?? [],
     prepayments: prepayments.get(a.id) ?? [],
     rsu_grants: grants.get(a.id) ?? [],
     rsu_sales: sales.get(a.id) ?? [],
+    stock_positions: positions.get(a.id) ?? [],
   }));
 }
 

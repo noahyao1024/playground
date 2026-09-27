@@ -1,5 +1,6 @@
 import { addMonths, dayInSG, todayInSG } from "./dates";
 import { isRsuPlan, parseRsuRules, rsuLiquidity, rsuStatus, type RsuGrant, type RsuPlan, type RsuRules, type RsuSale, type RsuStatus, type RsuTerms } from "./rsu";
+import { holdingsOf, minGainOf, type StockPosition } from "./stocks";
 
 /** Where an account is held. */
 export const REGIONS = ["CN", "SG", "OTHER"] as const;
@@ -132,6 +133,11 @@ export interface FinanceAccount {
    *  the loan lists, always there from the API. */
   rsu_grants?: RsuGrant[];
   rsu_sales?: RsuSale[];
+  /** For a brokerage: how far up, in percent, a position has to be to count
+   *  as liquid. Null: 10. */
+  liquid_min_gain?: number | null;
+  /** Its stock positions, by symbol; as the loan lists, always there from the API. */
+  stock_positions?: StockPosition[];
   archived_at: string | null;
   created_at: string;
 }
@@ -204,14 +210,21 @@ export function isLongTerm(a: FinanceAccount): boolean {
  *  so not liquid unless marked otherwise. */
 export const ILLIQUID_CATEGORIES: ReadonlySet<string> = new Set(["retirement", "property"]);
 
-/** The share of an asset that could be spent now, 0 to 1: as marked, or else
- *  -- for RSUs -- what a window within three months of `day` could buy of the
- *  shares held then, none without one, or else none of CPF / 公积金 or
- *  property, and all of anything else. */
-export function liquidityOf(a: FinanceAccount, day = todayInSG()): number {
+/** The share of an asset that could be spent now, 0 to 1: as marked; or else
+ *  as the balance counted says it was when recorded; or else -- for RSUs --
+ *  what a window within three months of `day` could buy of the shares held
+ *  then, none without one; or -- for stocks -- the share of their value in
+ *  positions up by more than the account's threshold; or else none of CPF /
+ *  公积金 or property, and all of anything else. */
+export function liquidityOf(a: FinanceAccount, day = todayInSG(), balance?: Pick<FinanceBalance, "liquid_share"> | null): number {
   if (a.liquidity == null) {
+    if (balance?.liquid_share != null && Number.isFinite(Number(balance.liquid_share))) return Math.min(1, Math.max(0, Number(balance.liquid_share)));
     const rsu = a.rsu_plan ? rsuLiquidityOn(a, day) : null;
     if (rsu != null) return rsu;
+    if (a.stock_positions?.length) {
+      const held = holdingsOf(a.stock_positions, minGainOf(a));
+      if (held.value > 0) return held.liquidity;
+    }
     return ILLIQUID_CATEGORIES.has(a.category) ? 0 : 1;
   }
   const share = Number(a.liquidity);
@@ -239,10 +252,10 @@ export function rsuTermsOf(a: FinanceAccount): RsuTerms | null {
 }
 
 /** How much of an account's balance a lens counts on `day`: 1 all of it, 0 none. */
-export function weightOf(a: FinanceAccount, lens: Lens = {}, day = todayInSG()): number {
+export function weightOf(a: FinanceAccount, lens: Lens = {}, day = todayInSG(), balance?: Pick<FinanceBalance, "liquid_share"> | null): number {
   if (lens.owner != null && (a.owner ?? "") !== lens.owner) return 0;
   if (lens.excludeLongTerm && isLongTerm(a)) return 0;
-  if (lens.liquidOnly && a.kind === "asset") return liquidityOf(a, day);
+  if (lens.liquidOnly && a.kind === "asset") return liquidityOf(a, day, balance);
   return 1;
 }
 
@@ -258,6 +271,10 @@ export interface FinanceBalance {
   sgd_rate: number;
   rate_date: string;
   note: string | null;
+  /** The share of it that was liquid when it was recorded, for an account
+   *  whose liquidity is worked out from what it holds then, as stocks are.
+   *  Null follows the account. */
+  liquid_share?: number | null;
   created_at: string;
   updated_at: string | null;
 }
@@ -329,7 +346,7 @@ function positionFrom(byId: Map<string, FinanceAccount>, latest: Iterable<Financ
   for (const balance of latest) {
     const account = byId.get(balance.account_id);
     if (!account || !countsOn(account, day)) continue;
-    const weight = weightOf(account, lens, day);
+    const weight = weightOf(account, lens, day, balance);
     if (weight === 0) continue;
     const value = scaled(valueOf(balance), weight);
     const sign = account.kind === "asset" ? 1 : -1;
@@ -871,6 +888,12 @@ export type AccountSummary = FinanceAccount & {
   loan: LoanStatus | null;
   /** For RSUs, where the shares stand today, and what the next window may buy. */
   rsu: RsuStatus | null;
+  /** For stocks, their value at the prices last fetched, in the account's
+   *  currency, and how much of it is liquid. */
+  stocks: {
+    positions: number; value: number; cost: number; gain: number | null; liquid_value: number; liquidity: number;
+    min_gain: number; unpriced: string[]; priced_at: string | null;
+  } | null;
 };
 
 /** Where things stand, worked out the way the page works it out -- for anything
@@ -913,9 +936,10 @@ export function summarize(accounts: FinanceAccount[], balances: FinanceBalance[]
     by_category: Object.fromEntries(Object.entries(latest?.byCategory ?? {}).map(([key, value]) => [key, rounded(value)])),
     accounts: sortAccounts(accounts).map((a) => {
       const b = last.get(a.id);
-      const weight = weightOf(a, lens, today);
+      const weight = weightOf(a, lens, today, b);
       const terms = loanTermsOf(a);
       const rsu = rsuTermsOf(a);
+      const held = a.stock_positions?.length ? holdingsOf(a.stock_positions, minGainOf(a)) : null;
       return {
         ...a,
         display_name: displayName(a),
@@ -934,6 +958,17 @@ export function summarize(accounts: FinanceAccount[], balances: FinanceBalance[]
           : null,
         loan: terms ? loanStatus(terms, today) : null,
         rsu: rsu ? rsuStatus(rsu, today) : null,
+        stocks: held && {
+          positions: held.holdings.length,
+          value: Math.round(held.value * 100) / 100,
+          cost: Math.round(held.cost * 100) / 100,
+          gain: held.gain,
+          liquid_value: Math.round(held.liquid_value * 100) / 100,
+          liquidity: held.liquidity,
+          min_gain: minGainOf(a),
+          unpriced: held.unpriced,
+          priced_at: a.stock_positions!.reduce<string | null>((t, p) => (p.priced_at && (!t || p.priced_at > t) ? p.priced_at : t), null),
+        },
       };
     }),
     history: history.map((p) => ({ day: p.day, ...roundedTotals(p) })),

@@ -284,6 +284,8 @@ describe.skipIf(!SERVER)("database", () => {
           `insert into finance_rsu_grants (account_id, grant_no, profile, tranches) values ('${ACCOUNT}', 'G1', 'standard', '[{"vests_on":"2026-01-01","shares":1}]')`,
           `select * from finance_rsu_sales`,
           `insert into finance_rsu_sales (account_id, window_cutoff, shares) values ('${ACCOUNT}', '2026-10-01', 1)`,
+          `select * from finance_stock_positions`,
+          `insert into finance_stock_positions (account_id, symbol, quantity, cost, currency) values ('${ACCOUNT}', 'AAPL', 1, 1, 'USD')`,
         ]) {
           expect((await failure(c, sql)).code, `${role}: ${sql}`).toBe("42501");
         }
@@ -318,6 +320,27 @@ describe.skipIf(!SERVER)("database", () => {
       // Deleting the account takes its grants and sales with it.
       await c.query(`delete from finance_accounts where id = $1`, [ACCOUNT]);
       expect((await c.query(`select (select count(*) from finance_rsu_grants)::int + (select count(*) from finance_rsu_sales)::int as n`)).rows[0].n).toBe(0);
+    });
+
+    it("holds a position a symbol, bought and priced sensibly, and a balance's liquid share as a share", async () => {
+      await account();
+      const position = (symbol: string, quantity = "10", cost = "100", currency = "USD", price = "null") =>
+        `insert into finance_stock_positions (account_id, symbol, quantity, cost, currency, price) values ('${ACCOUNT}', '${symbol}', ${quantity}, ${cost}, '${currency}', ${price})`;
+      await c.query(position("AAPL", "10", "100", "USD", "120.5"));
+      await c.query(position("0700.HK", "0.5", "0", "HKD"));
+      expect((await failure(c, position("AAPL"))).code).toBe("23505");
+      for (const bad of [position("aapl"), position(".HK"), position("BRK B"), position("X", "0"), position("Y", "1", "-1"), position("Z", "1", "1", "usd"), position("W", "1", "1", "USD", "0")]) {
+        expect((await failure(c, bad)).code, bad).toBe("23514");
+      }
+      expect((await failure(c, `update finance_accounts set liquid_min_gain = 20000 where id = $1`, [ACCOUNT])).code).toBe("23514");
+      await c.query(`update finance_accounts set liquid_min_gain = 12.5 where id = $1`, [ACCOUNT]);
+      const [b] = (await balance("2026-09-30")).rows;
+      expect((await failure(c, `update finance_balances set liquid_share = 1.5 where id = $1`, [b.id])).code).toBe("23514");
+      await c.query(`update finance_balances set liquid_share = 0.4 where id = $1`, [b.id]);
+      await c.query(`delete from finance_balances where id = $1`, [b.id]);
+      // Deleting the account takes its positions with it.
+      await c.query(`delete from finance_accounts where id = $1`, [ACCOUNT]);
+      expect((await c.query(`select count(*)::int as n from finance_stock_positions`)).rows[0].n).toBe(0);
     });
 
     it("pins a balance to its account's currency, and the account's currency to its balances", async () => {
