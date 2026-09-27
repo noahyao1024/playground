@@ -118,6 +118,10 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   took lint from zero errors to eight.
 - `.claude/hooks/session-start.sh` — runs `npm install` when a Claude Code on the web session
   starts, so the checks work there from the first command. A no-op on your machine.
+- `.mcp.json` — Supabase's MCP server for this project. A Claude Code on the web session
+  cannot sign in to it and reports at start that it needs authorizing: expected, and not
+  worth telling the owner. The owner's claude.ai Supabase connector (`mcp__Supabase__*`) is
+  set up and reaches the same project; use it there.
 - `/finance` and `/api/finance` — the owner's accounts and balances, answering only
   `FINANCE_OWNER` in `src/lib/access.ts`. `finance_accounts` and `finance_balances` are the one
   private corner of the database: RLS with no policy, privileges revoked from `anon` and
