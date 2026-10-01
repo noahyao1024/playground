@@ -5,7 +5,9 @@ Personal tools, deployed on Vercel.
 - **Split Bill / 分账** — tracks shared subscription costs among a handful of
   friends. Services are priced in SGD, USD or JPY and converted to CNY at the
   rate that held in the month being billed. Charges are settled from per-person
-  wallets.
+  wallets — automatically, oldest first, whenever the wallet holds enough: after
+  each monthly run, a new charge, a top-up. A person can pay from someone else's
+  wallet instead (`pays_from`), so a household shares one.
 - **SRE Machine Delivery** — server deliveries from order to deployment.
 - **Finance / 资产负债** — private to its owner. Accounts in China and Singapore,
   each kept in its own currency and recorded as a balance whenever the owner

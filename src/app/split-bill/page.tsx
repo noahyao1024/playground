@@ -25,6 +25,10 @@ import {
   settlePerson as apiSettlePerson,
   unsettleCharge as apiUnsettleCharge,
   walletBalance,
+  walletOf,
+  payersFrom,
+  walletChoices,
+  autoSettledText,
   addPaymentMethod as apiAddPaymentMethod,
   updatePaymentMethod as apiUpdatePaymentMethod,
   deletePaymentMethod as apiDeletePaymentMethod,
@@ -41,6 +45,7 @@ import {
   type CardDetails,
   type WalletKind,
   type Currency,
+  type AutoSettled,
 } from "@/lib/store";
 
 import { ALLOWED_EMAILS } from "@/lib/auth";
@@ -74,6 +79,22 @@ const DATE_COLUMNS = new Set(["date", "month"]);
 
 // Chosen in the service dropdown to bill something that has no service behind it.
 const ONE_OFF = "__one_off__";
+
+/** The "pays from" select's value for a person's own wallet: Base UI's select
+ *  wants a string, and no person's id is this. */
+const OWN_WALLET = "own";
+
+/** A write's success, with what it paid from the wallet on the way -- or the
+ *  failure to, as an error of its own: the write stood, the paying did not. */
+function toastWithAutoSettled(done: string, auto: AutoSettled | undefined, wallets?: string) {
+  if (auto && "error" in auto) {
+    toast.success(done);
+    toast.error(autoSettledText(auto, wallets));
+    return;
+  }
+  const paid = autoSettledText(auto, wallets);
+  toast.success(paid ? `${done}. ${paid}` : done);
+}
 
 const WALLET_KIND_LABELS: Record<WalletKind, string> = {
   topup: "Top-up (adds)",
@@ -651,9 +672,9 @@ export default function SubscriptionPage() {
       }
       const result = await res.json();
       const who = subscriberId ? data!.subscribers.find((p) => p.id === subscriberId)?.name ?? "" : "";
-      toast.success(result.generated > 0
+      toastWithAutoSettled(result.generated > 0
         ? `Generated ${result.generated} charge(s) for ${billMonth}${who ? ` \u2014 ${who}` : ""}`
-        : `No new charges for ${billMonth}${who ? ` \u2014 ${who}` : ""}`);
+        : `No new charges for ${billMonth}${who ? ` \u2014 ${who}` : ""}`, result.auto_settled, subscriberId ? undefined : "the wallets");
       await reload();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -778,7 +799,7 @@ export default function SubscriptionPage() {
     const month = date.slice(0, 7); // YYYY-MM
     const totalCny = Number((cost * exchangeRate).toFixed(2));
     try {
-      await apiAddCharge({
+      const added = await apiAddCharge({
         subscriber_id: subscriberId,
         service_id: oneOff ? null : serviceId,
         label: oneOff ? label.trim() : null,
@@ -792,7 +813,7 @@ export default function SubscriptionPage() {
       });
       setChargeForm(emptyChargeForm());
       setAddChargeOpen(false);
-      toast.success("Charge added");
+      toastWithAutoSettled("Charge added", added.auto_settled);
       await reload();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : JSON.stringify(err);
@@ -803,15 +824,15 @@ export default function SubscriptionPage() {
   function openSettle(charge: ChargeRecord) {
     if (!requireEdit()) return;
     setSettleFor(charge);
-    // Default to the person the charge belongs to; any wallet may pay it.
-    setSettleWallet(charge.subscriber_id);
+    // Default to the wallet the charge's person pays from; any wallet may pay it.
+    setSettleWallet(walletOf(data!.subscribers, charge.subscriber_id));
     setSettleNote("");
   }
 
   function openSettleAll(subscriberId: string) {
     if (!requireEdit()) return;
     setSettleAllFor(subscriberId);
-    setSettleWallet(subscriberId);
+    setSettleWallet(walletOf(data!.subscribers, subscriberId));
     setSettleNote("");
   }
 
@@ -864,7 +885,7 @@ export default function SubscriptionPage() {
       // The row is marked, not gone, so putting it back is a single update.
       toast.success("Charge removed", {
         action: { label: "Undo", onClick: async () => {
-          try { await apiRestoreCharge(id); await reload(); toast.success("Restored"); }
+          try { const r = await apiRestoreCharge(id); await reload(); toastWithAutoSettled("Restored", r.auto_settled); }
           catch (err: unknown) { toast.error(err instanceof Error ? err.message : "Could not restore"); }
         } },
         duration: 8000,
@@ -954,11 +975,12 @@ export default function SubscriptionPage() {
   // A service or person that history points at cannot be deleted — the database
   // refuses it, and deleting one used to take its charges down with it. Report
   // what holds it so the button can say why it is off.
-  function heldBy(subs: number, charges: number) {
-    if (subs + charges === 0) return null;
+  function heldBy(subs: number, charges: number, payers = 0) {
+    if (subs + charges + payers === 0) return null;
     const parts: string[] = [];
     if (subs) parts.push(`${subs} subscription${subs === 1 ? "" : "s"}`);
     if (charges) parts.push(`${charges} charge${charges === 1 ? "" : "s"}`);
+    if (payers) parts.push(`${payers} ${payers === 1 ? "person" : "people"} paying from this wallet`);
     return parts.join(" and ");
   }
 
@@ -973,6 +995,7 @@ export default function SubscriptionPage() {
     return heldBy(
       data!.subscriptions.filter((x) => x.subscriber_id === id).length,
       data!.charges.filter((c) => c.subscriber_id === id).length,
+      payersFrom(data!.subscribers, id).length,
     );
   }
 
@@ -1042,6 +1065,19 @@ export default function SubscriptionPage() {
     return data!.wallet_entries.filter((e) => e.subscriber_id === subscriberId);
   }
 
+  /** Whose wallet a person's charges come out of: null for their own. */
+  async function handleSetPaysFrom(personId: string, walletId: string | null) {
+    if (!requireEdit()) return;
+    const who = personLabel(personId) ?? "";
+    try {
+      const r = await apiUpdateSubscriber(personId, { pays_from: walletId });
+      toastWithAutoSettled(`${who} pays from ${walletId ? `${personLabel(walletId)}\u2019s wallet` : "their own wallet"}`, r.auto_settled);
+      await reload();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Could not change the wallet");
+    }
+  }
+
   async function handleAddWalletEntry(subscriberId: string) {
     if (!requireEdit()) return;
     const { amount, kind, note } = walletForm;
@@ -1050,10 +1086,10 @@ export default function SubscriptionPage() {
     // there is no way to post a top-up that takes money away.
     const signed = kind === "topup" ? Math.abs(amount) : -Math.abs(amount);
     try {
-      await apiAddWalletEntry({ subscriber_id: subscriberId, amount_cny: signed, kind, note: note.trim() || null });
+      const posted = await apiAddWalletEntry({ subscriber_id: subscriberId, amount_cny: signed, kind, note: note.trim() || null });
       setWalletForm({ amount: 0, kind: "topup", note: "" });
       setWalletOpen(null);
-      toast.success("Entry posted");
+      toastWithAutoSettled("Entry posted", posted.auto_settled);
       await reload();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to post entry");
@@ -1655,8 +1691,10 @@ export default function SubscriptionPage() {
                 const subs = data.subscriptions.filter((s) => s.subscriber_id === subscriber.id && s.active);
                 const unpaid = subscriberUnpaid(subscriber.id);
                 const paid = charges.filter((c) => c.paid).reduce((s, c) => s + Number(c.total_cny), 0);
-                const balance = walletBalance(data.wallet_entries, subscriber.id);
-                const ledger = walletEntriesFor(subscriber.id);
+                // The wallet their charges come out of, which may be someone else's.
+                const walletId = walletOf(data.subscribers, subscriber.id);
+                const balance = walletBalance(data.wallet_entries, walletId);
+                const ledger = walletEntriesFor(walletId);
                 return (
                   <div key={subscriber.id} className="rounded-2xl border bg-card">
                     <div className="flex flex-col gap-3 border-b px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:gap-2 sm:px-5">
@@ -1715,7 +1753,9 @@ export default function SubscriptionPage() {
                           >
                             <Money value={balance} size="lg" />
                             <span className="text-[11px] font-medium opacity-70">
-                              wallet{ledger.length ? ` (${ledger.length})` : ""}
+                              {walletId !== subscriber.id
+                                ? `${personLabel(walletId)}\u2019s wallet`
+                                : `wallet${ledger.length ? ` (${ledger.length})` : ""}`}
                             </span>
                           </button>
                         )}
@@ -2223,12 +2263,51 @@ export default function SubscriptionPage() {
           </DialogHeader>
           <div className="grid gap-4 pt-2">
             {walletOpen && (() => {
-              const bal = walletBalance(data.wallet_entries, walletOpen);
-              const rows = walletEntriesFor(walletOpen);
+              // The wallet this person's charges come out of. Shared, it is
+              // someone else's: its balance and ledger are shown, and what is
+              // posted here goes into it.
+              const walletId = walletOf(data.subscribers, walletOpen);
+              const shared = walletId !== walletOpen;
+              const bal = walletBalance(data.wallet_entries, walletId);
+              const rows = walletEntriesFor(walletId);
+              const ownLeft = shared ? walletBalance(data.wallet_entries, walletOpen) : 0;
+              const payers = payersFrom(data.subscribers, walletOpen);
+              const choices = walletChoices(data.subscribers, walletOpen);
+              const whose = (id: string) => `${personLabel(id)}\u2019s wallet`;
               return (
                 <>
+                  <div className="grid gap-1.5">
+                    <Label className="text-xs text-muted-foreground">Charges paid from</Label>
+                    <Select
+                      value={shared ? walletId : OWN_WALLET}
+                      disabled={!canEdit || payers.length > 0}
+                      onValueChange={(v) => handleSetPaysFrom(walletOpen, v === OWN_WALLET ? null : (v as string))}
+                    >
+                      <SelectTrigger className="w-full h-9">
+                        <SelectValue>{(v: string | null) => (!v || v === OWN_WALLET ? "Their own wallet" : whose(v))}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={OWN_WALLET}>Their own wallet</SelectItem>
+                        {choices.map((p) => (
+                          <SelectItem key={p.id} value={p.id}>
+                            {whose(p.id)} {"\u00b7"} {"\u00a5"}{walletBalance(data.wallet_entries, p.id).toFixed(2)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      {payers.length > 0
+                        ? `Also pays for ${payers.map((p) => p.name).join(", ")}, so it stays a wallet of its own.`
+                        : "A charge is paid from it as soon as it holds enough. Any wallet can still settle one by hand."}
+                    </p>
+                  </div>
+                  {shared && Math.abs(ownLeft) >= 0.005 && (
+                    <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                      {personLabel(walletOpen)}{"\u2019"}s own wallet still holds {"\u00a5"}{ownLeft.toFixed(2)}, unused while their charges come out of {whose(walletId)}.
+                    </p>
+                  )}
                   <div className="flex items-baseline justify-between rounded-md border bg-muted/50 px-3 py-2.5">
-                    <span className="text-xs text-muted-foreground">Balance</span>
+                    <span className="text-xs text-muted-foreground">{shared ? `Balance of ${whose(walletId)}` : "Balance"}</span>
                     <span className={`tabular-nums text-xl font-bold ${bal < 0 ? "text-amber-600 dark:text-amber-400" : ""}`}>
                       {"\u00a5 "}{bal.toFixed(2)}
                     </span>
@@ -2250,7 +2329,7 @@ export default function SubscriptionPage() {
                               {ch && (
                                 <div className="mt-0.5 truncate text-muted-foreground">
                                   {chargeName(ch, data.services)}{" "}<span className="tabular-nums opacity-70">{ch.period_start}</span>
-                                  {owedBy && owedBy.id !== walletOpen && (
+                                  {owedBy && owedBy.id !== walletId && (
                                     <span className="ml-1 text-amber-600 dark:text-amber-400">for {owedBy.name}</span>
                                   )}
                                 </div>
@@ -2296,7 +2375,7 @@ export default function SubscriptionPage() {
             </div>
             {!!walletForm.amount && walletOpen && (() => {
               const signed = walletForm.kind === "topup" ? Math.abs(walletForm.amount) : -Math.abs(walletForm.amount);
-              const before = walletBalance(data.wallet_entries, walletOpen);
+              const before = walletBalance(data.wallet_entries, walletOf(data.subscribers, walletOpen));
               return (
                 <div className="rounded-md border bg-muted/50 px-3 py-2.5 text-sm tabular-nums">
                   <span className="text-muted-foreground">{"\u00a5 "}{before.toFixed(2)} {signed > 0 ? "+" : "\u2212"} {Math.abs(signed).toFixed(2)} = </span>
@@ -2305,7 +2384,11 @@ export default function SubscriptionPage() {
               );
             })()}
             <p className="text-xs text-muted-foreground">Entries can{"\u2019"}t be edited or removed. To correct one, post another.</p>
-            <Button size="sm" onClick={() => walletOpen && handleAddWalletEntry(walletOpen)}>Post entry</Button>
+            <Button size="sm" onClick={() => walletOpen && handleAddWalletEntry(walletOf(data.subscribers, walletOpen))}>
+              {walletOpen && walletOf(data.subscribers, walletOpen) !== walletOpen
+                ? `Post to ${personLabel(walletOf(data.subscribers, walletOpen))}\u2019s wallet`
+                : "Post entry"}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

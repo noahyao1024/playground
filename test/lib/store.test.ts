@@ -132,3 +132,35 @@ describe("walletBalance", () => {
     expect(store.walletBalance(entries, "nobody")).toBe(0);
   });
 });
+
+describe("whose wallet pays", () => {
+  // Wal and Zed share Wal's wallet; Ann has a wallet of their own.
+  const people = [
+    { id: "wal", name: "Wal", pays_from: null },
+    { id: "zed", name: "Zed", pays_from: "wal" },
+    { id: "ann", name: "Ann" },
+  ];
+
+  it("is a person's own unless they pay from someone else's", () => {
+    expect(store.walletOf(people, "zed")).toBe("wal");
+    expect(store.walletOf(people, "wal")).toBe("wal");
+    expect(store.walletOf(people, "ann")).toBe("ann");
+    expect(store.walletOf(people, "unknown")).toBe("unknown");
+    expect(store.payersFrom(people, "wal").map((p) => p.name)).toEqual(["Zed"]);
+    expect(store.payersFrom(people, "ann")).toEqual([]);
+  });
+
+  it("offers only wallets of their own, one level deep, and none to a wallet others pay from", () => {
+    expect(store.walletChoices(people, "ann").map((p) => p.id)).toEqual(["wal"]);
+    expect(store.walletChoices(people, "zed").map((p) => p.id)).toEqual(["wal", "ann"]);
+    expect(store.walletChoices(people, "wal")).toEqual([]);
+  });
+
+  it("says what a write paid from the wallet, or why it could not, or nothing", () => {
+    expect(store.autoSettledText({ settled: 2, total: 106 })).toBe("2 charges, ¥106.00, paid from the wallet");
+    expect(store.autoSettledText({ settled: 1, total: 53.5 }, "the wallets")).toBe("1 charge, ¥53.50, paid from the wallets");
+    expect(store.autoSettledText({ settled: 0, total: 0 })).toBe("");
+    expect(store.autoSettledText(undefined)).toBe("");
+    expect(store.autoSettledText({ error: "boom" })).toBe("Paying from the wallet failed: boom");
+  });
+});

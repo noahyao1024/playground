@@ -8,6 +8,33 @@ export function getServerSupabase(): SupabaseClient | null {
   return createClient(url, key);
 }
 
+/** What auto-settling paid: how many charges, and how much in all. */
+export type AutoSettled = { settled: number; total: number };
+
+/** Pays what these people owe -- everyone's when none are named -- out of the
+ *  wallet each pays from, oldest first, every charge the balance still covers.
+ *  The work is auto_settle's, in the database, where the balance check and the
+ *  debit share the wallet's lock (20261001_auto_settle).
+ *
+ *  It follows a write that has already happened -- a bill, a charge, a top-up --
+ *  and that write stands whatever happens here, so a failure comes back as a
+ *  value for the caller to report rather than as a throw that would hide it. */
+export async function autoSettle(db: SupabaseClient, people?: string[]): Promise<AutoSettled | { error: string }> {
+  const { data, error } = await db.rpc("auto_settle", { p_people: people ?? null });
+  if (error) return { error: error.message };
+  const rows: Array<{ settled: number | string; total: number | string }> = Array.isArray(data) ? data : [];
+  return {
+    settled: rows.reduce((n, r) => n + Number(r.settled), 0),
+    total: Math.round(rows.reduce((n, r) => n + Number(r.total), 0) * 100) / 100,
+  };
+}
+
+/** "; 2 settled from wallets", or why none could be: the tail of a billing message. */
+export function autoSettledNote(result: AutoSettled | { error: string }): string {
+  if ("error" in result) return `; settling from wallets failed: ${result.error}`;
+  return result.settled ? `; ${result.settled} settled from wallets` : "";
+}
+
 /** Check if a subscription should be billed for a given month.
  *  Returns true if the start date falls within or before the billing month. */
 function shouldBillMonth(startDate: string, billingMonth: string): boolean {

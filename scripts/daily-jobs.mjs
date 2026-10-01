@@ -112,17 +112,23 @@ export function judgeDaily(answer) {
 }
 
 /** Whether billing did its work. A charge skipped for want of a rate fails the
- *  run: the next run fills it in, but after the 3rd's there is no next run. */
+ *  run: the next run fills it in, but after the 3rd's there is no next run. So
+ *  does failing to pay from the wallets what they cover, which would otherwise
+ *  sit unpaid until somebody noticed. */
 export function judgeBill(answer) {
   const { status, body } = answer;
   if (status === 401) return { ok: false, text: REFUSED };
   if (status !== 200) return { ok: false, text: `failed: ${failure(answer)}` };
   if (typeof body.generated !== "number") return { ok: false, text: `unexpected answer: HTTP ${status}, no count of charges` };
   const skipped = Array.isArray(body.skipped) ? body.skipped.length : 0;
-  const text = `${body.month}: ${body.generated} charge(s) generated`;
-  return skipped
-    ? { ok: false, text: `${text}, ${skipped} skipped with no rate for their currency` }
-    : { ok: true, text };
+  // The count settled from wallets, never the amount: the log is public.
+  const auto = body.auto_settled;
+  const settled = typeof auto?.settled === "number" ? `, ${auto.settled} settled from wallets` : "";
+  const text = `${body.month}: ${body.generated} charge(s) generated${settled}`;
+  if (skipped) return { ok: false, text: `${text}, ${skipped} skipped with no rate for their currency` };
+  // Billed, but what the wallets cover was left unpaid; the owner should hear.
+  if (typeof auto?.error === "string") return { ok: false, text: `${text}; settling from wallets failed: ${auto.error}` };
+  return { ok: true, text };
 }
 
 /** Whether the stock accounts were valued: every account holding positions
