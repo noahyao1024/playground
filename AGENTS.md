@@ -122,6 +122,15 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   cannot sign in to it and reports at start that it needs authorizing: expected, and not
   worth telling the owner. The owner's claude.ai Supabase connector (`mcp__Supabase__*`) is
   set up and reaches the same project; use it there.
+- The split bill's wallets: a charge is paid by a `charge` entry in the append-only
+  `wallet_entries`, through the settle functions, never by setting `paid` (`/api/data`
+  refuses it). `auto_settle` (`src/lib/billing.ts` calls it) pays every live unpaid charge
+  a wallet covers, oldest first, passing over one it cannot; the app runs it after
+  billing, a new charge, a top-up, a restored charge and a change of `pays_from`, and a
+  failure there is reported, never thrown, as the write before it stands. A person's
+  wallet is `coalesce(pays_from, id)`, one level deep, which a trigger holds. Reversing
+  a settlement does not stop the next run paying the charge again while the wallet
+  covers it; to stop paying a charge, delete it.
 - `/finance` and `/api/finance` — the owner's accounts and balances, answering only
   `FINANCE_OWNER` in `src/lib/access.ts`. `finance_accounts` and `finance_balances` are the one
   private corner of the database: RLS with no policy, privileges revoked from `anon` and

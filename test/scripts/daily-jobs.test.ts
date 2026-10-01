@@ -128,6 +128,18 @@ describe("judging billing", () => {
       .toEqual({ ok: false, text: "2026-10: 2 charge(s) generated, 1 skipped with no rate for their currency" });
   });
 
+  it("says how many were paid from wallets, never how much", () => {
+    const body = { ...billed, auto_settled: { settled: 3, total: 512.34 } };
+    expect(judgeBill({ status: 200, body })).toEqual({ ok: true, text: "2026-10: 2 charge(s) generated, 3 settled from wallets" });
+    expect(judgeBill({ status: 200, body }).text).not.toContain("512");
+  });
+
+  it("fails when what the wallets cover could not be paid from them", () => {
+    const body = { ...billed, auto_settled: { error: "function auto_settle does not exist" } };
+    expect(judgeBill({ status: 200, body }))
+      .toEqual({ ok: false, text: "2026-10: 2 charge(s) generated; settling from wallets failed: function auto_settle does not exist" });
+  });
+
   it("fails on a refusal, an error, or an answer without a count", () => {
     expect(judgeBill({ status: 401, body: {} }).text).toContain("refused this run");
     expect(judgeBill({ status: 500, body: { error: "boom" } })).toEqual({ ok: false, text: "failed: HTTP 500 -- boom" });

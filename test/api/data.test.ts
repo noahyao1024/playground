@@ -14,11 +14,17 @@ const { GET, POST } = await import("@/app/api/data/route");
 const charge = { subscriber_id: "a", service_id: "s", period_start: "2026-08", period_end: "2026-08", months: 1, monthly_cost: 10, currency: "SGD", exchange_rate: 5.3, total_cny: 53 };
 
 let db: StandIn;
+/** Whom each auto_settle call was for, and what the next one answers. */
+let settledFor: unknown[];
+let settleReply: { status: number; body: unknown };
 beforeEach(async () => {
   session.current = { user: { email: "hi@noahyao.me" } };
+  settledFor = [];
+  settleReply = { status: 200, body: [{ wallet: "a", settled: 1, total: 53, balance_left: 7 }] };
   db = await startPostgrest(
     {
       charges: [{ id: "c1", ...charge, paid: false, deleted_at: null }],
+      subscribers: [{ id: "a", name: "Ann", pays_from: null }, { id: "w", name: "Wal", pays_from: null }, { id: "z", name: "Zed", pays_from: "w" }],
       payment_methods: [
         { id: "pm1", is_default: true, cardholder_name: "Ann Lee", expiry_month: 4, expiry_year: 2031, created_at: "2026-01-01" },
         { id: "pm2", is_default: false, cardholder_name: "Wal Tan", expiry_month: 9, expiry_year: 2029, created_at: "2026-02-01" },
@@ -27,11 +33,15 @@ beforeEach(async () => {
       subscriptions: [{ id: "sub1", service_id: "s-used", subscriber_id: "a" }],
     },
     {
-      // A second live charge for a service-month trips the unique index.
+      // A second live charge for a service-month trips the unique index, and
+      // Wal, whom Zed pays from, cannot pay from another wallet.
       intercept: (req) =>
         req.method === "POST" && req.table === "charges" && (req.body as Row).period_start === "2026-09"
           ? { status: 409, body: { code: "23505", message: 'duplicate key value violates unique constraint "charges_one_per_service_month"' } }
-          : undefined,
+          : req.method === "PATCH" && req.table === "subscribers" && (req.body as Row).pays_from === "a"
+            ? { status: 400, body: { code: "23514", message: "Others pay from Wal's wallet, so it cannot pay from another" } }
+            : undefined,
+      rpc: { auto_settle: (args) => { settledFor.push(args.p_people); return settleReply; } },
     },
   );
   vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", db.url);
@@ -159,5 +169,62 @@ describe("POST /api/data", () => {
     expect(used.body.error).toMatch(/^Still in use by 1 subscription\./);
     expect((await post({ action: "delete", table: "services", id: "s-free" })).status).toBe(200);
     expect(db.tables.services.map((s) => s.id)).toEqual(["s-used"]);
+  });
+});
+
+describe("POST /api/data and the wallets", () => {
+  it("pays a new charge from the wallet when the wallet covers it, and says so", async () => {
+    const { status, body } = await post({ action: "insert", table: "charges", data: { ...charge, paid: false } });
+    expect(status).toBe(200);
+    expect(body.auto_settled).toEqual({ settled: 1, total: 53 });
+    expect(settledFor).toEqual([["a"]]);
+  });
+
+  it("pays what a top-up now can, and nothing for an entry taking money out", async () => {
+    const topUp = await post({ action: "insert", table: "wallet_entries", data: { subscriber_id: "a", amount_cny: 100, kind: "topup" } });
+    expect(topUp.body.auto_settled).toEqual({ settled: 1, total: 53 });
+    const out = await post({ action: "insert", table: "wallet_entries", data: { subscriber_id: "a", amount_cny: -5, kind: "adjustment" } });
+    expect(out.status).toBe(200);
+    expect(out.body.auto_settled).toBeUndefined();
+    expect(settledFor).toEqual([["a"]]);
+  });
+
+  it("pays from the wallet a person is moved to, and takes only an id or null for it", async () => {
+    const moved = await post({ action: "update", table: "subscribers", id: "a", updates: { pays_from: "w" } });
+    expect(moved.body).toEqual({ ok: true, auto_settled: { settled: 1, total: 53 } });
+    expect(db.tables.subscribers.find((p) => p.id === "a")?.pays_from).toBe("w");
+    expect((await post({ action: "update", table: "subscribers", id: "a", updates: { pays_from: null } })).status).toBe(200);
+    expect((await post({ action: "update", table: "subscribers", id: "a", updates: { pays_from: 7 } })).status).toBe(400);
+    // A rename settles nothing.
+    expect((await post({ action: "update", table: "subscribers", id: "a", updates: { name: "Annie" } })).body).toEqual({ ok: true });
+    expect(settledFor).toEqual([["a"], ["a"]]);
+  });
+
+  it("says in words why a wallet cannot pay from another", async () => {
+    const { status, body } = await post({ action: "update", table: "subscribers", id: "w", updates: { pays_from: "a" } });
+    expect(status).toBe(409);
+    expect(body.error).toBe("Others pay from Wal's wallet, so it cannot pay from another");
+  });
+
+  it("pays a charge brought back from deleted, and not one being deleted", async () => {
+    expect((await post({ action: "update", table: "charges", id: "c1", updates: { deleted_at: "2026-10-01T00:00:00Z" } })).body).toEqual({ ok: true });
+    const back = await post({ action: "update", table: "charges", id: "c1", updates: { deleted_at: null } });
+    expect(back.body).toEqual({ ok: true, auto_settled: { settled: 1, total: 53 } });
+    expect(settledFor).toEqual([["a"]]);
+  });
+
+  it("keeps the write and reports the failure when paying from the wallet fails", async () => {
+    settleReply = { status: 404, body: { message: "Could not find the function public.auto_settle(p_people)" } };
+    const { status, body } = await post({ action: "insert", table: "charges", data: { ...charge, paid: false } });
+    expect(status).toBe(200);
+    expect(body.auto_settled).toEqual({ error: "Could not find the function public.auto_settle(p_people)" });
+    expect(db.tables.charges).toHaveLength(2);
+  });
+
+  it("refuses to delete a person others pay from, and says who is in the way", async () => {
+    const { status, body } = await post({ action: "delete", table: "subscribers", id: "w" });
+    expect(status).toBe(409);
+    expect(body.error).toMatch(/^Still in use by 1 person paying from this wallet\./);
+    expect((await post({ action: "delete", table: "subscribers", id: "z" })).status).toBe(200);
   });
 });

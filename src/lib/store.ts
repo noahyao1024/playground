@@ -35,6 +35,9 @@ export interface Service {
 export interface Subscriber {
   id: string;
   name: string;
+  /** Whose wallet this person's charges come out of, when not their own. One
+   *  level deep: nobody pays from the wallet of someone who pays from another. */
+  pays_from?: string | null;
 }
 
 export interface Subscription {
@@ -322,14 +325,14 @@ export async function addSubscriber(name: string) {
   return await serverWrite("insert", "subscribers", { data: { name } }) as Subscriber;
 }
 
-export async function updateSubscriber(id: string, updates: Partial<Subscriber>) {
+export async function updateSubscriber(id: string, updates: Partial<Subscriber>): Promise<{ auto_settled?: AutoSettled }> {
   if (!supabase) {
     const data = readLocal();
     data.subscribers = data.subscribers.map((s) => (s.id === id ? { ...s, ...updates } : s));
     writeLocal(data);
-    return;
+    return {};
   }
-  await serverWrite("update", "subscribers", { id, updates });
+  return await serverWrite("update", "subscribers", { id, updates });
 }
 
 export async function deleteSubscriber(id: string) {
@@ -377,7 +380,41 @@ export async function deleteSubscription(id: string) {
 
 // ─── Wallet ──────────────────────────────────────────────────────────
 
-export async function addWalletEntry(entry: Omit<WalletEntry, "id" | "created_at">) {
+/** What a write paid from the wallets on the way (see auto_settle): a new charge
+ *  the wallet covers, what a top-up can now pay, a person moved to a wallet with
+ *  money in it. Or why it could not, the write itself standing either way. */
+export type AutoSettled = { settled: number; total: number } | { error: string };
+
+/** The wallet a person's charges come out of: their own, unless they pay from
+ *  someone else's. */
+export function walletOf(subscribers: Subscriber[], id: string): string {
+  return subscribers.find((s) => s.id === id)?.pays_from ?? id;
+}
+
+/** Everyone else whose charges come out of this person's wallet. */
+export function payersFrom(subscribers: Subscriber[], walletId: string): Subscriber[] {
+  return subscribers.filter((s) => s.id !== walletId && s.pays_from === walletId);
+}
+
+/** The wallets a person could pay from instead of their own: anyone else's that
+ *  is a wallet in its own right. None while others pay from this person's --
+ *  one level deep, as the database holds it. */
+export function walletChoices(subscribers: Subscriber[], id: string): Subscriber[] {
+  if (payersFrom(subscribers, id).length) return [];
+  return subscribers.filter((s) => s.id !== id && !s.pays_from);
+}
+
+/** A toast's tail: "2 charges, ¥106.00, paid from the wallet", or what went
+ *  wrong, or nothing when nothing was due. `wallets` names where from, for a
+ *  run that paid from more than one. */
+export function autoSettledText(result: AutoSettled | undefined, wallets = "the wallet"): string {
+  if (!result) return "";
+  if ("error" in result) return `Paying from ${wallets} failed: ${result.error}`;
+  if (!result.settled) return "";
+  return `${result.settled} charge${result.settled === 1 ? "" : "s"}, \u00a5${result.total.toFixed(2)}, paid from ${wallets}`;
+}
+
+export async function addWalletEntry(entry: Omit<WalletEntry, "id" | "created_at">): Promise<WalletEntry & { auto_settled?: AutoSettled }> {
   if (!supabase) {
     const data = readLocal();
     const created: WalletEntry = { id: localId(), ...entry };
@@ -385,7 +422,7 @@ export async function addWalletEntry(entry: Omit<WalletEntry, "id" | "created_at
     writeLocal(data);
     return created;
   }
-  return await serverWrite("insert", "wallet_entries", { data: entry }) as WalletEntry;
+  return await serverWrite("insert", "wallet_entries", { data: entry }) as WalletEntry & { auto_settled?: AutoSettled };
 }
 
 /** Pay a charge out of someone's wallet — not necessarily the charge's own
@@ -436,7 +473,7 @@ export function walletBalance(entries: WalletEntry[], subscriberId: string): num
 
 // ─── Charges ─────────────────────────────────────────────────────────
 
-export async function addCharge(charge: Omit<ChargeRecord, "id">) {
+export async function addCharge(charge: Omit<ChargeRecord, "id">): Promise<ChargeRecord & { auto_settled?: AutoSettled }> {
   if (!supabase) {
     const data = readLocal();
     const newCharge: ChargeRecord = { id: localId(), ...charge };
@@ -444,7 +481,7 @@ export async function addCharge(charge: Omit<ChargeRecord, "id">) {
     writeLocal(data);
     return newCharge;
   }
-  return await serverWrite("insert", "charges", { data: charge }) as ChargeRecord;
+  return await serverWrite("insert", "charges", { data: charge }) as ChargeRecord & { auto_settled?: AutoSettled };
 }
 
 export async function updateCharge(id: string, updates: Partial<ChargeRecord>) {
@@ -469,9 +506,9 @@ export async function deleteCharge(id: string) {
   await serverWrite("update", "charges", { id, updates: { deleted_at: new Date().toISOString() } });
 }
 
-export async function restoreCharge(id: string) {
-  if (!supabase) return;
-  await serverWrite("update", "charges", { id, updates: { deleted_at: null } });
+export async function restoreCharge(id: string): Promise<{ auto_settled?: AutoSettled }> {
+  if (!supabase) return {};
+  return await serverWrite("update", "charges", { id, updates: { deleted_at: null } });
 }
 
 // ─── Payment Methods ──────────────────────────────────────────────────

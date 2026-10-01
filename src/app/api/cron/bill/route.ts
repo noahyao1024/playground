@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { monthInSG } from "@/lib/dates";
-import { getServerSupabase, generateChargesForMonth, monthlyRates } from "@/lib/billing";
+import { autoSettle, autoSettledNote, getServerSupabase, generateChargesForMonth, monthlyRates } from "@/lib/billing";
 import { cronRefusal } from "@/lib/cron";
 
 /** Bills the month. Called on the 1st to 3rd by Vercel Cron (vercel.json) and by
@@ -27,11 +27,17 @@ export async function GET(req: NextRequest) {
 
   try {
     const result = await generateChargesForMonth(supabase, month, ratesFor);
+    // Then pay what the wallets cover: this month's new charges, and anything
+    // owed from before that a top-up since has made affordable.
+    const autoSettled = await autoSettle(supabase);
     // A run that skipped everything would otherwise read as a clean success.
     const note = result.skipped.length
       ? ` (skipped ${result.skipped.length} with no rate for their currency)`
       : "";
-    return NextResponse.json({ message: `Generated ${result.generated} charge(s)${note}`, month, ...result });
+    return NextResponse.json({
+      message: `Generated ${result.generated} charge(s)${note}${autoSettledNote(autoSettled)}`,
+      month, ...result, auto_settled: autoSettled,
+    });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null && "message" in err ? (err as { message: string }).message : JSON.stringify(err);
     return NextResponse.json({ error: msg }, { status: 500 });

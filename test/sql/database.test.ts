@@ -53,6 +53,28 @@ async function seed(c: pg.Client, wallet = 100) {
   );
 }
 
+const Z = "00000000-0000-0000-0000-00000000000e"; // may pay from W's wallet
+
+/** Ann, Wal and Zed, and a service, with no money and nothing owed. */
+async function people(c: pg.Client) {
+  await c.query(`insert into subscribers (id, name) values ($1, 'Ann'), ($2, 'Wal'), ($3, 'Zed')`, [A, W, Z]);
+  await c.query(`insert into services (id, name, monthly_cost, currency) values ($1, 'Svc', 10, 'SGD')`, [SVC]);
+}
+const topUp = (c: pg.Client, who: string, amount: number) =>
+  c.query(`insert into wallet_entries (subscriber_id, amount_cny, kind) values ($1, $2, 'topup')`, [who, amount]);
+/** An unpaid one-off charge for `who` in `month`, and its id. */
+async function charge(c: pg.Client, who: string, month: string, amount: number, { deleted = false } = {}): Promise<string> {
+  return (await c.query(
+    `insert into charges (subscriber_id, service_id, label, period_start, period_end, monthly_cost, currency, exchange_rate, total_cny, deleted_at)
+     values ($1, null, 'once', $2, $2, $3, 'CNY', 1, $3, case when $4 then now() end) returning id`,
+    [who, month, amount, deleted],
+  )).rows[0].id;
+}
+const paidOf = async (c: pg.Client, ids: string[]) => {
+  const { rows } = await c.query(`select id, paid from charges where id = any($1::uuid[])`, [ids]);
+  return ids.map((id) => rows.find((r) => r.id === id)?.paid);
+};
+
 const balance = async (c: pg.Client, who = W) =>
   Number((await c.query(`select coalesce(sum(amount_cny), 0) as b from wallet_entries where subscriber_id = $1`, [who])).rows[0].b);
 const paid = async (c: pg.Client) =>
@@ -135,6 +157,94 @@ describe.skipIf(!SERVER)("database", () => {
       expect((await paid(c))[LIVE]).toBe(false);
       const kinds = (await c.query(`select kind from wallet_entries order by created_at, kind`)).rows.map((r) => r.kind);
       expect(kinds.sort()).toEqual(["adjustment", "charge", "topup"]);
+    });
+  });
+
+  describe("auto_settle", () => {
+    it("pays a person's charges from their own wallet, oldest first, each one the balance still covers", async () => {
+      await people(c);
+      await topUp(c, A, 60);
+      // Written newest first, so the order paid is the months', not the rows'.
+      const september = await charge(c, A, "2026-09", 20);
+      const august = await charge(c, A, "2026-08", 30);
+      const july = await charge(c, A, "2026-07", 40);
+      const gone = await charge(c, A, "2026-06", 10, { deleted: true });
+      const free = await charge(c, A, "2026-05", 0);
+
+      const rows = (await c.query(`select * from auto_settle(array[$1]::uuid[])`, [A])).rows;
+      // July's 40 first; August's 30 does not fit in the 20 left; September's 20 does.
+      expect(rows.map((r) => [r.wallet, r.settled, Number(r.total), Number(r.balance_left)])).toEqual([[A, 2, 60, 0]]);
+      expect(await paidOf(c, [july, august, september, gone, free])).toEqual([true, false, true, false, false]);
+      expect(await balance(c, A)).toBe(0);
+      const entries = (await c.query(`select charge_id, amount_cny, kind, note from wallet_entries where kind = 'charge' order by amount_cny`)).rows;
+      expect(entries.map((e) => [e.charge_id, Number(e.amount_cny), e.note])).toEqual([[july, -40, "Auto-settled"], [september, -20, "Auto-settled"]]);
+      // The touch trigger stamps when it was paid, as for any settlement.
+      expect((await c.query(`select paid_at from charges where id = $1`, [july])).rows[0].paid_at).not.toBeNull();
+    });
+
+    it("pays from the wallet a person pays from, for everyone sharing it, and leaves their own wallet alone", async () => {
+      await people(c);
+      await c.query(`update subscribers set pays_from = $1 where id = $2`, [W, Z]);
+      await topUp(c, W, 100);
+      await topUp(c, Z, 40);
+      const theirs = await charge(c, Z, "2026-08", 50);
+      const mine = await charge(c, W, "2026-09", 30);
+
+      // Asking for Zed settles the whole wallet Zed pays from, Wal's own charge too.
+      const rows = (await c.query(`select * from auto_settle(array[$1]::uuid[])`, [Z])).rows;
+      expect(rows.map((r) => [r.wallet, r.settled, Number(r.total), Number(r.balance_left)])).toEqual([[W, 2, 80, 20]]);
+      expect(await paidOf(c, [theirs, mine])).toEqual([true, true]);
+      expect([await balance(c, W), await balance(c, Z)]).toEqual([20, 40]);
+    });
+
+    it("settles every wallet when given nobody in particular, and nothing more the second time", async () => {
+      await people(c);
+      await topUp(c, A, 30);
+      await topUp(c, W, 30);
+      await charge(c, A, "2026-09", 30);
+      await charge(c, W, "2026-09", 25);
+      await charge(c, W, "2026-10", 25);
+
+      const first = (await c.query(`select * from auto_settle()`)).rows;
+      expect(first.map((r) => [r.wallet, r.settled]).sort()).toEqual([[A, 1], [W, 1]].sort());
+      expect((await c.query(`select * from auto_settle()`)).rows).toEqual([]);
+      expect([await balance(c, A), await balance(c, W)]).toEqual([0, 5]);
+    });
+
+    it("posts nothing for a wallet that covers none of it", async () => {
+      await people(c);
+      await topUp(c, A, 10);
+      const owed = await charge(c, A, "2026-09", 30);
+      expect((await c.query(`select * from auto_settle(array[$1]::uuid[])`, [A])).rows).toEqual([]);
+      expect(await paidOf(c, [owed])).toEqual([false]);
+      expect((await c.query(`select count(*)::int as n from wallet_entries`)).rows[0].n).toBe(1);
+    });
+
+    it("is undone like any settlement, and pays the charge again when asked again", async () => {
+      await people(c);
+      await topUp(c, A, 30);
+      const owed = await charge(c, A, "2026-09", 30);
+      await c.query(`select * from auto_settle(array[$1]::uuid[])`, [A]);
+      expect(Number((await c.query(`select unsettle_charge($1) as left`, [owed])).rows[0].left)).toBe(30);
+      expect(await paidOf(c, [owed])).toEqual([false]);
+      expect((await c.query(`select * from auto_settle(array[$1]::uuid[])`, [A])).rows).toHaveLength(1);
+      expect(await balance(c, A)).toBe(0);
+    });
+
+    it("keeps pays_from one wallet deep, and never pointing at the person themselves", async () => {
+      await people(c);
+      await c.query(`update subscribers set pays_from = $1 where id = $2`, [W, Z]);
+      const deeper = await failure(c, `update subscribers set pays_from = $1 where id = $2`, [Z, A]);
+      expect([deeper.code, deeper.message]).toEqual(["23514", "Zed pays from another wallet, so nobody can pay from theirs"]);
+      const payer = await failure(c, `update subscribers set pays_from = $1 where id = $2`, [A, W]);
+      expect([payer.code, payer.message]).toEqual(["23514", "Others pay from Wal's wallet, so it cannot pay from another"]);
+      const self = await failure(c, `update subscribers set pays_from = $1 where id = $1`, [A]);
+      expect(self.code).toBe("23514");
+      // Back to their own wallet is always allowed, and then Wal may pay from another.
+      await c.query(`update subscribers set pays_from = null where id = $1`, [Z]);
+      await c.query(`update subscribers set pays_from = $1 where id = $2`, [A, W]);
+      // A wallet others pay from cannot be deleted from under them.
+      expect((await failure(c, `delete from subscribers where id = $1`, [A])).code).toBe("23503");
     });
   });
 
@@ -589,6 +699,36 @@ describe.skipIf(!SERVER)("settle_person under a concurrent write", () => {
       expect(await balance(first)).toBe(20);
       const late = (await first.query(`select paid from charges where period_start = '2026-09'`)).rows[0];
       expect(late.paid).toBe(false);
+    });
+  });
+});
+
+describe.skipIf(!SERVER)("auto_settle against a settlement from the same wallet", () => {
+  it("holds the wallet while it pays, so a settlement from it waits and finds what it left", async () => {
+    await committing(async (first, second) => {
+      await people(first);
+      await topUp(first, A, 30);
+      await charge(first, A, "2026-09", 30);
+      const walsCharge = await charge(first, W, "2026-09", 30);
+
+      // The deployed auto_settle, with a pause before it reads the balance: the
+      // window in which someone could settle from the same wallet.
+      const def: string = (await first.query(`select pg_get_functiondef('auto_settle'::regproc) as d`)).rows[0].d;
+      const slow = def
+        .replace("public.auto_settle(", "public.auto_settle_slow(")
+        .replace(/\n  foreach v_wallet in array v_wallets loop\n/, "\n  perform pg_sleep(1);\n  foreach v_wallet in array v_wallets loop\n");
+      expect(slow).toContain("pg_sleep");
+      await first.query(slow);
+
+      const running = first.query(`select * from auto_settle_slow(array[$1]::uuid[])`, [A]);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      // Wal's charge, paid from Ann's wallet meanwhile. Reading the balance before
+      // the run is done would see 30 and pay it, and the run would pay its own
+      // 30 from the same 30.
+      const meanwhile = await second.query(`select settle_charge($1, $2)`, [walsCharge, A]).then(() => "paid", (e: Error) => e.message);
+      expect((await running).rows.map((r) => r.settled)).toEqual([1]);
+      expect(meanwhile).toBe("Not enough in the wallet: 0.00 available, 30.00 needed");
+      expect(await balance(first, A)).toBe(0);
     });
   });
 });

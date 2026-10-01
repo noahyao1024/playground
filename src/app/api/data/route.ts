@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, isAllowedEmail } from "@/lib/auth";
-import { getServerSupabase } from "@/lib/billing";
+import { autoSettle, getServerSupabase } from "@/lib/billing";
 
 // What has to be empty before a row may be deleted. payment_methods is absent on
 // purpose: its foreign keys are ON DELETE SET NULL, so removing a card unlinks it
 // instead of destroying anything.
-const DELETE_GUARDS: Record<string, Array<{ table: string; column: string; label: string }>> = {
+const DELETE_GUARDS: Record<string, Array<{ table: string; column: string; label: string; labels?: string }>> = {
   services: [
     { table: "subscriptions", column: "service_id", label: "subscription" },
     { table: "charges", column: "service_id", label: "charge" },
@@ -13,6 +13,7 @@ const DELETE_GUARDS: Record<string, Array<{ table: string; column: string; label
   subscribers: [
     { table: "subscriptions", column: "subscriber_id", label: "subscription" },
     { table: "charges", column: "subscriber_id", label: "charge" },
+    { table: "subscribers", column: "pays_from", label: "person paying from this wallet", labels: "people paying from this wallet" },
   ],
 };
 
@@ -68,6 +69,12 @@ export async function POST(req: NextRequest) {
         }
         const { data: result, error } = await supabase.from(table).insert(data).select().single();
         if (error) throw error;
+        // A charge is paid from the wallet when the wallet holds enough, and a
+        // top-up pays what it now can. The row stands either way; auto_settled
+        // says what came of it.
+        if (table === "charges" || (table === "wallet_entries" && Number(result.amount_cny) > 0)) {
+          return NextResponse.json({ ...result, auto_settled: await autoSettle(supabase, [result.subscriber_id]) });
+        }
         return NextResponse.json(result);
       }
       case "update": {
@@ -96,8 +103,20 @@ export async function POST(req: NextRequest) {
           if (error) throw error;
           return NextResponse.json({ ok: true });
         }
+        if (table === "subscribers" && updates && "pays_from" in updates && updates.pays_from !== null && typeof updates.pays_from !== "string") {
+          return NextResponse.json({ error: "pays_from is a person's id, or null for their own wallet" }, { status: 400 });
+        }
         const { error } = await supabase.from(table).update(updates).eq("id", id);
         if (error) throw error;
+        // Paying from another wallet, or a deleted charge back in place, may
+        // leave something a wallet can pay now.
+        if (table === "subscribers" && updates && "pays_from" in updates) {
+          return NextResponse.json({ ok: true, auto_settled: await autoSettle(supabase, [id]) });
+        }
+        if (table === "charges" && updates && "deleted_at" in updates && updates.deleted_at === null) {
+          const { data: restored } = await supabase.from("charges").select("subscriber_id").eq("id", id).maybeSingle();
+          if (restored) return NextResponse.json({ ok: true, auto_settled: await autoSettle(supabase, [restored.subscriber_id]) });
+        }
         return NextResponse.json({ ok: true });
       }
       case "delete": {
@@ -116,18 +135,18 @@ export async function POST(req: NextRequest) {
         const guard = DELETE_GUARDS[table];
         if (guard) {
           const counts = await Promise.all(
-            guard.map(async ({ table: child, column, label }) => {
+            guard.map(async ({ table: child, column, label, labels }) => {
               const { count, error } = await supabase
                 .from(child)
                 .select("id", { count: "exact", head: true })
                 .eq(column, id);
               if (error) throw error;
-              return { label, count: count ?? 0 };
+              return { label, labels: labels ?? `${label}s`, count: count ?? 0 };
             }),
           );
           const used = counts.filter((c) => c.count > 0);
           if (used.length > 0) {
-            const detail = used.map((c) => `${c.count} ${c.label}${c.count === 1 ? "" : "s"}`).join(" and ");
+            const detail = used.map((c) => `${c.count} ${c.count === 1 ? c.label : c.labels}`).join(" and ");
             return NextResponse.json(
               { error: `Still in use by ${detail}. Delete those first, or leave this in place — the history needs it.` },
               { status: 409 },
@@ -152,6 +171,11 @@ export async function POST(req: NextRequest) {
         { error: "That person already has a charge for this service in that month." },
         { status: 409 },
       );
+    }
+    // A wallet is paid from one level deep (20261001_auto_settle); the trigger's
+    // words name who is in the way.
+    if (code === "23514" && table === "subscribers") {
+      return NextResponse.json({ error: msg }, { status: 409 });
     }
     if (code === "23505" && msg.includes("payment_methods_one_default")) {
       return NextResponse.json({ error: "Another card is already the default." }, { status: 409 });
