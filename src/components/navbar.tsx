@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
-import { Moon, Sun, LogOut, Wallet } from "lucide-react";
+import { Moon, Sun, LogOut, Wallet, House } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useSession, signOut } from "next-auth/react";
 import { Button } from "@/components/ui/button";
@@ -25,9 +25,9 @@ export function Navbar() {
   const { theme, setTheme } = useTheme();
   const { data: session } = useSession();
 
-  // /finance is named for its owner only: to anyone else it is a missing page,
-  // and the breadcrumb would give it away.
-  const names = isFinanceOwner(session?.user?.email) ? { ...pageNames, "/finance": "Finance" } : pageNames;
+  // /finance and /housing are named for their owner only: to anyone else they
+  // are missing pages, and the breadcrumb would give them away.
+  const names = isFinanceOwner(session?.user?.email) ? { ...pageNames, "/finance": "Finance", "/housing": "Housing" } : pageNames;
   const currentPage = Object.entries(names).find(([path]) =>
     pathname.startsWith(path)
   );
@@ -86,10 +86,16 @@ export function Navbar() {
                 </div>
                 {/* Only the owner is shown the way in; the page and its API check again. */}
                 {isFinanceOwner(session.user.email) && (
-                  <DropdownMenuItem render={<Link href="/finance" />} className="gap-2">
-                    <Wallet className="h-3.5 w-3.5" />
-                    Finance
-                  </DropdownMenuItem>
+                  <>
+                    <DropdownMenuItem render={<Link href="/finance" />} className="gap-2">
+                      <Wallet className="h-3.5 w-3.5" />
+                      Finance
+                    </DropdownMenuItem>
+                    <DropdownMenuItem render={<Link href="/housing" />} className="gap-2">
+                      <House className="h-3.5 w-3.5" />
+                      Housing
+                    </DropdownMenuItem>
+                  </>
                 )}
                 <DropdownMenuItem onClick={() => signOut()} className="gap-2 text-destructive">
                   <LogOut className="h-3.5 w-3.5" />

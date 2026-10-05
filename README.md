@@ -13,6 +13,11 @@ Personal tools, deployed on Vercel.
   each kept in its own currency and recorded as a balance whenever the owner
   chooses; each balance is valued in CNY and SGD at the rates of its own day.
   Net worth, assets, debts, and how all three moved.
+- **Housing / 租房还是买房** — private to the same owner. Singapore's home prices
+  and rents from the government's open data — HDB's medians by town and flat
+  type, URA's indices for private homes — as trends side by side, and renting
+  against buying a particular home, year by year: stamp duties, the loan, CPF,
+  what the money not spent would have earned.
 
 ## Stack
 
@@ -50,6 +55,11 @@ not, and names itself to nobody else — no title, no breadcrumb. Signed out, th
 owner comes in by `/auth/signin?callbackUrl=/finance`. The navbar item appears
 only for the owner, but it is a convenience; the page and the route are the
 gate. The one other way in is an API token, below.
+
+**Housing is behind the same door.** `/housing` and `/api/housing` answer whom
+`/finance` answers — the owner's session, or a finance API token — and its
+tables (`housing_market`, `housing_sources`, `housing_scenarios`) are as private
+as finance's, although the market figures themselves are public data.
 
 Every response also carries `frame-ancestors 'none'` and its old-browser twin,
 `nosniff`, a referrer policy and a permissions policy (`next.config.ts`).
@@ -128,6 +138,30 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
   the card) counts as liquid, the rest not. Each balance keeps the share that
   was liquid when it was recorded, so every day of the history counts what was
   liquid then. What is held lives in the database only.
+
+## Housing: where the figures come from
+
+- **The market** is read from [data.gov.sg](https://data.gov.sg), keyless:
+  HDB's median resale price and median rent by town and flat type, each
+  quarter, and its resale price index; URA's price and rental indices for
+  private homes, 2009 Q1 = 100. HDB's two medians pair up quarter by quarter,
+  which is what gives a town's gross yield (a year's rent over the price). URA
+  publishes no prices without a key, so a private home's own price and rent
+  are typed into the comparison. The daily job asks data.gov.sg every day and
+  reads a dataset again only when its catalogue says it changed.
+- **Rent or buy** starts both sides with the same money. The buyer pays the
+  down payment, stamp duties, fees and renovation — CPF first where CPF may —
+  and the renter invests that cash instead. Each month both spend the dearer
+  side's outgoings, and the cheaper side invests the difference; CPF pays the
+  buyer's instalments and sits in the renter's account. Each year ends with the
+  home as though sold: its grown price less the loan, the agent and legal fees,
+  and seller's stamp duty within four years. The year buying pulls ahead is the
+  first whose end finds it ahead.
+- **Tax rules** are IRAS's as published in October 2026: BSD up to 6%; ABSD by
+  residency and which home it is (citizen 0/20/30%, PR 5/30/35%, foreigner
+  60%); SSD 16/12/8/4% within four years for homes bought from 4 Jul 2025;
+  owner-occupier property tax on the annual value, from 2025. The comparison
+  never refuses a buyer: what the rules may not allow, it says.
 
 ## Finance API, for agents
 

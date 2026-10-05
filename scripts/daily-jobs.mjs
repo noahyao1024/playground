@@ -7,7 +7,9 @@
  * The work happens on the site, next to its configuration: on the 1st to 3rd
  * in Singapore /api/cron/bill fills in the month's charges, and every day
  * /api/cron/daily works out who owes more than the threshold, its reads keeping
- * the database awake. This calls them and judges the answers. A mail due goes
+ * the database awake, /api/cron/stocks values the stock accounts and
+ * /api/cron/housing brings the housing market's figures up to date. This calls
+ * them and judges the answers. A mail due goes
  * to a file for the workflow's next step, which sends it with the SMTP account
  * GitHub holds. The run fails -- and GitHub mails the owner -- when a job did
  * not do its work: no answer, an error, a refusal, charges left unbilled. The
@@ -151,6 +153,26 @@ export function judgeStocks(answer) {
     : { ok: true, text };
 }
 
+/** Whether the housing market's figures are up to date: every dataset's
+ *  catalogue entry read, and every one that changed read again. A dataset that
+ *  could not be read fails the run: the page would go on showing last
+ *  quarter's figures as though they were the latest, and nothing else would
+ *  say. */
+export function judgeHousing(answer) {
+  const { status, body } = answer;
+  if (status === 401) return { ok: false, text: REFUSED };
+  if (status !== 200) return { ok: false, text: `failed: ${failure(answer)}` };
+  if (typeof body.checked !== "number" || typeof body.refreshed !== "number") {
+    return { ok: false, text: `unexpected answer: HTTP ${status}, no counts` };
+  }
+  const text = `${body.checked} dataset(s) checked, ${body.refreshed} read again (${Number(body.points) || 0} figure(s))`;
+  const failed = Number(body.failed) || 0;
+  if (!failed) return { ok: true, text };
+  const first = Array.isArray(body.failures) && body.failures[0];
+  const why = first ? ` -- ${quote(`${first.dataset}: ${first.reason}`)}` : "";
+  return { ok: false, text: `${text}; ${failed} could not be read${why}` };
+}
+
 /** The 1st to 3rd of the month in Singapore: the days vercel.json bills on. */
 export function isBillingDay(now) {
   const day = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Singapore", day: "numeric" }).format(now));
@@ -172,6 +194,7 @@ async function main() {
   const daily = judgeDaily(await call(`${SITE}/api/cron/daily${testMail ? "?test=1" : ""}`));
   results.push(["Unpaid alert", daily]);
   results.push(["Stock prices", judgeStocks(await call(`${SITE}/api/cron/stocks`))]);
+  results.push(["Housing data", judgeHousing(await call(`${SITE}/api/cron/housing`))]);
 
   // The mail names people, so it goes to a file for the next step, not the log.
   if (daily.mail) {

@@ -6,6 +6,7 @@ import {
   Receipt,
   Server,
   Wallet,
+  House,
   ArrowUpRight,
   ShieldCheck,
   UserRoundCheck,
@@ -31,14 +32,23 @@ const tools = [
   },
 ];
 
-// Private to its owner, so shown only to them; everything above is public.
-const finance = {
-  title: "Finance",
-  subtitle: "资产负债",
-  description: "Balances across China and Singapore in CNY and SGD, with assets, debts and net worth over time.",
-  icon: Wallet,
-  href: "/finance",
-};
+// Private to their owner, so shown only to them; everything above is public.
+const owned = [
+  {
+    title: "Finance",
+    subtitle: "资产负债",
+    description: "Balances across China and Singapore in CNY and SGD, with assets, debts and net worth over time.",
+    icon: Wallet,
+    href: "/finance",
+  },
+  {
+    title: "Housing",
+    subtitle: "租房还是买房",
+    description: "Singapore's home prices and rents from HDB and URA, and renting against buying over the years.",
+    icon: House,
+    href: "/housing",
+  },
+];
 
 const overview = [
   {
@@ -63,7 +73,7 @@ const overview = [
 
 export default function HomePage() {
   const { data: session } = useSession();
-  const visibleTools = isFinanceOwner(session?.user?.email) ? [...tools, finance] : tools;
+  const visibleTools = isFinanceOwner(session?.user?.email) ? [...tools, ...owned] : tools;
 
   return (
     <div className="space-y-12">

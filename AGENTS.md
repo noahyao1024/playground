@@ -87,8 +87,8 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
 - Next.js 16 App Router, TypeScript, Tailwind v4, shadcn/ui
 - Supabase (`@supabase/supabase-js`) for data; NextAuth v5 + Google OAuth for sign-in
 - `.github/workflows/daily-jobs.yml` — daily, runs `scripts/daily-jobs.mjs`, which calls
-  `/api/cron/bill` on the 1st–3rd in Singapore, and `/api/cron/daily` and `/api/cron/stocks`
-  every day, and fails the run when a job did not do its work, so GitHub mails the owner. `/api/cron/daily` works out
+  `/api/cron/bill` on the 1st–3rd in Singapore, and `/api/cron/daily`, `/api/cron/stocks` and
+  `/api/cron/housing` every day, and fails the run when a job did not do its work, so GitHub mails the owner. `/api/cron/daily` works out
   who owes more than `UNPAID_THRESHOLD_CNY` and hands back the mail; the workflow sends it to
   `ALERT_TO` — the owner, not the people who owe — through the SMTP secrets GitHub holds. The
   site has no mail settings and no mail library. The run's log is public: counts and states
@@ -189,6 +189,21 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   tokens could outlive its own revoking. `/api/finance/openapi` describes the API, to the same
   token, and a test holds it to the route. `/finance` is a 404 to anyone but the owner, even
   signed out; the owner comes in by `/auth/signin?callbackUrl=/finance`.
+- `/housing` and `/api/housing` — Singapore's housing market and the owner's rent-or-buy
+  comparisons, behind the same check as `/finance` (`isFinanceOwner`, `isFinanceRequest`: the
+  owner's session or a finance token). Its tables — `housing_market`, `housing_sources`,
+  `housing_scenarios` — are private like finance's though the figures are public data: the page
+  is the owner's. The market is read from data.gov.sg, keyless, by `src/lib/housing-data.ts`,
+  which names the datasets and makes one spelling of their towns ("Ang Mo Kio", "QUEENSTOWN ",
+  CENTRAL AREA) and flat types ("4-RM" beside "4-room"); of two records for one figure the later
+  stands. `/api/cron/housing` reads a dataset again only when its catalogue `lastUpdatedAt`
+  moves, and a dataset it cannot read fails the daily run. If data.gov.sg retires a dataset id,
+  that is the failure you will see: find its successor in the catalogue and change the id.
+  The arithmetic is `src/lib/housing.ts`: stamp duties and property tax as IRAS published them
+  in October 2026 — when IRAS changes a rate, change it there and its test's figures with it —
+  and the mortgage is `loanSchedule`'s. A scenario's inputs are kept whole as jsonb and checked
+  by `parseInputs`, so a new input needs a default, not a migration. The comparison never
+  refuses a residency or a kind of home; what the rules may not allow goes in `notesOn`.
 - Chart colours are `--series-1` to `--series-3` in `globals.css`, a palette checked for
   colour-blind separation with separate dark steps. Marks wear them; text never does.
 

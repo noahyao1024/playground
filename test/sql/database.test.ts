@@ -610,6 +610,65 @@ describe.skipIf(!SERVER)("database", () => {
     });
   });
 
+  describe("housing", () => {
+    const SCENARIO = "00000000-0000-0000-0000-0000000000f2";
+    const figure = (quarter = "2026-04-01", value = 600000, series = "hdb_resale", area = "BEDOK", segment = "4-room") => c.query(
+      `insert into housing_market (series, area, segment, quarter, value) values ($1, $2, $3, $4, $5)`,
+      [series, area, segment, quarter, value],
+    );
+
+    it("is private: neither the anon key nor a signed-in session can read or write it, the service role can", async () => {
+      await figure();
+      await c.query(`insert into housing_scenarios (id, name, inputs) values ($1, 'Bedok', '{"price": 600000}')`, [SCENARIO]);
+      await c.query(`insert into housing_sources (dataset, source_updated_at, points) values ('d_14f63e595975691e7c24a27ae4c07c79', now(), 146)`);
+      for (const role of ["anon", "authenticated"]) {
+        await c.query(`set local role ${role}`);
+        for (const sql of [
+          `select * from housing_market`,
+          `insert into housing_market (series, area, segment, quarter, value) values ('hdb_rpi', 'ALL', 'all', '2026-01-01', 1)`,
+          `select * from housing_scenarios`,
+          `insert into housing_scenarios (name, inputs) values ('x', '{}')`,
+          `update housing_scenarios set name = 'y'`,
+          `delete from housing_scenarios`,
+          `select * from housing_sources`,
+          `delete from housing_sources`,
+        ]) {
+          expect((await failure(c, sql)).code, `${role}: ${sql}`).toBe("42501");
+        }
+        await c.query(`reset role`);
+      }
+      await c.query(`set local role service_role`);
+      expect((await c.query(`select count(*)::int as n from housing_scenarios`)).rows[0].n).toBe(1);
+      await c.query(`reset role`);
+    });
+
+    it("keeps one figure a series, place, kind and quarter -- on the quarter's first day, and above zero", async () => {
+      await figure();
+      expect((await failure(c, `insert into housing_market (series, area, segment, quarter, value) values ('hdb_resale', 'BEDOK', '4-room', '2026-04-01', 1)`)).code).toBe("23505");
+      for (const [quarter, value, series, area, segment] of [
+        ["2026-04-02", 1, "hdb_resale", "BEDOK", "4-room"],
+        ["2026-05-01", 1, "hdb_resale", "BEDOK", "4-room"],
+        ["2026-07-01", 0, "hdb_resale", "BEDOK", "4-room"],
+        ["2026-07-01", 1, "HDB resale", "BEDOK", "4-room"],
+        ["2026-07-01", 1, "hdb_resale", "bedok", "4-room"],
+        ["2026-07-01", 1, "hdb_resale", "BEDOK", "4 Room"],
+      ] as const) {
+        expect((await failure(c, `insert into housing_market (series, area, segment, quarter, value) values ($1, $2, $3, $4, $5)`, [series, area, segment, quarter, value])).code,
+          `${quarter} ${value} ${series} ${area} ${segment}`).toBe("23514");
+      }
+      await figure("2026-07-01", 3000, "hdb_rent", "KALLANG/WHAMPOA", "executive");
+      await figure("2026-10-01", 172.3, "ura_rri", "RCR", "non-landed");
+    });
+
+    it("names a scenario, keeps its inputs as an object, and knows a dataset by data.gov.sg's id", async () => {
+      for (const [name, inputs] of [["", "{}"], ["   ", "{}"], ["x".repeat(81), "{}"], ["ok", "[]"], ["ok", "1"]]) {
+        expect((await failure(c, `insert into housing_scenarios (name, inputs) values ($1, $2::jsonb)`, [name, inputs])).code, `${name} ${inputs}`).toBe("23514");
+      }
+      expect((await failure(c, `insert into housing_sources (dataset, points) values ('resale-prices', 1)`)).code).toBe("23514");
+      expect((await failure(c, `insert into housing_sources (dataset, points) values ('d_14f63e595975691e7c24a27ae4c07c79', -1)`)).code).toBe("23514");
+    });
+  });
+
   describe("the damage report in 20260925_settle_skips_deleted_charges", () => {
     it("counts settlements posted against an already-deleted charge, until they are reversed", async () => {
       await seed(c);

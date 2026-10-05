@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startPostgrest, type StandIn } from "../helpers/postgrest";
-import { AUDIENCE, call, isBillingDay, judgeBill, judgeDaily, judgeStocks, oidcToken, quote } from "../../scripts/daily-jobs.mjs";
+import { AUDIENCE, call, isBillingDay, judgeBill, judgeDaily, judgeHousing, judgeStocks, oidcToken, quote } from "../../scripts/daily-jobs.mjs";
 
 const exec = promisify(execFile);
 const SCRIPT = resolve("scripts/daily-jobs.mjs");
@@ -24,6 +24,7 @@ const alerted = {
 const quiet = { threshold: 500, over: [], mail: null };
 const valued = { valued_at: "2026-09-28T06:00:00.000Z", accounts: 1, positions: 3, failed: 0, skipped: 0 };
 const billed = { message: "Generated 2 charge(s)", month: "2026-10", generated: 2, skipped: [], details: [{ subscriber: "Alice", total_cny: 53 }] };
+const housed = { checked: 6, refreshed: 1, points: 12012, failed: 0, failures: [] };
 
 let site: StandIn;
 // Per path, the answers in turn; the last one repeats.
@@ -35,6 +36,7 @@ beforeEach(async () => {
     "/api/cron/daily": [{ status: 200, body: alerted }],
     "/api/cron/bill": [{ status: 200, body: billed }],
     "/api/cron/stocks": [{ status: 200, body: valued }],
+    "/api/cron/housing": [{ status: 200, body: housed }],
     // GitHub's token endpoint, as the runner offers it.
     "/_oidc": [{ status: 200, body: { value: TOKEN } }],
   };
@@ -163,6 +165,29 @@ describe("judging the stock prices", () => {
   });
 });
 
+describe("judging the housing data", () => {
+  it("passes every dataset checked and every changed one read, in counts", () => {
+    expect(judgeHousing({ status: 200, body: housed })).toEqual({ ok: true, text: "6 dataset(s) checked, 1 read again (12012 figure(s))" });
+    expect(judgeHousing({ status: 200, body: { ...housed, refreshed: 0, points: 0 } })).toEqual({ ok: true, text: "6 dataset(s) checked, 0 read again (0 figure(s))" });
+  });
+
+  it("fails a dataset that could not be read, saying which and why on one line", () => {
+    const body = { ...housed, refreshed: 0, points: 0, failed: 1, failures: [{ dataset: "d_14f63e595975691e7c24a27ae4c07c79", reason: "HTTP 404\n::stop-commands::x" }] };
+    expect(judgeHousing({ status: 200, body })).toEqual({
+      ok: false,
+      text: "6 dataset(s) checked, 0 read again (0 figure(s)); 1 could not be read -- d_14f63e595975691e7c24a27ae4c07c79: HTTP 404 ::stop-commands::x",
+    });
+  });
+
+  it("fails a refusal, data.gov.sg being down, and anything it does not recognise", () => {
+    expect(judgeHousing({ status: 401, body: {} }).text).toContain("refused this run");
+    expect(judgeHousing({ status: 503, body: { error: "data.gov.sg could not be reached", checked: 0, failed: 6 } }))
+      .toEqual({ ok: false, text: "failed: HTTP 503 -- data.gov.sg could not be reached" });
+    expect(judgeHousing({ status: 200, body: {} }).ok).toBe(false);
+    expect(judgeHousing({ status: 200, body: { checked: "6", refreshed: 0 } }).ok).toBe(false);
+  });
+});
+
 describe("quote", () => {
   it("keeps an error on one line, so it cannot start a workflow command", () => {
     expect(quote("bad\n::set-env name=X::1\r\nmore")).toBe("bad ::set-env name=X::1 more");
@@ -248,13 +273,25 @@ describe("a run", () => {
   it("checks who owes and values the stocks as this run, with GitHub's token, and bills nothing mid-month", async () => {
     const { code, stdout, summary } = await runScript();
     expect(code).toBe(0);
-    expect(siteCalls()).toEqual(["/api/cron/daily", "/api/cron/stocks"]);
-    expect(site.requests.find((r) => r.path === "/api/cron/daily")?.headers.authorization).toBe(`Bearer ${TOKEN}`);
-    expect(site.requests.find((r) => r.path === "/api/cron/stocks")?.headers.authorization).toBe(`Bearer ${TOKEN}`);
+    expect(siteCalls()).toEqual(["/api/cron/daily", "/api/cron/stocks", "/api/cron/housing"]);
+    for (const path of ["/api/cron/daily", "/api/cron/stocks", "/api/cron/housing"]) {
+      expect(site.requests.find((r) => r.path === path)?.headers.authorization, path).toBe(`Bearer ${TOKEN}`);
+    }
     expect(stdout).toContain("Unpaid alert: 1 over ¥500; mail to send");
     expect(stdout).toContain("Stock prices: 1 account(s) valued, 3 price(s) fetched");
+    expect(stdout).toContain("Housing data: 6 dataset(s) checked, 1 read again (12012 figure(s))");
     expect(summary).toContain("| Unpaid alert | ✅ 1 over ¥500; mail to send |");
     expect(summary).toContain("| Stock prices | ✅ 1 account(s) valued, 3 price(s) fetched |");
+    expect(summary).toContain("| Housing data | ✅ 6 dataset(s) checked, 1 read again (12012 figure(s)) |");
+  });
+
+  it("fails when a housing dataset could not be read, having done the rest", async () => {
+    replies["/api/cron/housing"] = [{ status: 200, body: { ...housed, refreshed: 0, failed: 1, failures: [{ dataset: "d_x", reason: "HTTP 404" }] } }];
+    const { code, stdout, output } = await runScript();
+    expect(code).toBe(1);
+    expect(stdout).toContain("::error title=Housing data::6 dataset(s) checked, 0 read again (12012 figure(s)); 1 could not be read -- d_x: HTTP 404");
+    expect(stdout).toContain("Stock prices: 1 account(s) valued");
+    expect(output).toContain("mail=true");
   });
 
   it("fails when a price could not be had, having still checked who owes", async () => {
@@ -285,7 +322,7 @@ describe("a run", () => {
   it("bills first on the 1st to 3rd in Singapore, so the check counts the new month", async () => {
     const { code, stdout } = await runScript({ NOW: "2026-09-30T20:00:00Z" }); // 1 Oct, 04:00 in Singapore
     expect(code).toBe(0);
-    expect(siteCalls()).toEqual(["/api/cron/bill", "/api/cron/daily", "/api/cron/stocks"]);
+    expect(siteCalls()).toEqual(["/api/cron/bill", "/api/cron/daily", "/api/cron/stocks", "/api/cron/housing"]);
     expect(stdout).toContain("Billing: 2026-10: 2 charge(s) generated");
     expect(stdout).not.toContain("Alice");
   });
@@ -294,7 +331,7 @@ describe("a run", () => {
     replies["/api/cron/bill"] = [{ status: 500, body: { error: "boom" } }];
     const { code, stdout, output } = await runScript({ NOW: "2026-10-02T02:00:00Z" });
     expect(code).toBe(1);
-    expect(siteCalls()).toEqual(["/api/cron/bill", "/api/cron/bill", "/api/cron/bill", "/api/cron/daily", "/api/cron/stocks"]);
+    expect(siteCalls()).toEqual(["/api/cron/bill", "/api/cron/bill", "/api/cron/bill", "/api/cron/daily", "/api/cron/stocks", "/api/cron/housing"]);
     expect(stdout).toContain("::error title=Billing::failed: HTTP 500 -- boom");
     expect(output).toContain("mail=true");
   });
@@ -302,12 +339,12 @@ describe("a run", () => {
   it("rides out a brief outage", async () => {
     replies["/api/cron/daily"] = [{ status: 503 }, { status: 200, body: alerted }];
     expect((await runScript()).code).toBe(0);
-    expect(siteCalls()).toEqual(["/api/cron/daily", "/api/cron/daily", "/api/cron/stocks"]);
+    expect(siteCalls()).toEqual(["/api/cron/daily", "/api/cron/daily", "/api/cron/stocks", "/api/cron/housing"]);
   });
 
   it("asks for a test mail with --test-mail", async () => {
     await runScript({}, ["--test-mail"]);
-    expect(siteCalls()).toEqual(["/api/cron/daily?test=1", "/api/cron/stocks"]);
+    expect(siteCalls()).toEqual(["/api/cron/daily?test=1", "/api/cron/stocks", "/api/cron/housing"]);
   });
 
   it("says so when the site refuses it", async () => {
