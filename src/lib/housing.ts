@@ -424,6 +424,34 @@ export type ProjectionYear = {
   cpf_refund: number;
 };
 
+/** A month of a year, on average, owning taken apart: what goes out, and what
+ *  of it is a cost. Principal is not: it is still yours, in the home. */
+export type OwningMonth = {
+  year: number;
+  /** Out of pocket, CPF and cash: the instalment, S&CC or maintenance,
+   *  property tax, repairs and insurance. */
+  paid: number;
+  /** Repaid off the loan, and so into the home. */
+  principal: number;
+  interest: number;
+  /** S&CC or maintenance, property tax, repairs and insurance. */
+  running: number;
+  /** The stamp duties, fees and renovation paid on buying, and the costs of
+   *  selling at the end, spread over every month looked at. */
+  one_off: number;
+  /** What the money in the home -- all paid on buying, and the principal
+   *  since -- would have earned invested instead: cash at the investment
+   *  return, CPF at its own rate. */
+  opportunity: number;
+  /** The home's rise in value: a gain, set against the costs. */
+  appreciation: number;
+  /** What owning costs: interest, running costs, one-off costs and the
+   *  opportunity, less the rise in value. */
+  net: number;
+  /** A month of renting: the rent and its fees. */
+  rent: number;
+};
+
 export type Projection = {
   upfront: {
     down_payment: number;
@@ -439,6 +467,11 @@ export type Projection = {
   /** The first month's instalment. */
   instalment: number;
   years: ProjectionYear[];
+  /** Each year's average month, owning taken apart, from the first year on.
+   *  Summed over the years, with nothing earning, owning's costs less rent
+   *  come to the gap between the two at the end; with returns, the net worth
+   *  compounds and this does not, so the gap is the one to go by. */
+  monthly: OwningMonth[];
   /** The first year whose end finds buying ahead, or null within the years looked at. */
   break_even: number | null;
   notes: string[];
@@ -510,6 +543,17 @@ export function rentOrBuy(inputs: ScenarioInputs): Projection {
   const firstOwn = (schedule[0]?.payment ?? 0) + i.maintenance + ownerOccupierTax(i.annual_value) / 12 + i.upkeep / 12;
   yearEnd(0, firstOwn, i.rent + i.rent_costs / 12);
 
+  // Owning taken apart. The one-off costs are spread over every month looked
+  // at, selling's at the end included; the money in the home is what was paid
+  // on buying and the principal since, kept apart by where it came from.
+  const valueAt = (month: number) => i.price * (1 + i.growth / 100) ** (month / 12);
+  const endValue = valueAt(months);
+  const oneOff = (bsd + absd + i.buy_costs + i.renovation + endValue * (i.sell_costs / 100) + sellerStampDuty(endValue, i.years)) / months;
+  let inHomeCash = fromCash, inHomeCpf = fromCpf;
+  const owning: OwningMonth[] = [];
+  const blank = () => ({ paid: 0, principal: 0, interest: 0, running: 0, opportunity: 0, appreciation: 0, rent: 0 });
+  let sum = blank();
+
   let ownMonthly = 0, rentMonthly = 0;
   for (let m = 1; m <= months; m++) {
     const year = Math.floor((m - 1) / 12);
@@ -517,6 +561,8 @@ export function rentOrBuy(inputs: ScenarioInputs): Projection {
     const instalment = period?.payment ?? 0;
     const tax = ownerOccupierTax(i.annual_value * (1 + i.rent_growth / 100) ** year) / 12;
     const rent = i.rent * (1 + i.rent_growth / 100) ** year;
+    // What the money already in the home would have earned this month.
+    sum.opportunity += inHomeCash * grow + inHomeCpf * cpfGrow;
 
     // The month's growth on what each holds, then the month's money.
     cashBuy *= 1 + grow;
@@ -538,7 +584,37 @@ export function rentOrBuy(inputs: ScenarioInputs): Projection {
     ownSpent += (period?.interest ?? 0) + i.maintenance + tax + i.upkeep / 12;
     rentSpent += rentMonthly;
     if (period) balance = period.balance;
-    if (m % 12 === 0) yearEnd(m / 12, ownMonthly, rentMonthly);
+
+    const principal = period?.principal ?? 0;
+    // The principal goes into the home as the instalment was paid: CPF's
+    // share of it from CPF, the rest in cash.
+    const cpfShare = instalment > 0 ? byCpf / instalment : 0;
+    inHomeCpf += principal * cpfShare;
+    inHomeCash += principal * (1 - cpfShare);
+    sum.paid += ownMonthly;
+    sum.principal += principal;
+    sum.interest += period?.interest ?? 0;
+    sum.running += i.maintenance + tax + i.upkeep / 12;
+    sum.appreciation += valueAt(m) - valueAt(m - 1);
+    sum.rent += rentMonthly;
+
+    if (m % 12 === 0) {
+      yearEnd(m / 12, ownMonthly, rentMonthly);
+      const net = (sum.interest + sum.running + sum.opportunity - sum.appreciation) / 12 + oneOff;
+      owning.push({
+        year: m / 12,
+        paid: round(sum.paid / 12),
+        principal: round(sum.principal / 12),
+        interest: round(sum.interest / 12),
+        running: round(sum.running / 12),
+        one_off: round(oneOff),
+        opportunity: round(sum.opportunity / 12),
+        appreciation: round(sum.appreciation / 12),
+        net: round(net),
+        rent: round(sum.rent / 12),
+      });
+      sum = blank();
+    }
   }
 
   const ahead = years.find((y) => y.year > 0 && y.buy_net_worth >= y.rent_net_worth);
@@ -556,6 +632,7 @@ export function rentOrBuy(inputs: ScenarioInputs): Projection {
     },
     instalment: schedule[0]?.payment ?? 0,
     years,
+    monthly: owning,
     break_even: ahead?.year ?? null,
     notes: notesOn(i),
   };

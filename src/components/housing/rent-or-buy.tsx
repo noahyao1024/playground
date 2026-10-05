@@ -13,7 +13,7 @@ import type { Confirmation } from "@/components/finance/confirm-dialog";
 import { compactMoney, money } from "@/lib/finance-format";
 import {
   ABSD_RATES, DEFAULT_INPUTS, HOME_KINDS, LOAN_TYPES, RESIDENCIES, RESIDENCY_LABELS, clampInputs, rentOrBuy, withinLimits,
-  type HomeKind, type LoanType, type Projection, type Residency, type ScenarioInputs,
+  type HomeKind, type LoanType, type OwningMonth, type Projection, type Residency, type ScenarioInputs,
 } from "@/lib/housing";
 import { cn } from "@/lib/utils";
 import { housingAction, messageOf, type Scenario } from "./api";
@@ -227,6 +227,83 @@ export function RentOrBuy({ draft, setDraft, scenarios, onSaved, onDeleted, onCo
   );
 }
 
+/** A month of owning taken apart, for a year chosen: what goes out, what of it
+ *  is principal and stays yours, and what is truly a cost -- against the rent. */
+function MonthTakenApart({ inputs, months, ticks }: { inputs: ScenarioInputs; months: OwningMonth[]; ticks: number[] }) {
+  const [chosen, setChosen] = useState(1);
+  const year = Math.min(Math.max(1, chosen), months.length);
+  const m = months[year - 1];
+  const gap = m.rent - m.net;
+  const pct = (n: number) => `${Number(n.toFixed(2))}%`;
+  const rows: Array<{ label: string; value: number; note?: string; indent?: boolean; strong?: boolean; sign?: boolean }> = [
+    { label: "Goes out each month, CPF and cash", value: m.paid, strong: true },
+    { label: "Principal", note: "into the home: still yours, not a cost", value: m.principal, indent: true },
+    { label: "Interest", value: m.interest, indent: true },
+    { label: "S&CC or maintenance, property tax, repairs", value: m.running, indent: true },
+    { label: "Stamp duties, fees, renovation, selling", note: `paid once, spread over ${inputs.years} years`, value: m.one_off },
+    {
+      label: "Opportunity cost",
+      note: `the money in the home, had it been invested at ${pct(inputs.invest_return)}${inputs.cpf_balance + inputs.cpf_monthly > 0 ? ` (CPF's at ${pct(inputs.cpf_rate)})` : ""}`,
+      value: m.opportunity,
+    },
+    { label: "The home's rise in value", note: `at ${pct(inputs.growth)} a year, set against the costs`, value: -m.appreciation, sign: true },
+    { label: "What owning costs", note: "all but the principal", value: m.net, strong: true },
+    { label: "What renting costs", note: "the rent and its fees", value: m.rent, strong: true },
+  ];
+  const chart: LineRow[] = months.map((x) => ({ x: x.year, title: `Year ${x.year}, a month`, own: x.net, rent: x.rent, paid: x.paid, principal: x.principal }));
+
+  return (
+    <Card
+      title="A month of owning, taken apart"
+      sub="Principal is not a cost: it is still yours, in the home. Interest, the running and one-off costs and what the money would have earned are; the home's rise in value counts against them"
+      action={(
+        <Select value={String(year)} onValueChange={(v) => setChosen(Number(v))}>
+          <SelectTrigger aria-label="Year" className="h-9 w-28"><SelectValue>{(v: string | null) => `Year ${v ?? year}`}</SelectValue></SelectTrigger>
+          <SelectContent>{months.map((x) => <SelectItem key={x.year} value={String(x.year)}>Year {x.year}</SelectItem>)}</SelectContent>
+        </Select>
+      )}
+    >
+      <table className="w-full text-sm">
+        <caption className="sr-only">An average month of year {year}, owning against renting</caption>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.label} className="border-b last:border-0">
+              <th scope="row" className={cn("py-2 pr-3 text-left", r.strong ? "font-medium" : "font-normal", r.indent && "pl-4 text-muted-foreground")}>
+                {r.label}
+                {r.note && <span className="ml-1.5 text-xs font-normal text-muted-foreground">{r.note}</span>}
+              </th>
+              <td className={cn("py-2 text-right tabular-nums whitespace-nowrap", r.strong && "font-medium", r.indent && "text-muted-foreground")}>{money(r.value, "sgd", { sign: r.sign })}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-3 text-sm">
+        In year {year}, owning costs <span className="font-medium">{money(Math.abs(gap), "sgd")}</span> a month {gap >= 0 ? "less" : "more"} than renting.
+      </p>
+
+      <div className="mt-6">
+        <LinesChart
+          rows={chart}
+          series={[{ key: "own", label: "Owning, what it costs", color: BUY }, { key: "rent", label: "Renting", color: RENT }]}
+          format={(v) => money(v, "sgd")}
+          axisFormat={axisMoney}
+          ticks={ticks}
+          xFormat={yearLabel}
+          zero
+          details={(row) => [
+            { label: "goes out, owning", value: money(Number(row.paid), "sgd") },
+            { label: "of it principal, still yours", value: money(Number(row.principal), "sgd") },
+          ]}
+        />
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">
+        A month at a time, nothing compounds. With nothing earning, these months add up to the gap in what each leaves you with;
+        with returns, that gap compounds them, and is the comparison to go by.
+      </p>
+    </Card>
+  );
+}
+
 /** The comparison in a line: when buying pulls ahead, and by how much at the end. */
 function Verdict({ inputs, result, className }: { inputs: ScenarioInputs; result: Projection; className?: string }) {
   const last = result.years[result.years.length - 1];
@@ -255,13 +332,12 @@ function Choice({ label, children }: { label: string; children: React.ReactNode 
 function Results({ inputs, result }: { inputs: ScenarioInputs; result: Projection }) {
   const { upfront, years } = result;
   const last = years[years.length - 1];
-  const first = years[1] ?? years[0];
+  const first = result.monthly[0];
   const difference = last.buy_net_worth - last.rent_net_worth;
   const absdRate = ABSD_RATES[inputs.residency][Math.min(3, inputs.nth) - 1];
   const ticks = yearTicks(0, inputs.years, 8);
 
   const worth: LineRow[] = years.map((y) => ({ x: y.year, title: y.year === 0 ? "Now" : `After ${y.year} year${y.year === 1 ? "" : "s"}`, buy: y.buy_net_worth, rent: y.rent_net_worth }));
-  const monthly: LineRow[] = years.slice(1).map((y) => ({ x: y.year, title: `Year ${y.year}`, own: y.own_monthly, rent: y.rent_monthly }));
 
   return (
     <div className="min-w-0 space-y-4">
@@ -279,7 +355,11 @@ function Results({ inputs, result }: { inputs: ScenarioInputs; result: Projectio
           sub={`BSD ${money(upfront.bsd, "sgd")}${upfront.absd ? `, ABSD ${share(absdRate, 0)} ${money(upfront.absd, "sgd")}` : ", no ABSD"}`}
         />
         <Stat label="Instalment" value={`${money(result.instalment, "sgd")}/mo`} sub={`${compactMoney(upfront.loan, "sgd", { digits: 2 })} over ${inputs.loan_years} years`} />
-        <Stat label="A month, first year" value={`${money(first.own_monthly, "sgd")} vs ${money(first.rent_monthly, "sgd")}`} sub="Owning, all in, against renting" />
+        <Stat
+          label="A month in year 1, what it costs"
+          value={`${money(first.net, "sgd")} vs ${money(first.rent, "sgd")}`}
+          sub={`Owning against renting. ${money(first.paid, "sgd")} goes out; ${money(first.principal, "sgd")} of it is principal, still yours`}
+        />
         <Stat
           label="Buying pulls ahead"
           value={result.break_even === null ? "Not yet" : `Year ${result.break_even}`}
@@ -309,17 +389,7 @@ function Results({ inputs, result }: { inputs: ScenarioInputs; result: Projectio
         />
       </Card>
 
-      <Card title="A month's housing" sub="Owning: the instalment, S&CC or maintenance, property tax, repairs. Renting: the rent and its fees">
-        <LinesChart
-          rows={monthly}
-          series={[{ key: "own", label: "Owning", color: BUY }, { key: "rent", label: "Renting", color: RENT }]}
-          format={(v) => money(v, "sgd")}
-          axisFormat={axisMoney}
-          ticks={ticks.filter((t) => t > 0)}
-          xFormat={yearLabel}
-          zero
-        />
-      </Card>
+      <MonthTakenApart inputs={inputs} months={result.monthly} ticks={ticks.filter((t) => t > 0)} />
 
       <Card title="Year by year">
         <div className="-mx-1 overflow-x-auto">

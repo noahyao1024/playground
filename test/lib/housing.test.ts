@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { loanSchedule } from "@/lib/finance";
 import {
   DEFAULT_INPUTS, InputError, additionalBuyerStampDuty, buyerStampDuty, changeOver, clampInputs, grossYield, hdbTowns, inputsFromMarket, latestPoint,
   nextQuarter, notesOn, ownerOccupierTax, paired, parseInputs, pointsOf, quarterLabel, quarterNumber, quarterOfDay, quarterStart, quarterYear, readInputs,
@@ -285,6 +286,69 @@ describe("rentOrBuy", () => {
     // No loan, no maintenance: a month of owning is the year's tax and upkeep.
     expect(p.years[3].own_monthly).toBeCloseTo((ownerOccupierTax(48_000 * 1.1 ** 2) + base.upkeep) / 12 + base.maintenance, 6);
     expect(p.instalment).toBe(0);
+  });
+});
+
+describe("a month of owning, taken apart", () => {
+  const base: ScenarioInputs = { ...DEFAULT_INPUTS, residency: "pr", kind: "private", loan_type: "bank", price: 1_000_000, renovation: 20_000, buy_costs: 4_000 };
+
+  it("splits what goes out into principal, interest and running costs, and the cost into all but the principal", () => {
+    const p = rentOrBuy(base);
+    expect(p.monthly.map((m) => m.year)).toEqual(Array.from({ length: base.years }, (_, k) => k + 1));
+    for (const m of p.monthly) {
+      expect(m.principal + m.interest + m.running, `year ${m.year}`).toBeCloseTo(m.paid, 1);
+      expect(m.interest + m.running + m.one_off + m.opportunity - m.appreciation, `year ${m.year}`).toBeCloseTo(m.net, 1);
+    }
+    // Year one: the loan's first twelve repayments, a month on average.
+    const periods = loanSchedule({ principal: 750_000, rate: base.loan_rate, start: "2026-01-01", months: base.loan_years * 12, method: "annuity" }).periods.slice(0, 12);
+    expect(p.monthly[0].principal).toBeCloseTo(periods.reduce((a, x) => a + x.principal, 0) / 12, 2);
+    expect(p.monthly[0].interest).toBeCloseTo(periods.reduce((a, x) => a + x.interest, 0) / 12, 2);
+    expect(p.monthly[0].rent).toBe(base.rent);
+  });
+
+  it("adds up, with nothing earning, to the gap between the two at the end", () => {
+    const i: ScenarioInputs = { ...base, invest_return: 0, cpf_rate: 0, cpf_balance: 60_000, cpf_monthly: 900, growth: 2.5, rent_growth: 3, rent_costs: 1_200, years: 12 };
+    const p = rentOrBuy(i);
+    const end = p.years[i.years];
+    const gap = end.buy_net_worth - end.rent_net_worth;
+    const months = p.monthly.reduce((sum, m) => sum + 12 * (m.rent - m.net), 0);
+    expect(Math.abs(months - gap)).toBeLessThan(2);
+  });
+
+  it("spreads the one-off costs, selling's at the end with its stamp duty, over every month looked at", () => {
+    const sold = (years: number) => {
+      const value = base.price * (1 + base.growth / 100) ** years;
+      return value * (base.sell_costs / 100) + sellerStampDuty(value, years);
+    };
+    for (const years of [3, 15]) {
+      const p = rentOrBuy({ ...base, years });
+      expect(p.monthly[0].one_off, `${years} years`).toBeCloseTo((24_600 + 50_000 + 4_000 + 20_000 + sold(years)) / (years * 12), 1);
+    }
+  });
+
+  it("counts what the money in the home would have earned -- cash at the investment return, CPF at its own -- and the principal as it goes in", () => {
+    const g = (rate: number) => (1 + rate / 100) ** (1 / 12) - 1;
+    // No loan: the money in the home is all paid on buying, and stays put.
+    const cash = rentOrBuy({ ...base, loan_share: 0, invest_return: 6 });
+    expect(cash.monthly[0].opportunity).toBeCloseTo(cash.upfront.from_cash * g(6), 1);
+    const cpf = rentOrBuy({ ...base, loan_share: 0, invest_return: 6, cpf_balance: 100_000, cpf_rate: 2.5 });
+    expect(cpf.monthly[0].opportunity).toBeCloseTo(cpf.upfront.from_cash * g(6) + 100_000 * g(2.5), 1);
+    // With a loan, each repayment's principal joins it; in cash here, none from CPF.
+    const loaned = rentOrBuy({ ...base, invest_return: 6 });
+    const periods = loanSchedule({ principal: 750_000, rate: base.loan_rate, start: "2026-01-01", months: base.loan_years * 12, method: "annuity" }).periods;
+    let inHome = loaned.upfront.from_cash, earned = 0;
+    for (const x of periods.slice(0, 12)) {
+      earned += inHome * g(6);
+      inHome += x.principal;
+    }
+    expect(loaned.monthly[0].opportunity).toBeCloseTo(earned / 12, 1);
+  });
+
+  it("sets the home's rise in value against the costs, a year's rise a month on average", () => {
+    const p = rentOrBuy({ ...base, growth: 4 });
+    expect(p.monthly[0].appreciation).toBeCloseTo((base.price * 0.04) / 12, 1);
+    expect(p.monthly[1].appreciation).toBeCloseTo((base.price * 1.04 * 0.04) / 12, 1);
+    expect(rentOrBuy({ ...base, growth: -2 }).monthly[0].appreciation).toBeLessThan(0);
   });
 });
 
