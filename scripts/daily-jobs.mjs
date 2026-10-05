@@ -165,7 +165,8 @@ export function judgeHousing(answer) {
   if (typeof body.checked !== "number" || typeof body.refreshed !== "number") {
     return { ok: false, text: `unexpected answer: HTTP ${status}, no counts` };
   }
-  const text = `${body.checked} dataset(s) checked, ${body.refreshed} read again (${Number(body.points) || 0} figure(s))`;
+  const snapshot = typeof body.snapshot === "string" ? `, snapshot ${body.snapshot}` : "";
+  const text = `${body.checked} dataset(s) checked, ${body.refreshed} read again (${Number(body.points) || 0} figure(s))${snapshot}`;
   const failed = Number(body.failed) || 0;
   if (!failed) return { ok: true, text };
   const first = Array.isArray(body.failures) && body.failures[0];

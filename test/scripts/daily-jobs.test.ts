@@ -169,6 +169,8 @@ describe("judging the housing data", () => {
   it("passes every dataset checked and every changed one read, in counts", () => {
     expect(judgeHousing({ status: 200, body: housed })).toEqual({ ok: true, text: "6 dataset(s) checked, 1 read again (12012 figure(s))" });
     expect(judgeHousing({ status: 200, body: { ...housed, refreshed: 0, points: 0 } })).toEqual({ ok: true, text: "6 dataset(s) checked, 0 read again (0 figure(s))" });
+    // And what became of the page's snapshot, where the site says.
+    expect(judgeHousing({ status: 200, body: { ...housed, snapshot: "built" } })).toEqual({ ok: true, text: "6 dataset(s) checked, 1 read again (12012 figure(s)), snapshot built" });
   });
 
   it("fails a dataset that could not be read, saying which and why on one line", () => {

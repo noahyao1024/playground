@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { auth } from "@/lib/auth";
 import { isFinanceOwner } from "@/lib/access";
-import { fetchAllRows, pagesOf } from "@/lib/paginate";
+import { MISSING_TABLE, fetchAllRows, pagesOf } from "@/lib/paginate";
 import type { FinanceAccount, FinanceBalance, LoanPrepayment, LoanRateChange } from "@/lib/finance";
 import type { RsuGrant, RsuSale } from "@/lib/rsu";
 import type { StockPosition } from "@/lib/stocks";
@@ -36,9 +36,6 @@ export function financeDatabase(): SupabaseClient | null {
   return url && key ? createClient(url, key, { auth: { persistSession: false } }) : null;
 }
 
-/** How PostgREST says a table is not there: Postgres's own code, or its own
- *  when the table is missing from its schema cache. */
-const MISSING_TABLE = new Set(["42P01", "PGRST205"]);
 
 /** A table's rows kept beside the accounts, in order -- every account's, or one
  *  account's -- by `key`, unique within an account. Before its migration is

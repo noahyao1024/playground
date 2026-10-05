@@ -621,6 +621,7 @@ describe.skipIf(!SERVER)("database", () => {
       await figure();
       await c.query(`insert into housing_scenarios (id, name, inputs) values ($1, 'Bedok', '{"price": 600000}')`, [SCENARIO]);
       await c.query(`insert into housing_sources (dataset, source_updated_at, points) values ('d_14f63e595975691e7c24a27ae4c07c79', now(), 146)`);
+      await c.query(`insert into housing_snapshot (id, version, market) values ('market', 1, '{"series": []}')`);
       for (const role of ["anon", "authenticated"]) {
         await c.query(`set local role ${role}`);
         for (const sql of [
@@ -632,6 +633,8 @@ describe.skipIf(!SERVER)("database", () => {
           `delete from housing_scenarios`,
           `select * from housing_sources`,
           `delete from housing_sources`,
+          `select * from housing_snapshot`,
+          `update housing_snapshot set version = 2`,
         ]) {
           expect((await failure(c, sql)).code, `${role}: ${sql}`).toBe("42501");
         }
@@ -666,6 +669,15 @@ describe.skipIf(!SERVER)("database", () => {
       }
       expect((await failure(c, `insert into housing_sources (dataset, points) values ('resale-prices', 1)`)).code).toBe("23514");
       expect((await failure(c, `insert into housing_sources (dataset, points) values ('d_14f63e595975691e7c24a27ae4c07c79', -1)`)).code).toBe("23514");
+    });
+
+    it("keeps the market whole as one row, in a shape it names", async () => {
+      await c.query(`insert into housing_snapshot (id, version, market) values ('market', 1, '{"series": [], "refreshed_at": null}')`);
+      expect((await failure(c, `insert into housing_snapshot (id, version, market) values ('market', 1, '{}')`)).code).toBe("23505");
+      for (const [id, version, market] of [["prices", "1", "{}"], ["market", "0", "{}"], ["market", "1", "[]"]]) {
+        await c.query(`delete from housing_snapshot`);
+        expect((await failure(c, `insert into housing_snapshot (id, version, market) values ($1, $2, $3::jsonb)`, [id, version, market])).code, `${id} ${version} ${market}`).toBe("23514");
+      }
     });
   });
 

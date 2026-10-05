@@ -1,4 +1,5 @@
-import { loanSchedule } from "@/lib/finance";
+import { addMonths } from "@/lib/dates";
+import { loanSchedule, type LoanRateChangeTerms } from "@/lib/finance";
 
 /** /housing's arithmetic, shared by the page and the server: quarters, the
  *  market's figures as the page reads them, Singapore's stamp duties and
@@ -45,9 +46,15 @@ export const quarterYear = (quarter: string) => quarterNumber(quarter) / 4;
 
 /** What is kept, by series: HDB's median resale prices and rents, by town and
  *  flat type, in dollars; HDB's resale price index, 2009 Q1 = 100; URA's price
- *  and rental indices for private homes, 2009 Q1 = 100. */
-export const SERIES = ["hdb_resale", "hdb_rent", "hdb_rpi", "ura_ppi", "ura_rri"] as const;
+ *  and rental indices for private homes, 2009 Q1 = 100. And what the growth
+ *  model reads besides, each quarter as it ended: 3-month compounded SORA and
+ *  Singapore government securities' yields (1y, 2y, 5y, 10y), in percent; the
+ *  consumer price index; and the S&P 500 with dividends reinvested, in
+ *  Singapore dollars. */
+export const SERIES = ["hdb_resale", "hdb_rent", "hdb_rpi", "ura_ppi", "ura_rri", "sora", "sgs", "cpi", "equity"] as const;
 export type Series = (typeof SERIES)[number];
+/** The segment the equity series is kept under. */
+export const EQUITY_SEGMENT = "sp500-sgd";
 
 /** A series for one place and kind of home: its quarters run on from `start`,
  *  one value each, null where none was published. */
@@ -63,13 +70,15 @@ export const FLAT_TYPE_LABELS: Record<string, string> = {
 /** Private homes as URA's indices divide them: a kind island-wide, or flats
  *  by region. Every one has both a price and a rental index. */
 export const PRIVATE_SEGMENTS = [
-  { key: "ALL:all", area: "ALL", segment: "all", label: "All private homes" },
-  { key: "ALL:landed", area: "ALL", segment: "landed", label: "Landed" },
-  { key: "ALL:non-landed", area: "ALL", segment: "non-landed", label: "Condos and apartments" },
-  { key: "CCR:non-landed", area: "CCR", segment: "non-landed", label: "Condos, core central (CCR)" },
-  { key: "RCR:non-landed", area: "RCR", segment: "non-landed", label: "Condos, rest of central (RCR)" },
-  { key: "OCR:non-landed", area: "OCR", segment: "non-landed", label: "Condos, outside central (OCR)" },
+  { key: "ALL:all", area: "ALL", segment: "all", label: "All private homes", short: "All private", noun: "private homes" },
+  { key: "ALL:landed", area: "ALL", segment: "landed", label: "Landed", short: "Landed", noun: "landed homes" },
+  { key: "ALL:non-landed", area: "ALL", segment: "non-landed", label: "Condos and apartments", short: "Condos, all", noun: "condos and apartments" },
+  { key: "CCR:non-landed", area: "CCR", segment: "non-landed", label: "Condos, core central (CCR)", short: "Condos, CCR", noun: "condos in the core central region" },
+  { key: "RCR:non-landed", area: "RCR", segment: "non-landed", label: "Condos, rest of central (RCR)", short: "Condos, RCR", noun: "condos in the rest of central" },
+  { key: "OCR:non-landed", area: "OCR", segment: "non-landed", label: "Condos, outside central (OCR)", short: "Condos, OCR", noun: "condos outside central" },
 ] as const;
+export type PrivateMarket = (typeof PRIVATE_SEGMENTS)[number]["key"];
+export const PRIVATE_MARKETS: readonly PrivateMarket[] = PRIVATE_SEGMENTS.map((s) => s.key);
 
 /** A town in the case people write it: KALLANG/WHAMPOA → Kallang/Whampoa. */
 export function townLabel(town: string): string {
@@ -240,6 +249,12 @@ export type HomeKind = (typeof HOME_KINDS)[number];
 export const LOAN_TYPES = ["hdb", "bank"] as const;
 export type LoanType = (typeof LOAN_TYPES)[number];
 
+/** The inputs the market's history can set (housing-model.ts). Left to it,
+ *  one takes the live estimate, and its own number stands in only while there
+ *  is none. */
+export const ESTIMATED = ["loan_rate", "growth", "rent_growth", "cost_growth", "invest_return"] as const;
+export type Estimated = (typeof ESTIMATED)[number];
+
 /** What a comparison takes. Money in Singapore dollars; rates in percent a
  *  year. Kept whole, as JSON, in housing_scenarios.inputs. */
 export type ScenarioInputs = {
@@ -247,13 +262,21 @@ export type ScenarioInputs = {
   /** Which home of the buyer's this would be: 1, 2, or 3 for the third or later. */
   nth: number;
   kind: HomeKind;
+  /** For a private home, the market it is in, as URA's indices divide them:
+   *  the estimates and the simulated futures follow its prices and rents. */
+  market: PrivateMarket;
   price: number;
   /** HDB's loan, which CPF may fund whole; or a bank's, which wants 5% of the price in cash. */
   loan_type: LoanType;
   /** The share of the price borrowed, in percent. */
   loan_share: number;
+  /** An HDB loan's rate; a bank loan's while it is fixed. */
   loan_rate: number;
   loan_years: number;
+  /** A bank loan: how many years its rate is fixed for, and after that, what
+   *  it pays over 3-month compounded SORA, reset every three months. */
+  lock_years: number;
+  spread: number;
   /** Paid once on buying, besides the stamp duties: legal fees, valuation. */
   buy_costs: number;
   renovation: number;
@@ -261,6 +284,8 @@ export type ScenarioInputs = {
   maintenance: number;
   /** Repairs and insurance: a year. */
   upkeep: number;
+  /** How fast S&CC or maintenance and repairs grow: prices in general. */
+  cost_growth: number;
   /** The home's annual value for property tax, now; it moves with rents. */
   annual_value: number;
   /** How fast the home's price grows. */
@@ -280,21 +305,27 @@ export type ScenarioInputs = {
   cpf_rate: number;
   /** How many years to look ahead. */
   years: number;
+  /** The inputs left to the market's live estimates. */
+  auto: Estimated[];
 };
 
 export const DEFAULT_INPUTS: ScenarioInputs = {
   residency: "pr",
   nth: 1,
   kind: "hdb",
+  market: "ALL:non-landed",
   price: 600_000,
   loan_type: "hdb",
   loan_share: 75,
   loan_rate: 2.6,
   loan_years: 25,
+  lock_years: 2,
+  spread: 0.5,
   buy_costs: 5_000,
   renovation: 30_000,
   maintenance: 90,
   upkeep: 1_000,
+  cost_growth: 2.5,
   annual_value: 30_000,
   growth: 3,
   sell_costs: 2,
@@ -306,19 +337,24 @@ export const DEFAULT_INPUTS: ScenarioInputs = {
   cpf_monthly: 0,
   cpf_rate: 2.5,
   years: 15,
+  // Kept before there were estimates, a scenario keeps its own numbers.
+  auto: [],
 };
 
 /** What each number may be, and whether it is whole. */
-export const INPUT_LIMITS: Record<Exclude<keyof ScenarioInputs, "residency" | "kind" | "loan_type">, [number, number, boolean?]> = {
+export const INPUT_LIMITS: Record<Exclude<keyof ScenarioInputs, "residency" | "kind" | "loan_type" | "market" | "auto">, [number, number, boolean?]> = {
   nth: [1, 3, true],
   price: [10_000, 100_000_000],
   loan_share: [0, 90],
   loan_rate: [0, 20],
   loan_years: [1, 35, true],
+  lock_years: [0, 10, true],
+  spread: [0, 10],
   buy_costs: [0, 10_000_000],
   renovation: [0, 10_000_000],
   maintenance: [0, 100_000],
   upkeep: [0, 1_000_000],
+  cost_growth: [-10, 20],
   annual_value: [0, 10_000_000],
   growth: [-20, 30],
   sell_costs: [0, 20],
@@ -341,7 +377,7 @@ export function parseInputs(raw: unknown): ScenarioInputs {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) throw new InputError("inputs must be an object");
   const given = raw as Record<string, unknown>;
   const out = { ...DEFAULT_INPUTS };
-  const choice = <T extends string>(key: "residency" | "kind" | "loan_type", options: readonly T[]) => {
+  const choice = <T extends string>(key: "residency" | "kind" | "loan_type" | "market", options: readonly T[]) => {
     const v = given[key];
     if (v === undefined) return;
     if (typeof v !== "string" || !options.includes(v as T)) throw new InputError(`${key} must be one of ${options.join(", ")}`);
@@ -350,6 +386,12 @@ export function parseInputs(raw: unknown): ScenarioInputs {
   choice("residency", RESIDENCIES);
   choice("kind", HOME_KINDS);
   choice("loan_type", LOAN_TYPES);
+  choice("market", PRIVATE_MARKETS);
+  if (given.auto !== undefined) {
+    const auto = given.auto;
+    if (!Array.isArray(auto) || auto.some((k) => !ESTIMATED.includes(k))) throw new InputError(`auto must list some of ${ESTIMATED.join(", ")}`);
+    out.auto = ESTIMATED.filter((k) => auto.includes(k));
+  }
   for (const [key, [min, max, whole]] of Object.entries(INPUT_LIMITS)) {
     const v = given[key];
     if (v === undefined) continue;
@@ -404,6 +446,8 @@ export type ProjectionYear = {
   year: number;
   home_value: number;
   loan_balance: number;
+  /** The loan's rate at the year's end, % a year; null once it is repaid, or without one. */
+  loan_rate: number | null;
   /** Selling it then: agent and legal fees, and seller's stamp duty within four years. */
   sale_costs: number;
   /** Everything, buying: the home's value less the loan and the costs of
@@ -480,6 +524,56 @@ export type Projection = {
 const round = (n: number) => Math.round(n * 100) / 100;
 const monthly = (yearlyPercent: number) => (1 + yearlyPercent / 100) ** (1 / 12) - 1;
 
+/** How the world moves while a comparison plays out, month by month from month
+ *  0: one future, steady or simulated. */
+export type Economy = {
+  /** The home's price, relative to the start: price[0] is 1. */
+  price: number[];
+  /** The market rent for the same home, relative to the start. A lease is
+   *  renewed each year at the market rent then, and the annual value with it. */
+  rent: number[];
+  /** Prices in general, relative to the start: S&CC, maintenance and repairs
+   *  move with them, set each year. */
+  costs: number[];
+  /** What investments earn in month m, from 1: 0.004 is 0.4%. */
+  invest: number[];
+  /** 3-month compounded SORA in month m, % a year: what a bank loan pays its
+   *  spread over once its rate is no longer fixed. */
+  sora: number[];
+};
+
+/** The steady future: every rate as the inputs set it, unmoving. SORA sits
+ *  where it leaves a bank loan's rate unchanged after its lock-in. */
+export function steadyEconomy(i: ScenarioInputs, months = i.years * 12): Economy {
+  const path = (yearly: number) => Array.from({ length: months + 1 }, (_, m) => (1 + yearly / 100) ** (m / 12));
+  const earn = monthly(i.invest_return);
+  return {
+    price: path(i.growth),
+    rent: path(i.rent_growth),
+    costs: path(i.cost_growth),
+    invest: Array.from({ length: months + 1 }, (_, m) => (m === 0 ? 0 : earn)),
+    sora: Array(months + 1).fill(Math.max(0, i.loan_rate - i.spread)),
+  };
+}
+
+/** The day the schedule starts on: any will do, its repayments 30/360. */
+const LOAN_START = "2026-01-01";
+
+/** A bank loan's rate after its lock-in: SORA over the three months to each
+ *  reset, plus the spread -- as the rate changes loanSchedule takes, each
+ *  setting a new instalment that clears the loan over the months left. */
+export function bankRateChanges(i: ScenarioInputs, sora: number[], loanMonths: number): LoanRateChangeTerms[] {
+  if (i.loan_type !== "bank") return [];
+  const changes: LoanRateChangeTerms[] = [];
+  let rate = i.loan_rate;
+  for (let k = i.lock_years * 12 + 1; k <= loanMonths; k += 3) {
+    const next = Math.round(Math.max(0, (sora[Math.min(k, sora.length - 1)] ?? 0) + i.spread) * 10_000) / 10_000;
+    if (next !== rate) changes.push({ effective_date: addMonths(LOAN_START, k - 1), rate: next, payment: null });
+    rate = next;
+  }
+  return changes;
+}
+
 /** Buying against renting a comparable home, month by month.
  *
  *  Both start with the same money. The buyer pays the down payment, the
@@ -494,9 +588,13 @@ const monthly = (yearlyPercent: number) => (1 + yearlyPercent / 100) ** (1 / 12)
  *  less the loan and the costs of selling. What a sale returns to CPF moves
  *  money from the proceeds to the account, so it changes neither side's total
  *  and is shown, not deducted. The instalments are loanSchedule's, as the
- *  finance page schedules a bank's. */
-export function rentOrBuy(inputs: ScenarioInputs): Projection {
+ *  finance page schedules a bank's.
+ *
+ *  `economy` is how prices, rents, costs, returns and SORA move: steady at the
+ *  inputs' rates unless a path is given, as the growth model gives one. */
+export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection {
   const i = inputs;
+  const e = economy ?? steadyEconomy(i);
   const loan = round(i.price * (i.loan_share / 100));
   const downPayment = round(i.price - loan);
   const bsd = buyerStampDuty(i.price);
@@ -512,11 +610,15 @@ export function rentOrBuy(inputs: ScenarioInputs): Projection {
   const fromCash = round(upfrontTotal - fromCpf);
 
   const months = i.years * 12;
+  const loanMonths = i.loan_years * 12;
   const schedule = loan > 0
-    ? loanSchedule({ principal: loan, rate: i.loan_rate, start: "2026-01-01", months: i.loan_years * 12, method: "annuity" }).periods
+    ? loanSchedule({
+      principal: loan, rate: i.loan_rate, start: LOAN_START, months: loanMonths, method: "annuity",
+      rateChanges: bankRateChanges(i, e.sora, loanMonths),
+    }).periods
     : [];
 
-  const grow = monthly(i.invest_return), cpfGrow = monthly(i.cpf_rate);
+  const cpfGrow = monthly(i.cpf_rate);
   let cashBuy = 0, cashRent = fromCash, cpfRent = i.cpf_balance;
   let cpfUsed = fromCpf;
   let ownSpent = bsd + absd + i.buy_costs + i.renovation, rentSpent = 0;
@@ -524,12 +626,14 @@ export function rentOrBuy(inputs: ScenarioInputs): Projection {
   const years: ProjectionYear[] = [];
 
   const yearEnd = (year: number, ownMonthly: number, rentMonthly: number) => {
-    const value = i.price * (1 + i.growth / 100) ** year;
+    const value = i.price * e.price[year * 12];
     const saleCosts = value * (i.sell_costs / 100) + sellerStampDuty(value, year);
+    const rateThen = year === 0 ? schedule[0]?.rate : balance > 0 ? schedule[year * 12 - 1]?.rate : undefined;
     years.push({
       year,
       home_value: round(value),
       loan_balance: round(balance),
+      loan_rate: rateThen ?? null,
       sale_costs: round(saleCosts),
       buy_net_worth: round(value - balance - saleCosts + cashBuy + cpfBuy),
       rent_net_worth: round(cashRent + cpfRent),
@@ -540,13 +644,13 @@ export function rentOrBuy(inputs: ScenarioInputs): Projection {
       cpf_refund: round(cpfUsed),
     });
   };
-  const firstOwn = (schedule[0]?.payment ?? 0) + i.maintenance + ownerOccupierTax(i.annual_value) / 12 + i.upkeep / 12;
-  yearEnd(0, firstOwn, i.rent + i.rent_costs / 12);
+  const firstOwn = (schedule[0]?.payment ?? 0) + (i.maintenance + i.upkeep / 12) * e.costs[0] + ownerOccupierTax(i.annual_value * e.rent[0]) / 12;
+  yearEnd(0, firstOwn, i.rent * e.rent[0] + i.rent_costs / 12);
 
   // Owning taken apart. The one-off costs are spread over every month looked
   // at, selling's at the end included; the money in the home is what was paid
   // on buying and the principal since, kept apart by where it came from.
-  const valueAt = (month: number) => i.price * (1 + i.growth / 100) ** (month / 12);
+  const valueAt = (month: number) => i.price * e.price[month];
   const endValue = valueAt(months);
   const oneOff = (bsd + absd + i.buy_costs + i.renovation + endValue * (i.sell_costs / 100) + sellerStampDuty(endValue, i.years)) / months;
   let inHomeCash = fromCash, inHomeCpf = fromCpf;
@@ -559,8 +663,13 @@ export function rentOrBuy(inputs: ScenarioInputs): Projection {
     const year = Math.floor((m - 1) / 12);
     const period = schedule[m - 1];
     const instalment = period?.payment ?? 0;
-    const tax = ownerOccupierTax(i.annual_value * (1 + i.rent_growth / 100) ** year) / 12;
-    const rent = i.rent * (1 + i.rent_growth / 100) ** year;
+    // The lease, the annual value and the running costs are set for the year
+    // at its start, at the market then.
+    const renewal = year * 12;
+    const tax = ownerOccupierTax(i.annual_value * e.rent[renewal]) / 12;
+    const rent = i.rent * e.rent[renewal];
+    const running = (i.maintenance + i.upkeep / 12) * e.costs[renewal];
+    const grow = e.invest[m];
     // What the money already in the home would have earned this month.
     sum.opportunity += inHomeCash * grow + inHomeCpf * cpfGrow;
 
@@ -574,14 +683,14 @@ export function rentOrBuy(inputs: ScenarioInputs): Projection {
     const byCpf = Math.min(cpfBuy, instalment);
     cpfBuy -= byCpf;
     cpfUsed += byCpf;
-    ownMonthly = instalment + i.maintenance + tax + i.upkeep / 12;
+    ownMonthly = instalment + running + tax;
     rentMonthly = rent + i.rent_costs / 12;
     const ownCash = ownMonthly - byCpf;
     const budget = Math.max(ownCash, rentMonthly);
     cashBuy += budget - ownCash;
     cashRent += budget - rentMonthly;
 
-    ownSpent += (period?.interest ?? 0) + i.maintenance + tax + i.upkeep / 12;
+    ownSpent += (period?.interest ?? 0) + running + tax;
     rentSpent += rentMonthly;
     if (period) balance = period.balance;
 
@@ -594,7 +703,7 @@ export function rentOrBuy(inputs: ScenarioInputs): Projection {
     sum.paid += ownMonthly;
     sum.principal += principal;
     sum.interest += period?.interest ?? 0;
-    sum.running += i.maintenance + tax + i.upkeep / 12;
+    sum.running += running + tax;
     sum.appreciation += valueAt(m) - valueAt(m - 1);
     sum.rent += rentMonthly;
 
@@ -653,12 +762,16 @@ export function notesOn(i: ScenarioInputs): string[] {
 
 /** Inputs from the market: an HDB town's median price and rent for a flat
  *  type, and how both have grown over ten years -- or, for a kind of private
- *  home, how URA's indices have, prices and rents being the buyer's own. */
+ *  home, which market it is and how URA's indices have grown, prices and
+ *  rents being the buyer's own. The growth stands in for the market's
+ *  estimates where there are none. */
 export function inputsFromMarket(data: MarketData, choice: { kind: "hdb"; town: string; flatType: string } | { kind: "private"; area: string; segment: string }): Partial<ScenarioInputs> {
   const pct = (g: number | null) => (g === null ? undefined : Math.round(g * 1000) / 10);
   if (choice.kind === "private") {
+    const market = PRIVATE_MARKETS.find((k) => k === `${choice.area}:${choice.segment}`);
     return strip({
       kind: "private",
+      market,
       loan_type: "bank",
       growth: pct(yearlyGrowth(findSeries(data, "ura_ppi", choice.area, choice.segment), 10)),
       rent_growth: pct(yearlyGrowth(findSeries(data, "ura_rri", choice.area, choice.segment), 10)),

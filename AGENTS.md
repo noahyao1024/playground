@@ -208,6 +208,29 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   and the mortgage is `loanSchedule`'s. A scenario's inputs are kept whole as jsonb and checked
   by `parseInputs`, so a new input needs a default, not a migration. The comparison never
   refuses a residency or a kind of home; what the rules may not allow goes in `notesOn`.
+  The growth model is `src/lib/housing-model.ts`. It reads four more series from
+  `housing_market`: SingStat's 3-month SORA and SGS yields (`sora`, `sgs`) and CPI (`cpi`) from
+  data.gov.sg, and the S&P 500 with dividends in SGD (`equity`: `^SP500TR` × `SGD=X`) from
+  Yahoo's chart endpoint. Yahoo has no catalogue, so the calendar stands in for one: it is
+  asked only once a quarter has closed that is not kept, and the quarter still running is
+  never kept — the estimates move when a source publishes, monthly at most, not daily. The
+  page reads the market from `housing_snapshot`, one row in one query: `refreshMarket` builds
+  it again only when a figure moved, or when there is none in the shape `SNAPSHOT_VERSION`
+  names — change `readMarket`'s answer and bump it. Without the table, before its migration,
+  the page reads every figure as before. The estimates are live, each with its reason: the home's price growth
+  and the investments' at the lower quartile of their ten-year spans (conservative, and the
+  same rule for both), rents and CPI at the middle span, SORA expected from the yields less
+  each one's average premium over SORA, and a bank loan's fixed rate as SORA's expected average
+  over its lock-in plus the spread. A scenario's `auto` lists the inputs that take them
+  (`withEstimates`). A missing `auto` means none, so a scenario kept before keeps its numbers;
+  the page's new comparison leaves all five to the market. Futures replay the joint quarterly
+  history in two-year blocks, wrapping at its end. Each series' change has its mean taken out
+  and the input's rate put in; SORA is an AR(1) departure from its expected path, floored at
+  0. Draws are seeded: the same inputs draw the same futures, so a test can name its numbers.
+  A future costs about a millisecond, so the page draws 500 of them 25 between frames
+  (`use-simulation.ts`), and keeps the summaries of the last 32 comparisons it drew, so going
+  back to one draws nothing. HDB published no rent medians for 2019 Q4: gaps of up to two
+  quarters are bridged rather than breaking a series.
 - Chart colours are `--series-1` to `--series-3` in `globals.css`, a palette checked for
   colour-blind separation with separate dark steps. Marks wear them; text never does.
 

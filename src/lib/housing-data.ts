@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { pagesOf } from "@/lib/paginate";
-import { nextQuarter, quarterOfDay, quarterStart, type MarketData, type MarketSeries, type Series } from "@/lib/housing";
+import { MISSING_TABLE, pagesOf } from "@/lib/paginate";
+import {
+  EQUITY_SEGMENT, nextQuarter, quarterFromNumber, quarterNumber, quarterOfDay, quarterStart, type MarketData, type MarketSeries, type Series,
+} from "@/lib/housing";
 
 /** Singapore's housing market, from data.gov.sg: the government's open data,
  *  free and keyless. HDB publishes each town's median resale price and median
@@ -18,9 +20,13 @@ type Dataset = {
   id: string;
   /** What it is, for a reader of the code and of a failure. */
   name: string;
-  /** A record as a figure, or null for one to pass over: a quarter with too
-   *  few deals to publish a median comes as "-" or "na". */
-  read: (record: Record<string, unknown>) => MarketRow | null;
+  /** Only the records whose fields hold these values: a dataset of two hundred
+   *  series of which one is wanted. */
+  filters?: Record<string, string>;
+  /** A record as a figure -- or figures, from a record holding a series a
+   *  column a month -- or null for one to pass over: a quarter with too few
+   *  deals to publish a median comes as "-" or "na". */
+  read: (record: Record<string, unknown>) => MarketRow | MarketRow[] | null;
 };
 
 /** A number the source wrote as text, or null where it wrote none. */
@@ -64,6 +70,34 @@ function row(series: Series, area: string | null | undefined, segment: string | 
   return area && segment && start && n !== null ? { series, area, segment, quarter: start, value: n } : null;
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** A record that holds a series a column a month, as SingStat's do -- "2026Jul"
+ *  and so on -- as one figure a quarter: the last month it has, so each quarter
+ *  is as it ended and the one still running as it stands. */
+export function quarterlyFromMonths(record: Record<string, unknown>, series: Series, area: string, segment: string): MarketRow[] {
+  const quarters = new Map<string, { month: number; value: number }>();
+  for (const [key, raw] of Object.entries(record)) {
+    const m = /^(\d{4})([A-Z][a-z]{2})$/.exec(key);
+    const month = m ? MONTHS.indexOf(m[2]) : -1;
+    const value = amount(raw);
+    if (!m || month < 0 || value === null) continue;
+    const quarter = `${m[1]}-Q${Math.floor(month / 3) + 1}`;
+    const kept = quarters.get(quarter);
+    if (!kept || month > kept.month) quarters.set(quarter, { month, value });
+  }
+  return [...quarters].map(([quarter, { value }]) => ({ series, area, segment, quarter: quarterStart(quarter)!, value }));
+}
+
+/** SingStat's interest rates, by the name of their series. */
+const RATE_SERIES: Record<string, [Series, string]> = {
+  "Compounded Singapore Overnight Rate Average (SORA) - 3 Month": ["sora", "3m"],
+  "Government Securities - 1-Year Treasury Bills Yield": ["sgs", "1y"],
+  "Government Securities - 2-Year Bond Yield": ["sgs", "2y"],
+  "Government Securities - 5-Year Bond Yield": ["sgs", "5y"],
+  "Government Securities - 10-Year Bond Yield": ["sgs", "10y"],
+};
+
 /** What is read, and how. The private indices come in two datasets, by kind of
  *  home island-wide and for flats by region, which share a series and never a
  *  figure. */
@@ -97,6 +131,20 @@ export const DATASETS: Dataset[] = [
     id: "d_8e4c50283fb7052a391dfb746a05c853",
     name: "URA private residential rental index",
     read: (r) => row("ura_rri", URA_REGIONS[upper(r.locality)], URA_TYPES[upper(r.property_type)], r.quarter, r.index),
+  },
+  {
+    id: "d_5fe5a4bb4a1ecc4d8a56a095832e2b24",
+    name: "SingStat interest rates: SORA and government securities' yields",
+    read: (r) => {
+      const target = RATE_SERIES[String(r.DataSeries ?? "").trim()];
+      return target ? quarterlyFromMonths(r, target[0], "ALL", target[1]) : null;
+    },
+  },
+  {
+    id: "d_bdaff844e3ef89d39fceb962ff8f0791",
+    name: "SingStat consumer price index, all items",
+    filters: { DataSeries: "All Items" },
+    read: (r) => (String(r.DataSeries ?? "").trim() === "All Items" ? quarterlyFromMonths(r, "cpi", "ALL", "all") : null),
   },
 ];
 
@@ -175,12 +223,14 @@ export function dataGovSg({
       return new Date(at).toISOString();
     },
 
-    /** Every record of a dataset, in the order it was published -- so of two
-     *  records for the same figure, as the rents have for 2020 Q1, the later wins. */
-    async records(id: string): Promise<Record<string, unknown>[]> {
+    /** Every record of a dataset -- or those `filters` names -- in the order
+     *  it was published, so of two records for the same figure, as the rents
+     *  have for 2020 Q1, the later wins. */
+    async records(id: string, filters?: Record<string, string>): Promise<Record<string, unknown>[]> {
       const out: Record<string, unknown>[] = [];
+      const only = filters ? `&filters=${encodeURIComponent(JSON.stringify(filters))}` : "";
       for (let offset = 0; ; offset += PAGE) {
-        const url = `${RECORDS}?resource_id=${id}&limit=${PAGE}&offset=${offset}&sort=${encodeURIComponent("_id asc")}`;
+        const url = `${RECORDS}?resource_id=${id}&limit=${PAGE}&offset=${offset}&sort=${encodeURIComponent("_id asc")}${only}`;
         const body = await get(url, true) as { success?: boolean; result?: { records?: unknown; total?: unknown } };
         const records = body?.result?.records;
         if (body?.success !== true || !Array.isArray(records)) throw new SourceError("an answer without records");
@@ -196,10 +246,51 @@ export function dataGovSg({
 export function readDataset(dataset: Pick<Dataset, "read">, records: Record<string, unknown>[]): MarketRow[] {
   const figures = new Map<string, MarketRow>();
   for (const record of records) {
-    const figure = dataset.read(record);
-    if (figure) figures.set(`${figure.series}|${figure.area}|${figure.segment}|${figure.quarter}`, figure);
+    const read = dataset.read(record);
+    for (const figure of Array.isArray(read) ? read : read ? [read] : []) {
+      figures.set(`${figure.series}|${figure.area}|${figure.segment}|${figure.quarter}`, figure);
+    }
   }
   return [...figures.values()];
+}
+
+/** Where the money not put into a home is taken to go: the S&P 500 with its
+ *  dividends reinvested, in Singapore dollars -- the longest history of shares
+ *  to be had without a key, from Yahoo Finance's chart endpoint, the one the
+ *  stock prices come from. */
+export const EQUITY = { symbol: "^SP500TR", fx: "SGD=X", segment: EQUITY_SEGMENT } as const;
+const CHART = "https://query1.finance.yahoo.com/v8/finance/chart";
+
+/** A chart answer's month-end values by month, YYYY-MM. Yahoo dates a monthly
+ *  bar at midnight where it trades -- for London's FX, 23:00 UTC the day
+ *  before in summer -- so twelve hours on puts every bar in its own month. */
+export function monthlyCloses(body: unknown): Map<string, number> {
+  const result = (body as { chart?: { result?: Array<Record<string, unknown>> } })?.chart?.result?.[0];
+  const times = (result?.timestamp ?? []) as number[];
+  const indicators = result?.indicators as { adjclose?: Array<{ adjclose?: Array<number | null> }>; quote?: Array<{ close?: Array<number | null> }> } | undefined;
+  const closes = indicators?.adjclose?.[0]?.adjclose ?? indicators?.quote?.[0]?.close ?? [];
+  const out = new Map<string, number>();
+  times.forEach((t, i) => {
+    const v = closes[i];
+    if (typeof v !== "number" || !(v > 0)) return;
+    out.set(new Date((t + 12 * 3600) * 1000).toISOString().slice(0, 7), v);
+  });
+  return new Map([...out].sort(([a], [b]) => (a < b ? -1 : 1)));
+}
+
+/** The index in Singapore dollars, a figure a quarter as it ended: each month's
+ *  value times the dollar's price in Singapore dollars that month, or the last
+ *  month's before it where Yahoo has none, as it has no October for years. */
+export function equityInSgd(index: Map<string, number>, fx: Map<string, number>): MarketRow[] {
+  const months = [...fx.keys()].sort();
+  const quarters = new Map<string, number>();
+  let rate: number | undefined, f = 0;
+  for (const [month, value] of [...index].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    while (f < months.length && months[f] <= month) rate = fx.get(months[f++]);
+    if (rate === undefined) continue;
+    quarters.set(quarterOfDay(`${month}-01`), value * rate);
+  }
+  return [...quarters].map(([quarter, value]) => ({ series: "equity", area: "ALL", segment: EQUITY.segment, quarter: quarterStart(quarter)!, value }));
 }
 
 export type Refresh = {
@@ -210,6 +301,9 @@ export type Refresh = {
   /** Figures written. */
   points: number;
   failures: Array<{ dataset: string; reason: string }>;
+  /** The market as the page reads it, kept whole: built again, as it was, or
+   *  not there to keep -- before its migration is applied. */
+  snapshot: "built" | "kept" | "unavailable";
 };
 
 type SourceRow = { dataset: string; source_updated_at: string | null };
@@ -225,10 +319,11 @@ export async function refreshMarket(db: SupabaseClient, {
   now = new Date(),
   ...options
 }: SourceOptions & { force?: boolean; now?: Date } = {}): Promise<Refresh> {
+  const fetcher = options.fetcher ?? fetch;
   const { data, error } = await db.from("housing_sources").select("dataset, source_updated_at");
   if (error) throw error;
   const known = new Map(((data ?? []) as SourceRow[]).map((s) => [s.dataset, s.source_updated_at ? new Date(s.source_updated_at).toISOString() : null]));
-  const out: Refresh = { checked: 0, refreshed: 0, points: 0, failures: [] };
+  const out: Refresh = { checked: 0, refreshed: 0, points: 0, failures: [], snapshot: "unavailable" };
   const source = dataGovSg(options);
 
   for (const dataset of DATASETS) {
@@ -236,7 +331,7 @@ export async function refreshMarket(db: SupabaseClient, {
       const updated = await source.lastUpdated(dataset.id);
       out.checked++;
       if (!force && known.get(dataset.id) === updated) continue;
-      const figures = readDataset(dataset, await source.records(dataset.id));
+      const figures = readDataset(dataset, await source.records(dataset.id, dataset.filters));
       if (figures.length === 0) throw new SourceError("no figures in it");
       for (let i = 0; i < figures.length; i += WRITE_BATCH) {
         const { error: written } = await db.from("housing_market")
@@ -251,11 +346,113 @@ export async function refreshMarket(db: SupabaseClient, {
       out.refreshed++;
       out.points += figures.length;
     } catch (err) {
-      const reason = err instanceof Error ? err.message : typeof err === "object" && err && "message" in err ? String(err.message) : String(err);
-      out.failures.push({ dataset: dataset.id, reason });
+      out.failures.push({ dataset: dataset.id, reason: reasonOf(err) });
     }
   }
+
+  // The shares' history, a figure a quarter as it ended. Yahoo has no
+  // catalogue to ask, so the calendar is asked instead: it is read only once
+  // a quarter has ended that is not kept yet, and the quarter still running is
+  // never kept -- the estimates move when a quarter closes, not every day.
+  try {
+    const closed = quarterStart(quarterFromNumber(quarterNumber(quarterOfDay(now.toISOString().slice(0, 10))) - 1))!;
+    const { data: kept, error: unread } = await db.from("housing_market").select("quarter, value")
+      .eq("series", "equity").eq("area", "ALL").eq("segment", EQUITY.segment).limit(1000);
+    if (unread) throw unread;
+    const before = new Map(((kept ?? []) as Array<{ quarter: string; value: number | string }>).map((r) => [r.quarter, Number(r.value)]));
+    if (!force && before.has(closed)) {
+      out.checked++;
+    } else {
+      const rows = (await readEquity(fetcher)).filter((r) => r.quarter <= closed);
+      out.checked++;
+      const moved = rows.filter((r) => before.get(r.quarter) === undefined || Math.abs(before.get(r.quarter)! - r.value) > 1e-9 * r.value);
+      if (moved.length) {
+        const { error: written } = await db.from("housing_market").upsert(moved, { onConflict: "series,area,segment,quarter" });
+        if (written) throw written;
+        out.refreshed++;
+        out.points += moved.length;
+      }
+    }
+  } catch (err) {
+    out.failures.push({ dataset: `yahoo:${EQUITY.symbol}`, reason: reasonOf(err) });
+  }
+
+  try {
+    out.snapshot = await keepSnapshot(db, out.refreshed > 0 || force, now);
+  } catch (err) {
+    out.failures.push({ dataset: "snapshot", reason: reasonOf(err) });
+  }
   return out;
+}
+
+/** The shape the snapshot is kept in. Change readMarket's answer and this
+ *  changes with it: a snapshot in another shape is read past and built anew. */
+export const SNAPSHOT_VERSION = 1;
+
+/** The market kept whole, as the page reads it -- built again when a figure
+ *  moved, or when there is none in this shape; left as it is otherwise. Before
+ *  its migration is applied there is no table for it, and nothing to keep. */
+async function keepSnapshot(db: SupabaseClient, changed: boolean, now: Date): Promise<Refresh["snapshot"]> {
+  if (!changed) {
+    const { data, error } = await db.from("housing_snapshot").select("version").eq("id", "market").maybeSingle();
+    if (error) {
+      if (MISSING_TABLE.has(error.code)) return "unavailable";
+      throw error;
+    }
+    if ((data as { version: number } | null)?.version === SNAPSHOT_VERSION) return "kept";
+  }
+  const market = await readMarket(db);
+  const { error } = await db.from("housing_snapshot").upsert(
+    { id: "market", version: SNAPSHOT_VERSION, market, built_at: now.toISOString() },
+    { onConflict: "id" },
+  );
+  if (error) {
+    if (MISSING_TABLE.has(error.code)) return "unavailable";
+    throw error;
+  }
+  return "built";
+}
+
+/** The market as the page reads it: the snapshot, in one query -- or, where
+ *  there is none in this shape yet, every figure, as readMarket reads them. */
+export async function marketOf(db: SupabaseClient): Promise<MarketData> {
+  const { data, error } = await db.from("housing_snapshot").select("version, market").eq("id", "market").maybeSingle();
+  const kept = data as { version: number; market: MarketData } | null;
+  if (!error && kept?.version === SNAPSHOT_VERSION) return kept.market;
+  if (error && !MISSING_TABLE.has(error.code)) throw error;
+  return readMarket(db);
+}
+
+const reasonOf = (err: unknown) =>
+  err instanceof Error ? err.message : typeof err === "object" && err && "message" in err ? String(err.message) : String(err);
+
+/** The S&P 500 with dividends, in Singapore dollars, a figure a quarter, from
+ *  Yahoo's charts of the index and of the dollar. A short user agent: Yahoo
+ *  answers a browser's full one with 429, as the stock prices found. */
+export async function readEquity(fetcher: typeof fetch = fetch): Promise<MarketRow[]> {
+  const chart = async (symbol: string) => {
+    const url = `${CHART}/${encodeURIComponent(symbol)}?interval=1mo&period1=0&period2=${Math.floor(Date.now() / 1000) + 86_400}`;
+    let reason = "no answer";
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const res = await fetcher(url, { headers: { "user-agent": "Mozilla/5.0", accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(TIMEOUT_MS) });
+        if (res.ok) {
+          const closes = monthlyCloses(await res.json());
+          if (closes.size === 0) throw new SourceError(`${symbol}: no prices in the answer`);
+          return closes;
+        }
+        reason = `${symbol}: HTTP ${res.status}`;
+        if (res.status !== 429 && res.status < 500) break;
+      } catch (err) {
+        if (err instanceof SourceError) throw err;
+        reason = `${symbol}: ${reasonOf(err)}`;
+      }
+      if (attempt < 2) await sleep(2_000);
+    }
+    throw new SourceError(reason);
+  };
+  const [index, fx] = [await chart(EQUITY.symbol), await chart(EQUITY.fx)];
+  return equityInSgd(index, fx);
 }
 
 /** Every figure kept, as the page draws them: a series a place and kind, its

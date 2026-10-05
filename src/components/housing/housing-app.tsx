@@ -50,11 +50,11 @@ function storedDraft(): Draft {
 /** What the market's figures filled in, said in a sentence. */
 function filledFrom(data: HousingData, choice: MarketChoice): string {
   if (choice.kind === "private") {
-    const label = PRIVATE_SEGMENTS.find((s) => s.area === choice.area && s.segment === choice.segment)?.label ?? "private homes";
-    return `Price and rent growth from URA's indices for ${label.toLowerCase()}, over ten years. Put in the home's own price and rent.`;
+    const market = PRIVATE_SEGMENTS.find((s) => s.area === choice.area && s.segment === choice.segment);
+    return `Price and rent growth follow URA's indices for ${market?.noun ?? "private homes"}. Put in the home's own price and rent.`;
   }
   const latest = latestPoint(findSeries(data.market, "hdb_resale", choice.town, choice.flatType));
-  return `Filled in from ${townLabel(choice.town)} ${FLAT_TYPE_LABELS[choice.flatType]} medians${latest ? `, ${quarterLabel(latest.quarter)}` : ""}, and their growth over ten years.`;
+  return `Filled in from ${townLabel(choice.town)} ${FLAT_TYPE_LABELS[choice.flatType]} medians${latest ? `, ${quarterLabel(latest.quarter)}` : ""}; price and rent growth follow HDB's.`;
 }
 
 export function HousingApp() {
@@ -113,7 +113,13 @@ export function HousingApp() {
     const filled = inputsFromMarket(data.market, choice);
     let inputs;
     try {
-      inputs = parseInputs({ ...clampInputs(draft.inputs), ...filled, ...(filled.kind === "private" && draft.inputs.loan_type === "hdb" ? { loan_type: "bank" } : {}) });
+      // The growth of prices and rents is the market's: left to its estimates.
+      inputs = parseInputs({
+        ...clampInputs(draft.inputs),
+        ...filled,
+        ...(filled.kind === "private" && draft.inputs.loan_type === "hdb" ? { loan_type: "bank" } : {}),
+        auto: [...draft.inputs.auto, "growth", "rent_growth"],
+      });
     } catch (err) {
       toast.error(`The market's figures could not be used: ${messageOf(err)}`);
       return;
@@ -189,6 +195,7 @@ export function HousingApp() {
         <RentOrBuy
           draft={draft}
           setDraft={setDraft}
+          market={data.market}
           scenarios={data.scenarios}
           onSaved={(saved: Scenario) => setData((d) => (d ? { ...d, scenarios: [saved, ...d.scenarios.filter((s) => s.id !== saved.id)] } : d))}
           onDeleted={(id) => setData((d) => (d ? { ...d, scenarios: d.scenarios.filter((s) => s.id !== id) } : d))}

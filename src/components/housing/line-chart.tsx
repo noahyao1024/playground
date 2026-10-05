@@ -22,7 +22,7 @@ const LABEL_CLEARANCE = 0.09;
  *  common base, a percentage, or money -- never two scales at once. The
  *  crosshair reads every series at the point under it, and `details` adds what
  *  the tooltip should say besides, such as the prices behind an index. */
-export function LinesChart({ rows, series, format, axisFormat = format, ticks, xFormat, reference, zero = false, height = 240, details }: {
+export function LinesChart({ rows, series, format, axisFormat = format, ticks, xFormat, reference, zero = false, scale, height = 240, details }: {
   rows: LineRow[];
   series: LineSeries[];
   /** How a value is written: at the end of a line and in the tooltip. */
@@ -36,12 +36,14 @@ export function LinesChart({ rows, series, format, axisFormat = format, ticks, x
   reference?: number;
   /** Whether the axis reaches zero; without, it fits the lines. */
   zero?: boolean;
+  /** The axis, where it should not fit the lines: a share from 0 to 1. */
+  scale?: { domain: [number, number]; ticks: number[] };
   height?: number;
   details?: (row: LineRow) => Array<{ label: string; value: string }>;
 }) {
   const values = rows.flatMap((r) => series.map((s) => r[s.key])).filter((v): v is number => typeof v === "number");
   if (reference !== undefined) values.push(reference);
-  const y = moneyAxis(values.length ? values : [0], { zero });
+  const y = scale ?? moneyAxis(values.length ? values : [0], { zero });
   const range = y.domain[1] - y.domain[0] || 1;
 
   // The last value of each line, labelled where they stand clear of each other.
