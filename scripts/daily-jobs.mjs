@@ -7,7 +7,9 @@
  * The work happens on the site, next to its configuration: on the 1st to 3rd
  * in Singapore /api/cron/bill fills in the month's charges, and every day
  * /api/cron/daily works out who owes more than the threshold, its reads keeping
- * the database awake. This calls them and judges the answers. A mail due goes
+ * the database awake, /api/cron/stocks values the stock accounts and
+ * /api/cron/housing brings the housing market's figures up to date. This calls
+ * them and judges the answers. A mail due goes
  * to a file for the workflow's next step, which sends it with the SMTP account
  * GitHub holds. The run fails -- and GitHub mails the owner -- when a job did
  * not do its work: no answer, an error, a refusal, charges left unbilled. The
@@ -112,17 +114,23 @@ export function judgeDaily(answer) {
 }
 
 /** Whether billing did its work. A charge skipped for want of a rate fails the
- *  run: the next run fills it in, but after the 3rd's there is no next run. */
+ *  run: the next run fills it in, but after the 3rd's there is no next run. So
+ *  does failing to pay from the wallets what they cover, which would otherwise
+ *  sit unpaid until somebody noticed. */
 export function judgeBill(answer) {
   const { status, body } = answer;
   if (status === 401) return { ok: false, text: REFUSED };
   if (status !== 200) return { ok: false, text: `failed: ${failure(answer)}` };
   if (typeof body.generated !== "number") return { ok: false, text: `unexpected answer: HTTP ${status}, no count of charges` };
   const skipped = Array.isArray(body.skipped) ? body.skipped.length : 0;
-  const text = `${body.month}: ${body.generated} charge(s) generated`;
-  return skipped
-    ? { ok: false, text: `${text}, ${skipped} skipped with no rate for their currency` }
-    : { ok: true, text };
+  // The count settled from wallets, never the amount: the log is public.
+  const auto = body.auto_settled;
+  const settled = typeof auto?.settled === "number" ? `, ${auto.settled} settled from wallets` : "";
+  const text = `${body.month}: ${body.generated} charge(s) generated${settled}`;
+  if (skipped) return { ok: false, text: `${text}, ${skipped} skipped with no rate for their currency` };
+  // Billed, but what the wallets cover was left unpaid; the owner should hear.
+  if (typeof auto?.error === "string") return { ok: false, text: `${text}; settling from wallets failed: ${auto.error}` };
+  return { ok: true, text };
 }
 
 /** Whether the stock accounts were valued: every account holding positions
@@ -143,6 +151,51 @@ export function judgeStocks(answer) {
   return failed || skipped
     ? { ok: false, text: `${text}; ${failed} price(s) not had, ${skipped} account(s) not valued` }
     : { ok: true, text };
+}
+
+/** Whether the housing market's figures are up to date: every dataset's
+ *  catalogue entry read, and every one that changed read again. A dataset that
+ *  could not be read fails the run: the page would go on showing last
+ *  quarter's figures as though they were the latest, and nothing else would
+ *  say. */
+export function judgeHousing(answer) {
+  const { status, body } = answer;
+  if (status === 401) return { ok: false, text: REFUSED };
+  if (status !== 200) return { ok: false, text: `failed: ${failure(answer)}` };
+  if (typeof body.checked !== "number" || typeof body.refreshed !== "number") {
+    return { ok: false, text: `unexpected answer: HTTP ${status}, no counts` };
+  }
+  const snapshot = typeof body.snapshot === "string" ? `, snapshot ${body.snapshot}` : "";
+  const text = `${body.checked} dataset(s) checked, ${body.refreshed} read again (${Number(body.points) || 0} figure(s))${snapshot}`;
+  const failed = Number(body.failed) || 0;
+  if (!failed) return { ok: true, text };
+  const first = Array.isArray(body.failures) && body.failures[0];
+  const why = first ? ` -- ${quote(`${first.dataset}: ${first.reason}`)}` : "";
+  return { ok: false, text: `${text}; ${failed} could not be read${why}` };
+}
+
+/** The developments followed: read from URA a week after they were last, so
+ *  most days there is nothing to do. A state that read nothing is no failure
+ *  -- no key set yet, none followed, none due -- but a read that failed is. */
+export function judgeProjects(answer) {
+  const { status, body } = answer;
+  if (status === 401) return { ok: false, text: REFUSED };
+  if (status !== 200) return { ok: false, text: `failed: ${failure(answer)}` };
+  if (typeof body.state !== "string" || typeof body.followed !== "number") {
+    return { ok: false, text: `unexpected answer: HTTP ${status}, no state` };
+  }
+  const text = {
+    read: `${body.followed} followed, ${body.read} read (${Number(body.sales) || 0} sale(s), ${Number(body.rents) || 0} rental contract(s))`,
+    "not due": `${body.followed} followed, none due`,
+    "no key": `${body.followed} followed, but URA_ACCESS_KEY is not set on Vercel`,
+    "none followed": "none followed",
+    unavailable: "no tables for them yet",
+  }[body.state] ?? `state ${quote(body.state)}`;
+  const failed = Number(body.failed) || 0;
+  if (!failed) return { ok: true, text };
+  const first = Array.isArray(body.failures) && body.failures[0];
+  const why = first ? ` -- ${quote(`${first.source}: ${first.reason}`)}` : "";
+  return { ok: false, text: `${text}; ${failed} could not be read${why}` };
 }
 
 /** The 1st to 3rd of the month in Singapore: the days vercel.json bills on. */
@@ -166,6 +219,8 @@ async function main() {
   const daily = judgeDaily(await call(`${SITE}/api/cron/daily${testMail ? "?test=1" : ""}`));
   results.push(["Unpaid alert", daily]);
   results.push(["Stock prices", judgeStocks(await call(`${SITE}/api/cron/stocks`))]);
+  results.push(["Housing data", judgeHousing(await call(`${SITE}/api/cron/housing`))]);
+  results.push(["Developments", judgeProjects(await call(`${SITE}/api/cron/projects`))]);
 
   // The mail names people, so it goes to a file for the next step, not the log.
   if (daily.mail) {

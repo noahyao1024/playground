@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth, isAllowedEmail } from "@/lib/auth";
 import { monthInSG } from "@/lib/dates";
-import { getServerSupabase, generateChargesForMonth, monthlyRates } from "@/lib/billing";
+import { autoSettle, autoSettledNote, getServerSupabase, generateChargesForMonth, monthlyRates } from "@/lib/billing";
 
 export async function POST(req: NextRequest) {
   // Check auth + whitelist
@@ -38,11 +38,17 @@ export async function POST(req: NextRequest) {
 
   try {
     const result = await generateChargesForMonth(supabase, month, ratesFor, subscriberId);
+    // Then pay what the wallets cover -- this person's, or everyone's -- as
+    // the monthly run does.
+    const autoSettled = await autoSettle(supabase, subscriberId ? [subscriberId] : undefined);
     // A run that skipped everything would otherwise read as a clean success.
     const note = result.skipped.length
       ? ` (skipped ${result.skipped.length} with no rate for their currency)`
       : "";
-    return NextResponse.json({ message: `Generated ${result.generated} charge(s)${note}`, month, ...result });
+    return NextResponse.json({
+      message: `Generated ${result.generated} charge(s)${note}${autoSettledNote(autoSettled)}`,
+      month, ...result, auto_settled: autoSettled,
+    });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : typeof err === "object" && err !== null && "message" in err ? (err as { message: string }).message : JSON.stringify(err);
     return NextResponse.json({ error: msg }, { status: 500 });

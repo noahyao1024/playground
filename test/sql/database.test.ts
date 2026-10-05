@@ -53,6 +53,28 @@ async function seed(c: pg.Client, wallet = 100) {
   );
 }
 
+const Z = "00000000-0000-0000-0000-00000000000e"; // may pay from W's wallet
+
+/** Ann, Wal and Zed, and a service, with no money and nothing owed. */
+async function people(c: pg.Client) {
+  await c.query(`insert into subscribers (id, name) values ($1, 'Ann'), ($2, 'Wal'), ($3, 'Zed')`, [A, W, Z]);
+  await c.query(`insert into services (id, name, monthly_cost, currency) values ($1, 'Svc', 10, 'SGD')`, [SVC]);
+}
+const topUp = (c: pg.Client, who: string, amount: number) =>
+  c.query(`insert into wallet_entries (subscriber_id, amount_cny, kind) values ($1, $2, 'topup')`, [who, amount]);
+/** An unpaid one-off charge for `who` in `month`, and its id. */
+async function charge(c: pg.Client, who: string, month: string, amount: number, { deleted = false } = {}): Promise<string> {
+  return (await c.query(
+    `insert into charges (subscriber_id, service_id, label, period_start, period_end, monthly_cost, currency, exchange_rate, total_cny, deleted_at)
+     values ($1, null, 'once', $2, $2, $3, 'CNY', 1, $3, case when $4 then now() end) returning id`,
+    [who, month, amount, deleted],
+  )).rows[0].id;
+}
+const paidOf = async (c: pg.Client, ids: string[]) => {
+  const { rows } = await c.query(`select id, paid from charges where id = any($1::uuid[])`, [ids]);
+  return ids.map((id) => rows.find((r) => r.id === id)?.paid);
+};
+
 const balance = async (c: pg.Client, who = W) =>
   Number((await c.query(`select coalesce(sum(amount_cny), 0) as b from wallet_entries where subscriber_id = $1`, [who])).rows[0].b);
 const paid = async (c: pg.Client) =>
@@ -135,6 +157,94 @@ describe.skipIf(!SERVER)("database", () => {
       expect((await paid(c))[LIVE]).toBe(false);
       const kinds = (await c.query(`select kind from wallet_entries order by created_at, kind`)).rows.map((r) => r.kind);
       expect(kinds.sort()).toEqual(["adjustment", "charge", "topup"]);
+    });
+  });
+
+  describe("auto_settle", () => {
+    it("pays a person's charges from their own wallet, oldest first, each one the balance still covers", async () => {
+      await people(c);
+      await topUp(c, A, 60);
+      // Written newest first, so the order paid is the months', not the rows'.
+      const september = await charge(c, A, "2026-09", 20);
+      const august = await charge(c, A, "2026-08", 30);
+      const july = await charge(c, A, "2026-07", 40);
+      const gone = await charge(c, A, "2026-06", 10, { deleted: true });
+      const free = await charge(c, A, "2026-05", 0);
+
+      const rows = (await c.query(`select * from auto_settle(array[$1]::uuid[])`, [A])).rows;
+      // July's 40 first; August's 30 does not fit in the 20 left; September's 20 does.
+      expect(rows.map((r) => [r.wallet, r.settled, Number(r.total), Number(r.balance_left)])).toEqual([[A, 2, 60, 0]]);
+      expect(await paidOf(c, [july, august, september, gone, free])).toEqual([true, false, true, false, false]);
+      expect(await balance(c, A)).toBe(0);
+      const entries = (await c.query(`select charge_id, amount_cny, kind, note from wallet_entries where kind = 'charge' order by amount_cny`)).rows;
+      expect(entries.map((e) => [e.charge_id, Number(e.amount_cny), e.note])).toEqual([[july, -40, "Auto-settled"], [september, -20, "Auto-settled"]]);
+      // The touch trigger stamps when it was paid, as for any settlement.
+      expect((await c.query(`select paid_at from charges where id = $1`, [july])).rows[0].paid_at).not.toBeNull();
+    });
+
+    it("pays from the wallet a person pays from, for everyone sharing it, and leaves their own wallet alone", async () => {
+      await people(c);
+      await c.query(`update subscribers set pays_from = $1 where id = $2`, [W, Z]);
+      await topUp(c, W, 100);
+      await topUp(c, Z, 40);
+      const theirs = await charge(c, Z, "2026-08", 50);
+      const mine = await charge(c, W, "2026-09", 30);
+
+      // Asking for Zed settles the whole wallet Zed pays from, Wal's own charge too.
+      const rows = (await c.query(`select * from auto_settle(array[$1]::uuid[])`, [Z])).rows;
+      expect(rows.map((r) => [r.wallet, r.settled, Number(r.total), Number(r.balance_left)])).toEqual([[W, 2, 80, 20]]);
+      expect(await paidOf(c, [theirs, mine])).toEqual([true, true]);
+      expect([await balance(c, W), await balance(c, Z)]).toEqual([20, 40]);
+    });
+
+    it("settles every wallet when given nobody in particular, and nothing more the second time", async () => {
+      await people(c);
+      await topUp(c, A, 30);
+      await topUp(c, W, 30);
+      await charge(c, A, "2026-09", 30);
+      await charge(c, W, "2026-09", 25);
+      await charge(c, W, "2026-10", 25);
+
+      const first = (await c.query(`select * from auto_settle()`)).rows;
+      expect(first.map((r) => [r.wallet, r.settled]).sort()).toEqual([[A, 1], [W, 1]].sort());
+      expect((await c.query(`select * from auto_settle()`)).rows).toEqual([]);
+      expect([await balance(c, A), await balance(c, W)]).toEqual([0, 5]);
+    });
+
+    it("posts nothing for a wallet that covers none of it", async () => {
+      await people(c);
+      await topUp(c, A, 10);
+      const owed = await charge(c, A, "2026-09", 30);
+      expect((await c.query(`select * from auto_settle(array[$1]::uuid[])`, [A])).rows).toEqual([]);
+      expect(await paidOf(c, [owed])).toEqual([false]);
+      expect((await c.query(`select count(*)::int as n from wallet_entries`)).rows[0].n).toBe(1);
+    });
+
+    it("is undone like any settlement, and pays the charge again when asked again", async () => {
+      await people(c);
+      await topUp(c, A, 30);
+      const owed = await charge(c, A, "2026-09", 30);
+      await c.query(`select * from auto_settle(array[$1]::uuid[])`, [A]);
+      expect(Number((await c.query(`select unsettle_charge($1) as left`, [owed])).rows[0].left)).toBe(30);
+      expect(await paidOf(c, [owed])).toEqual([false]);
+      expect((await c.query(`select * from auto_settle(array[$1]::uuid[])`, [A])).rows).toHaveLength(1);
+      expect(await balance(c, A)).toBe(0);
+    });
+
+    it("keeps pays_from one wallet deep, and never pointing at the person themselves", async () => {
+      await people(c);
+      await c.query(`update subscribers set pays_from = $1 where id = $2`, [W, Z]);
+      const deeper = await failure(c, `update subscribers set pays_from = $1 where id = $2`, [Z, A]);
+      expect([deeper.code, deeper.message]).toEqual(["23514", "Zed pays from another wallet, so nobody can pay from theirs"]);
+      const payer = await failure(c, `update subscribers set pays_from = $1 where id = $2`, [A, W]);
+      expect([payer.code, payer.message]).toEqual(["23514", "Others pay from Wal's wallet, so it cannot pay from another"]);
+      const self = await failure(c, `update subscribers set pays_from = $1 where id = $1`, [A]);
+      expect(self.code).toBe("23514");
+      // Back to their own wallet is always allowed, and then Wal may pay from another.
+      await c.query(`update subscribers set pays_from = null where id = $1`, [Z]);
+      await c.query(`update subscribers set pays_from = $1 where id = $2`, [A, W]);
+      // A wallet others pay from cannot be deleted from under them.
+      expect((await failure(c, `delete from subscribers where id = $1`, [A])).code).toBe("23503");
     });
   });
 
@@ -500,6 +610,113 @@ describe.skipIf(!SERVER)("database", () => {
     });
   });
 
+  describe("housing", () => {
+    const SCENARIO = "00000000-0000-0000-0000-0000000000f2";
+    const figure = (quarter = "2026-04-01", value = 600000, series = "hdb_resale", area = "BEDOK", segment = "4-room") => c.query(
+      `insert into housing_market (series, area, segment, quarter, value) values ($1, $2, $3, $4, $5)`,
+      [series, area, segment, quarter, value],
+    );
+
+    it("is private: neither the anon key nor a signed-in session can read or write it, the service role can", async () => {
+      await figure();
+      await c.query(`insert into housing_scenarios (id, name, inputs) values ($1, 'Bedok', '{"price": 600000}')`, [SCENARIO]);
+      await c.query(`insert into housing_sources (dataset, source_updated_at, points) values ('d_14f63e595975691e7c24a27ae4c07c79', now(), 146)`);
+      await c.query(`insert into housing_snapshot (id, version, market) values ('market', 1, '{"series": []}')`);
+      for (const role of ["anon", "authenticated"]) {
+        await c.query(`set local role ${role}`);
+        for (const sql of [
+          `select * from housing_market`,
+          `insert into housing_market (series, area, segment, quarter, value) values ('hdb_rpi', 'ALL', 'all', '2026-01-01', 1)`,
+          `select * from housing_scenarios`,
+          `insert into housing_scenarios (name, inputs) values ('x', '{}')`,
+          `update housing_scenarios set name = 'y'`,
+          `delete from housing_scenarios`,
+          `select * from housing_sources`,
+          `delete from housing_sources`,
+          `select * from housing_snapshot`,
+          `update housing_snapshot set version = 2`,
+        ]) {
+          expect((await failure(c, sql)).code, `${role}: ${sql}`).toBe("42501");
+        }
+        await c.query(`reset role`);
+      }
+      await c.query(`set local role service_role`);
+      expect((await c.query(`select count(*)::int as n from housing_scenarios`)).rows[0].n).toBe(1);
+      await c.query(`reset role`);
+    });
+
+    it("keeps one figure a series, place, kind and quarter -- on the quarter's first day, and above zero", async () => {
+      await figure();
+      expect((await failure(c, `insert into housing_market (series, area, segment, quarter, value) values ('hdb_resale', 'BEDOK', '4-room', '2026-04-01', 1)`)).code).toBe("23505");
+      for (const [quarter, value, series, area, segment] of [
+        ["2026-04-02", 1, "hdb_resale", "BEDOK", "4-room"],
+        ["2026-05-01", 1, "hdb_resale", "BEDOK", "4-room"],
+        ["2026-07-01", 0, "hdb_resale", "BEDOK", "4-room"],
+        ["2026-07-01", 1, "HDB resale", "BEDOK", "4-room"],
+        ["2026-07-01", 1, "hdb_resale", "bedok", "4-room"],
+        ["2026-07-01", 1, "hdb_resale", "BEDOK", "4 Room"],
+      ] as const) {
+        expect((await failure(c, `insert into housing_market (series, area, segment, quarter, value) values ($1, $2, $3, $4, $5)`, [series, area, segment, quarter, value])).code,
+          `${quarter} ${value} ${series} ${area} ${segment}`).toBe("23514");
+      }
+      await figure("2026-07-01", 3000, "hdb_rent", "KALLANG/WHAMPOA", "executive");
+      await figure("2026-10-01", 172.3, "ura_rri", "RCR", "non-landed");
+    });
+
+    it("names a scenario, keeps its inputs as an object, and knows a dataset by data.gov.sg's id", async () => {
+      for (const [name, inputs] of [["", "{}"], ["   ", "{}"], ["x".repeat(81), "{}"], ["ok", "[]"], ["ok", "1"]]) {
+        expect((await failure(c, `insert into housing_scenarios (name, inputs) values ($1, $2::jsonb)`, [name, inputs])).code, `${name} ${inputs}`).toBe("23514");
+      }
+      expect((await failure(c, `insert into housing_sources (dataset, points) values ('resale-prices', 1)`)).code).toBe("23514");
+      expect((await failure(c, `insert into housing_sources (dataset, points) values ('d_14f63e595975691e7c24a27ae4c07c79', -1)`)).code).toBe("23514");
+    });
+
+    it("keeps the developments followed and their records private, checked, and gone with the development", async () => {
+      await c.query(`insert into housing_projects (name) values ('WATERTOWN')`);
+      await c.query(`insert into housing_project_sales (project, month, price, area_sqm, floor_range, sale_type, property_type) values ('WATERTOWN', '2026-08-01', 1550000, 98, '06-10', 'resale', 'Condominium')`);
+      await c.query(`insert into housing_project_rents (project, quarter, month, rent, sqft_low, sqft_high, bedrooms) values ('WATERTOWN', '2026-07-01', '2026-08-01', 4500, 1000, 1100, 3)`);
+      for (const role of ["anon", "authenticated"]) {
+        await c.query(`set local role ${role}`);
+        for (const sql of [
+          `select * from housing_projects`,
+          `insert into housing_projects (name) values ('X')`,
+          `select * from housing_project_sales`,
+          `delete from housing_project_sales`,
+          `select * from housing_project_rents`,
+          `update housing_project_rents set rent = 1`,
+        ]) {
+          expect((await failure(c, sql)).code, `${role}: ${sql}`).toBe("42501");
+        }
+        await c.query(`reset role`);
+      }
+      for (const sql of [
+        `insert into housing_projects (name) values ('Watertown')`,
+        `insert into housing_projects (name) values (' WATERTOWN')`,
+        `insert into housing_projects (name, district) values ('A', '9')`,
+        `insert into housing_projects (name, segment) values ('B', 'NORTH')`,
+        `insert into housing_project_sales (project, month, price, area_sqm) values ('WATERTOWN', '2026-08-02', 1, 1)`,
+        `insert into housing_project_sales (project, month, price, area_sqm) values ('WATERTOWN', '2026-08-01', 0, 1)`,
+        `insert into housing_project_sales (project, month, price, area_sqm, sale_type) values ('WATERTOWN', '2026-08-01', 1, 1, 'auction')`,
+        `insert into housing_project_rents (project, quarter, month, rent) values ('WATERTOWN', '2026-08-01', '2026-08-01', 1)`,
+        `insert into housing_project_rents (project, quarter, month, rent, bedrooms) values ('WATERTOWN', '2026-07-01', '2026-08-01', 1, 0)`,
+      ]) {
+        expect((await failure(c, sql)).code, sql).toBe("23514");
+      }
+      expect((await failure(c, `insert into housing_project_sales (project, month, price, area_sqm) values ('NOWHERE', '2026-08-01', 1, 1)`)).code).toBe("23503");
+      await c.query(`delete from housing_projects where name = 'WATERTOWN'`);
+      expect((await c.query(`select (select count(*) from housing_project_sales) + (select count(*) from housing_project_rents) as n`)).rows[0].n).toBe("0");
+    });
+
+    it("keeps the market whole as one row, in a shape it names", async () => {
+      await c.query(`insert into housing_snapshot (id, version, market) values ('market', 1, '{"series": [], "refreshed_at": null}')`);
+      expect((await failure(c, `insert into housing_snapshot (id, version, market) values ('market', 1, '{}')`)).code).toBe("23505");
+      for (const [id, version, market] of [["prices", "1", "{}"], ["market", "0", "{}"], ["market", "1", "[]"]]) {
+        await c.query(`delete from housing_snapshot`);
+        expect((await failure(c, `insert into housing_snapshot (id, version, market) values ($1, $2, $3::jsonb)`, [id, version, market])).code, `${id} ${version} ${market}`).toBe("23514");
+      }
+    });
+  });
+
   describe("the damage report in 20260925_settle_skips_deleted_charges", () => {
     it("counts settlements posted against an already-deleted charge, until they are reversed", async () => {
       await seed(c);
@@ -589,6 +806,36 @@ describe.skipIf(!SERVER)("settle_person under a concurrent write", () => {
       expect(await balance(first)).toBe(20);
       const late = (await first.query(`select paid from charges where period_start = '2026-09'`)).rows[0];
       expect(late.paid).toBe(false);
+    });
+  });
+});
+
+describe.skipIf(!SERVER)("auto_settle against a settlement from the same wallet", () => {
+  it("holds the wallet while it pays, so a settlement from it waits and finds what it left", async () => {
+    await committing(async (first, second) => {
+      await people(first);
+      await topUp(first, A, 30);
+      await charge(first, A, "2026-09", 30);
+      const walsCharge = await charge(first, W, "2026-09", 30);
+
+      // The deployed auto_settle, with a pause before it reads the balance: the
+      // window in which someone could settle from the same wallet.
+      const def: string = (await first.query(`select pg_get_functiondef('auto_settle'::regproc) as d`)).rows[0].d;
+      const slow = def
+        .replace("public.auto_settle(", "public.auto_settle_slow(")
+        .replace(/\n  foreach v_wallet in array v_wallets loop\n/, "\n  perform pg_sleep(1);\n  foreach v_wallet in array v_wallets loop\n");
+      expect(slow).toContain("pg_sleep");
+      await first.query(slow);
+
+      const running = first.query(`select * from auto_settle_slow(array[$1]::uuid[])`, [A]);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      // Wal's charge, paid from Ann's wallet meanwhile. Reading the balance before
+      // the run is done would see 30 and pay it, and the run would pay its own
+      // 30 from the same 30.
+      const meanwhile = await second.query(`select settle_charge($1, $2)`, [walsCharge, A]).then(() => "paid", (e: Error) => e.message);
+      expect((await running).rows.map((r) => r.settled)).toEqual([1]);
+      expect(meanwhile).toBe("Not enough in the wallet: 0.00 available, 30.00 needed");
+      expect(await balance(first, A)).toBe(0);
     });
   });
 });

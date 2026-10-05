@@ -5,12 +5,21 @@ Personal tools, deployed on Vercel.
 - **Split Bill / 分账** — tracks shared subscription costs among a handful of
   friends. Services are priced in SGD, USD or JPY and converted to CNY at the
   rate that held in the month being billed. Charges are settled from per-person
-  wallets.
+  wallets — automatically, oldest first, whenever the wallet holds enough: after
+  each monthly run, a new charge, a top-up. A person can pay from someone else's
+  wallet instead (`pays_from`), so a household shares one.
 - **SRE Machine Delivery** — server deliveries from order to deployment.
 - **Finance / 资产负债** — private to its owner. Accounts in China and Singapore,
   each kept in its own currency and recorded as a balance whenever the owner
   chooses; each balance is valued in CNY and SGD at the rates of its own day.
   Net worth, assets, debts, and how all three moved.
+- **Housing / 租房还是买房** — private to the same owner. Singapore's home prices
+  and rents from the government's open data — HDB's medians by town and flat
+  type, URA's indices for private homes — as trends side by side, and renting
+  against buying a particular home, year by year: stamp duties, the loan, CPF,
+  what the money not spent would have earned. The years ahead are read off the
+  market's own history, live, and played out over 500 futures drawn from it,
+  with SORA, rents and prices moving together as they have.
 
 ## Stack
 
@@ -48,6 +57,11 @@ not, and names itself to nobody else — no title, no breadcrumb. Signed out, th
 owner comes in by `/auth/signin?callbackUrl=/finance`. The navbar item appears
 only for the owner, but it is a convenience; the page and the route are the
 gate. The one other way in is an API token, below.
+
+**Housing is behind the same door.** `/housing` and `/api/housing` answer whom
+`/finance` answers — the owner's session, or a finance API token — and its
+tables (`housing_market`, `housing_sources`, `housing_scenarios`) are as private
+as finance's, although the market figures themselves are public data.
 
 Every response also carries `frame-ancestors 'none'` and its old-browser twin,
 `nosniff`, a referrer policy and a permissions policy (`next.config.ts`).
@@ -126,6 +140,75 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
   the card) counts as liquid, the rest not. Each balance keeps the share that
   was liquid when it was recorded, so every day of the history counts what was
   liquid then. What is held lives in the database only.
+
+## Housing: where the figures come from
+
+- **The market** is read from [data.gov.sg](https://data.gov.sg), keyless:
+  HDB's median resale price and median rent by town and flat type, each
+  quarter, and its resale price index; URA's price and rental indices for
+  private homes, 2009 Q1 = 100. HDB's two medians pair up quarter by quarter,
+  which is what gives a town's gross yield (a year's rent over the price). URA
+  publishes no prices without a key, so a private home's own price and rent
+  are typed into the comparison. The daily job asks data.gov.sg every day and
+  reads a dataset again only when its catalogue says it changed, paced to the
+  rate limit data.gov.sg sets without a key; `DATA_GOV_SG_API_KEY` raises it.
+  For the years ahead it also reads SingStat's 3-month compounded SORA,
+  government securities' yields (1, 2, 5 and 10 years) and consumer price index
+  from data.gov.sg, and the S&P 500 with dividends reinvested, in Singapore
+  dollars, from Yahoo Finance's chart endpoint (`^SP500TR` and `SGD=X`) — once a
+  quarter has closed, never the quarter still running. So nothing moves more
+  often than a source publishes. The page reads the market kept whole in one
+  row, built again by the daily job only when a figure moved, rather than
+  fifteen thousand figures each time it opens.
+- **The years ahead** are estimated from that history each time it is read,
+  and each estimate says why. The home's price growth and the investments' are
+  taken at the lower quartile of their ten-year spans — three spans in four did
+  better — conservative, and the same rule for both so neither side is
+  flattered; rents and consumer prices at the middle span. SORA is expected to
+  follow what government bond yields say, each yield less the premium it has
+  paid over SORA on average since 2005. A bank loan's fixed rate is SORA's
+  expected average over the lock-in plus the spread; after it, the loan pays
+  3-month SORA plus the spread, reset every three months. An input left to the
+  market follows its estimate as the figures move; typing a number makes it
+  yours, and emptying the field hands it back.
+- **Developments you follow** — a private condo by the name URA gives it,
+  WATERTOWN say — are read from URA's Data Service with the owner's access key
+  (`URA_ACCESS_KEY`, on Vercel): every sale caveated in the last five years and
+  the last four quarters of rental contracts, read when followed and weekly
+  after. The page shows the middle (P50) and the average of the latest year's
+  prices, prices a square foot and rents, by size as URA bands its rental
+  contracts, the gross yield, and the price a square foot quarter by quarter;
+  a size's middle price and rent fill Rent or buy.
+- **Across 500 futures**: each replays the quarters since 2006 two years at a
+  time from random places, every series from the same quarter, so prices,
+  rents, costs, shares and SORA move together as they did — rents up while
+  rates rose — but around the comparison's own rates. SORA strays from its
+  expected path by each quarter's surprise in its history, the departures
+  fading as SORA's have, never below zero. The page shows the spread of the gap
+  between buying and renting, the chance buying is ahead each year, when it
+  first pulls ahead, and what happens if SORA runs two points higher, rents
+  stand still for three years, or prices fall 15% in the second year.
+- **Rent or buy** starts both sides with the same money. The buyer pays the
+  down payment, stamp duties, fees and renovation — CPF first where CPF may —
+  and the renter invests that cash instead. Each month both spend the dearer
+  side's outgoings, and the cheaper side invests the difference; CPF pays the
+  buyer's instalments and sits in the renter's account. Each year ends with the
+  home as though sold: its grown price less the loan, the agent and legal fees,
+  and seller's stamp duty within four years. The year buying pulls ahead is the
+  first whose end finds it ahead.
+- **A month of owning, taken apart**: what goes out (the instalment and the
+  running costs) against what is a cost. Principal is not one — it stays yours,
+  in the home. Interest, S&CC, property tax and repairs are; so are the stamp
+  duties, fees, renovation and selling costs, spread over the years looked at,
+  and what the money in the home would have earned invested; the home's rise
+  in value counts against them. With nothing earning, those months add up to
+  the gap in net worth exactly; with returns, the net worth compounds them and
+  is the comparison to go by.
+- **Tax rules** are IRAS's as published in October 2026: BSD up to 6%; ABSD by
+  residency and which home it is (citizen 0/20/30%, PR 5/30/35%, foreigner
+  60%); SSD 16/12/8/4% within four years for homes bought from 4 Jul 2025;
+  owner-occupier property tax on the annual value, from 2025. The comparison
+  never refuses a buyer: what the rules may not allow, it says.
 
 ## Finance API, for agents
 

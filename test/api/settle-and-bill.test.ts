@@ -11,12 +11,16 @@ vi.mock("@/lib/auth", () => ({
 
 const { POST: settle } = await import("@/app/api/settle/route");
 const { GET: cron } = await import("@/app/api/cron/bill/route");
+const { POST: billNow } = await import("@/app/api/bill-now/route");
 
 let db: StandIn;
 let rpcArgs: Array<[string, Row]>;
+/** What auto_settle answers next. */
+let autoReply: { status: number; body: unknown };
 beforeEach(async () => {
   session.current = { user: { email: "hi@noahyao.me" } };
   rpcArgs = [];
+  autoReply = { status: 200, body: [{ wallet: "p-ann", settled: 2, total: 106, balance_left: 4 }] };
   const record = (name: string, reply: (args: Row) => { status: number; body: unknown }) =>
     (args: Row) => { rpcArgs.push([name, args]); return reply(args); };
   db = await startPostgrest(
@@ -33,6 +37,7 @@ beforeEach(async () => {
           : { status: 200, body: 70 }),
         settle_person: record("settle_person", () => ({ status: 200, body: [{ settled: 2, total: 60, balance_left: 40 }] })),
         unsettle_charge: record("unsettle_charge", () => ({ status: 200, body: 100 })),
+        auto_settle: record("auto_settle", () => autoReply),
       },
       other: (req) => req.path === "/api/exchange-rate"
         ? { status: 200, body: { rates: { SGD: 5.3 }, source: "historical" } }
@@ -129,6 +134,29 @@ describe("GET /api/cron/bill", () => {
     expect(db.tables.charges).toHaveLength(2);
   });
 
+  it("then pays from the wallets what they cover, everyone's, and says how many", async () => {
+    vi.stubEnv("CRON_SECRET", "s3cret");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
+    const body = await (await cron(request({ authorization: "Bearer s3cret" }))).json();
+    expect(body.auto_settled).toEqual({ settled: 2, total: 106 });
+    expect(body.message).toBe("Generated 2 charge(s); 2 settled from wallets");
+    expect(rpcArgs).toEqual([["auto_settle", { p_people: null }]]);
+  });
+
+  it("still bills when paying from the wallets fails, and says that it failed", async () => {
+    vi.stubEnv("CRON_SECRET", "s3cret");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-01T00:00:00Z"));
+    autoReply = { status: 404, body: { message: "Could not find the function public.auto_settle(p_people)" } };
+    const res = await cron(request({ authorization: "Bearer s3cret" }));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.generated).toBe(2);
+    expect(body.auto_settled).toEqual({ error: "Could not find the function public.auto_settle(p_people)" });
+    expect(body.message).toMatch(/settling from wallets failed/);
+  });
+
   it("catches up on the 2nd when the 1st never ran", async () => {
     vi.stubEnv("CRON_SECRET", "s3cret");
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -136,6 +164,24 @@ describe("GET /api/cron/bill", () => {
     const body = await (await cron(request({ authorization: "Bearer s3cret" }))).json();
     expect(body.month).toBe("2026-10");
     expect(db.tables.charges.map((c) => c.period_start)).toEqual(["2026-09", "2026-10"]);
+  });
+});
+
+describe("POST /api/bill-now", () => {
+  const bill = async (payload: Row) => {
+    const host = new URL(db.url).host;
+    const res = await billNow(new NextRequest(`${db.url}/api/bill-now`, {
+      method: "POST", body: JSON.stringify(payload), headers: { host, "x-forwarded-proto": "http" },
+    }));
+    return { status: res.status, body: await res.json() };
+  };
+
+  it("pays from the wallet of the person it billed, or from everyone's", async () => {
+    const one = await bill({ month: "2026-10", subscriberId: "p-ann" });
+    expect(one.status).toBe(200);
+    expect(one.body.auto_settled).toEqual({ settled: 2, total: 106 });
+    await bill({ month: "2026-10" });
+    expect(rpcArgs).toEqual([["auto_settle", { p_people: ["p-ann"] }], ["auto_settle", { p_people: null }]]);
   });
 });
 

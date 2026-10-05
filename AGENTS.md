@@ -87,8 +87,8 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
 - Next.js 16 App Router, TypeScript, Tailwind v4, shadcn/ui
 - Supabase (`@supabase/supabase-js`) for data; NextAuth v5 + Google OAuth for sign-in
 - `.github/workflows/daily-jobs.yml` — daily, runs `scripts/daily-jobs.mjs`, which calls
-  `/api/cron/bill` on the 1st–3rd in Singapore, and `/api/cron/daily` and `/api/cron/stocks`
-  every day, and fails the run when a job did not do its work, so GitHub mails the owner. `/api/cron/daily` works out
+  `/api/cron/bill` on the 1st–3rd in Singapore, and `/api/cron/daily`, `/api/cron/stocks`,
+  `/api/cron/housing` and `/api/cron/projects` every day, and fails the run when a job did not do its work, so GitHub mails the owner. `/api/cron/daily` works out
   who owes more than `UNPAID_THRESHOLD_CNY` and hands back the mail; the workflow sends it to
   `ALERT_TO` — the owner, not the people who owe — through the SMTP secrets GitHub holds. The
   site has no mail settings and no mail library. The run's log is public: counts and states
@@ -122,6 +122,15 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   cannot sign in to it and reports at start that it needs authorizing: expected, and not
   worth telling the owner. The owner's claude.ai Supabase connector (`mcp__Supabase__*`) is
   set up and reaches the same project; use it there.
+- The split bill's wallets: a charge is paid by a `charge` entry in the append-only
+  `wallet_entries`, through the settle functions, never by setting `paid` (`/api/data`
+  refuses it). `auto_settle` (`src/lib/billing.ts` calls it) pays every live unpaid charge
+  a wallet covers, oldest first, passing over one it cannot; the app runs it after
+  billing, a new charge, a top-up, a restored charge and a change of `pays_from`, and a
+  failure there is reported, never thrown, as the write before it stands. A person's
+  wallet is `coalesce(pays_from, id)`, one level deep, which a trigger holds. Reversing
+  a settlement does not stop the next run paying the charge again while the wallet
+  covers it; to stop paying a charge, delete it.
 - `/finance` and `/api/finance` — the owner's accounts and balances, answering only
   `FINANCE_OWNER` in `src/lib/access.ts`. `finance_accounts` and `finance_balances` are the one
   private corner of the database: RLS with no policy, privileges revoked from `anon` and
@@ -180,6 +189,60 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   tokens could outlive its own revoking. `/api/finance/openapi` describes the API, to the same
   token, and a test holds it to the route. `/finance` is a 404 to anyone but the owner, even
   signed out; the owner comes in by `/auth/signin?callbackUrl=/finance`.
+- `/housing` and `/api/housing` — Singapore's housing market and the owner's rent-or-buy
+  comparisons, behind the same check as `/finance` (`isFinanceOwner`, `isFinanceRequest`: the
+  owner's session or a finance token). Its tables — `housing_market`, `housing_sources`,
+  `housing_scenarios` — are private like finance's though the figures are public data: the page
+  is the owner's. The market is read from data.gov.sg, keyless, by `src/lib/housing-data.ts`,
+  which names the datasets and makes one spelling of their towns ("Ang Mo Kio", "QUEENSTOWN ",
+  CENTRAL AREA) and flat types ("4-RM" beside "4-room"); of two records for one figure the later
+  stands. `/api/cron/housing` reads a dataset again only when its catalogue `lastUpdatedAt`
+  moves, and a dataset it cannot read fails the daily run. Without a key data.gov.sg answers
+  four record requests every ten seconds and turns the rest away with 429 — six datasets asked
+  for at once from Vercel lost two that way — so the datasets are read one after another, each
+  request for records 2.6 s after the last, and a 429 waits out its window before asking again.
+  `DATA_GOV_SG_API_KEY`, optional, raises the limit. If data.gov.sg retires a dataset id,
+  that is the failure you will see: find its successor in the catalogue and change the id.
+  The arithmetic is `src/lib/housing.ts`: stamp duties and property tax as IRAS published them
+  in October 2026 — when IRAS changes a rate, change it there and its test's figures with it —
+  and the mortgage is `loanSchedule`'s. A scenario's inputs are kept whole as jsonb and checked
+  by `parseInputs`, so a new input needs a default, not a migration. The comparison never
+  refuses a residency or a kind of home; what the rules may not allow goes in `notesOn`.
+  The growth model is `src/lib/housing-model.ts`. It reads four more series from
+  `housing_market`: SingStat's 3-month SORA and SGS yields (`sora`, `sgs`) and CPI (`cpi`) from
+  data.gov.sg, and the S&P 500 with dividends in SGD (`equity`: `^SP500TR` × `SGD=X`) from
+  Yahoo's chart endpoint. Yahoo has no catalogue, so the calendar stands in for one: it is
+  asked only once a quarter has closed that is not kept, and the quarter still running is
+  never kept — the estimates move when a source publishes, monthly at most, not daily. The
+  page reads the market from `housing_snapshot`, one row in one query: `refreshMarket` builds
+  it again only when a figure moved, or when there is none in the shape `SNAPSHOT_VERSION`
+  names — change `readMarket`'s answer and bump it. Without the table, before its migration,
+  the page reads every figure as before. The estimates are live, each with its reason: the home's price growth
+  and the investments' at the lower quartile of their ten-year spans (conservative, and the
+  same rule for both), rents and CPI at the middle span, SORA expected from the yields less
+  each one's average premium over SORA, and a bank loan's fixed rate as SORA's expected average
+  over its lock-in plus the spread. A scenario's `auto` lists the inputs that take them
+  (`withEstimates`). A missing `auto` means none, so a scenario kept before keeps its numbers;
+  the page's new comparison leaves all five to the market. Futures replay the joint quarterly
+  history in two-year blocks, wrapping at its end. Each series' change has its mean taken out
+  and the input's rate put in; SORA is an AR(1) departure from its expected path, floored at
+  0. Draws are seeded: the same inputs draw the same futures, so a test can name its numbers.
+  A future costs about a millisecond, so the page draws 500 of them 25 between frames
+  (`use-simulation.ts`), and keeps the summaries of the last 32 comparisons it drew, so going
+  back to one draws nothing. HDB published no rent medians for 2019 Q4: gaps of up to two
+  quarters are bridged rather than breaking a series.
+  Private developments the owner follows are read from URA's Data Service (`src/lib/ura.ts`)
+  with `URA_ACCESS_KEY`, set on Vercel only. They live in `housing_projects`, with
+  `housing_project_sales` and `housing_project_rents`, private like the rest. A key gets a token
+  a day, and URA's firewall bars an address that asks for tokens again and again: this sandbox
+  was barred after its second token request in a minute. So a run asks for one token, spaces its
+  requests, and reads a development a week after it last did (`/api/cron/projects`, from the
+  daily job), or at once when it is followed. Sales come in four files by postal district
+  (01–07, 08–14, 15–21, 22–28), five years whole; rental contracts come one file a quarter, the
+  last four read. Only followed developments are kept. A development's sales are replaced whole
+  on each read, as URA gives a sale no id. The arithmetic — P50 and average by URA's rental size
+  bands and by quarter, the yields — is `src/lib/housing-projects.ts`. The daily job's log never
+  names a development: which ones the owner follows is the owner's business.
 - Chart colours are `--series-1` to `--series-3` in `globals.css`, a palette checked for
   colour-blind separation with separate dark steps. Marks wear them; text never does.
 
