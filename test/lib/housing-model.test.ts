@@ -146,7 +146,7 @@ describe("SORA's outlook", () => {
     expect(s.expected[14]).toBeCloseTo(f5, 10);
     expect(s.expected[30]).toBeCloseTo(f10, 10);
     expect(s.expected[140]).toBeCloseTo(f10, 10);
-    expect(s.expected).toHaveLength(141);
+    expect(s.expected).toHaveLength(397);
   });
 
   it("never expects less than nothing", () => {

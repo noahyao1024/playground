@@ -63,6 +63,38 @@ gate. The one other way in is an API token, below.
 tables (`housing_market`, `housing_sources`, `housing_scenarios`) are as private
 as finance's, although the market figures themselves are public data.
 
+Housing's guided comparison starts with an asking/negotiated price and a comparable
+whole-home monthly rent, then explicitly confirms residency, property count and
+home kind. Fees, loan terms and growth estimates remain editable in advanced
+settings. AV defaults to rent × 12 as a clearly labeled rough proxy (capped at
+S$10 million); a verified IRAS annual value overrides it. Renovation has explicit
+zero/simple/more templates, each editable. These are cost comparisons, not mortgage approval or affordability checks.
+
+The holding period supports 1–99 years independently of the mortgage. Optional
+lease start year and original term calculate remaining tenure at a saved assessment
+date; TOP/build year calculates building age only. Expiry assumes 1 January of
+start year + term. Leasehold value multiplies market growth by a normalized
+3% discounted occupancy factor, not an official valuation. At expiry the home is
+worth zero and the buyer pays replacement rent while still servicing any debt.
+Scenarios beyond 35 years show assumptions only, without simulated win probabilities.
+
+Salary-based CPF estimates cover employed citizens / PRs on full rates (PR year 3
+onwards), ordinary wages up to S$8,000, age allocation and an editable retirement
+age. They include published [2026 contribution rates](https://www.cpf.gov.sg/content/dam/web/employer/employer-obligations/documents/CPFcontributionratesfrom1Jan2026.pdf),
+[2026 allocation rates](https://www.cpf.gov.sg/service/sfc/servlet.shepherd/document/download/069IW00000DZMxZYAX),
+[2027 contribution rates](https://www.cpf.gov.sg/content/dam/web/employer/employer-obligations/documents/jan2027cpfcontributionrates.pdf)
+and [2027 allocation rates](https://www.cpf.gov.sg/content/dam/web/employer/employer-obligations/documents/jan2027cpfallocationrates.pdf).
+After 2027 the model holds those rules, with unchanged salary and birthdays
+approximated at annual anniversaries. Bonuses, graduated PR rates and retirement
+account overflow require manual OA contributions. Existing OA savings are separate.
+CPF housing spending is capped at the purchase price unless the user supplies a
+verified allowance; unknown/short tenure uses cash until an allowance is verified.
+A lease of 20 years or less permits no CPF housing usage. Use the
+[CPF housing usage calculator](https://www.cpf.gov.sg/member/tools-and-services/calculators/cpf-housing-usage)
+to verify limits, including valuation and lease-to-age-95 restrictions. Saved
+`guidance` JSON includes the date and rule version; older comparisons without it
+retain their original arithmetic until edited through the guided inputs.
+
 Every response also carries `frame-ancestors 'none'` and its old-browser twin,
 `nosniff`, a referrer policy and a permissions policy (`next.config.ts`).
 

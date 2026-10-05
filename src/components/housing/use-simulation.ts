@@ -31,18 +31,18 @@ function remember(model: Model, key: string, simulation: Simulation) {
  *  quick, and begun again whenever they change -- unless they were drawn for
  *  these inputs before. Until the new ones are drawn the last are kept, and
  *  `drawing` says they are out of date. */
-export function useSimulation(inputs: ScenarioInputs, model: Model, stress: Stress): { simulation: Simulation | null; drawing: boolean } {
+export function useSimulation(inputs: ScenarioInputs, model: Model, stress: Stress, enabled = true): { simulation: Simulation | null; drawing: boolean } {
   const key = useMemo(() => JSON.stringify([inputs, stress]), [inputs, stress]);
   const [done, setDone] = useState<{ model: Model; key: string; simulation: Simulation } | null>(null);
   const kept = drawn.get(model)?.get(key);
 
   useEffect(() => {
-    if (model.history.length === 0 || drawn.get(model)?.has(key)) return;
+    if (!enabled || model.history.length === 0 || drawn.get(model)?.has(key)) return;
     let stopped = false;
     const outcomes: Outcome[] = [];
     const step = () => {
       if (stopped) return;
-      outcomes.push(...simulate(inputs, model, { first: outcomes.length, count: CHUNK, stress }));
+      outcomes.push(...simulate(inputs, model, { first: outcomes.length, count: Math.max(1, Math.floor(CHUNK * Math.min(1, 15 / inputs.years))), stress }));
       if (outcomes.length < PATHS) {
         timer = window.setTimeout(step, 0);
         return;
@@ -56,9 +56,9 @@ export function useSimulation(inputs: ScenarioInputs, model: Model, stress: Stre
       stopped = true;
       window.clearTimeout(timer);
     };
-  }, [inputs, model, stress, key]);
+  }, [inputs, model, stress, key, enabled]);
 
-  if (model.history.length === 0) return { simulation: null, drawing: false };
+  if (!enabled || model.history.length === 0) return { simulation: null, drawing: false };
   if (kept) return { simulation: kept, drawing: false };
   return { simulation: done?.simulation ?? null, drawing: true };
 }

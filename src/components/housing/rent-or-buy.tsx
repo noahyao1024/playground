@@ -1,5 +1,8 @@
 "use client";
 
+import { GuidedInputs } from "./guided-inputs";
+import { newGuidance, parseGuidance } from "@/lib/housing-guidance";
+import { dayInSG } from "@/lib/dates";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Save, Trash2 } from "lucide-react";
@@ -12,7 +15,7 @@ import { Segmented } from "@/components/finance/segmented";
 import type { Confirmation } from "@/components/finance/confirm-dialog";
 import { compactMoney, money } from "@/lib/finance-format";
 import {
-  ABSD_RATES, DEFAULT_INPUTS, ESTIMATED, HOME_KINDS, LOAN_TYPES, PRIVATE_MARKETS, PRIVATE_SEGMENTS, RESIDENCIES, RESIDENCY_LABELS, clampInputs, findSeries,
+  ABSD_RATES, DEFAULT_INPUTS, ESTIMATED, HOME_KINDS, LOAN_TYPES, PRIVATE_MARKETS, PRIVATE_SEGMENTS, RESIDENCIES, RESIDENCY_LABELS, comparisonReady, clampInputs, findSeries,
   pointsOf, quarterFromNumber, quarterLabel, quarterNumber, quarterYear, rentOrBuy, withinLimits,
   type Estimated, type HomeKind, type LoanType, type MarketData, type OwningMonth, type Projection, type Residency, type ScenarioInputs,
 } from "@/lib/housing";
@@ -30,34 +33,34 @@ import { useSimulation } from "./use-simulation";
 /** What is being worked on: a kept scenario, by id, or a new one. */
 export type Draft = { id: string | null; name: string; inputs: ScenarioInputs };
 /** A new comparison leaves every input it can to the market's live estimates. */
-export const NEW_DRAFT: Draft = { id: null, name: "", inputs: { ...DEFAULT_INPUTS, auto: [...ESTIMATED] } };
+export const NEW_DRAFT: Draft = { id: null, name: "", inputs: { ...DEFAULT_INPUTS, auto: [...ESTIMATED], price: NaN, rent: NaN, guidance: newGuidance(dayInSG(new Date())) } };
 
-type NumberKey = { [K in keyof ScenarioInputs]: ScenarioInputs[K] extends number ? K : never }[keyof ScenarioInputs];
+type NumberKey = { [K in keyof ScenarioInputs]: ScenarioInputs[K] extends number ? K : never }[keyof ScenarioInputs] & string;
 
 /** Each number's label, unit and step. */
 const FIELDS: Partial<Record<NumberKey, { label: string; unit: string; step?: number }>> = {
-  price: { label: "Price", unit: "S$", step: 10_000 },
-  loan_share: { label: "Borrowed", unit: "% of price", step: 5 },
-  loan_rate: { label: "Interest", unit: "%/yr", step: 0.05 },
-  loan_years: { label: "Loan term", unit: "years", step: 1 },
-  lock_years: { label: "Fixed for", unit: "years", step: 1 },
-  spread: { label: "Then SORA +", unit: "%/yr", step: 0.05 },
-  maintenance: { label: "S&CC, maintenance", unit: "S$/mo", step: 10 },
-  annual_value: { label: "Annual value", unit: "S$/yr", step: 1_000 },
-  upkeep: { label: "Repairs, insurance", unit: "S$/yr", step: 100 },
-  buy_costs: { label: "Legal, other fees", unit: "S$", step: 500 },
-  renovation: { label: "Renovation", unit: "S$", step: 5_000 },
-  sell_costs: { label: "Selling costs", unit: "% of price", step: 0.5 },
-  rent: { label: "Rent", unit: "S$/mo", step: 100 },
-  rent_growth: { label: "Rent growth", unit: "%/yr", step: 0.5 },
-  rent_costs: { label: "Agent fees, duty", unit: "S$/yr", step: 100 },
-  growth: { label: "Price growth", unit: "%/yr", step: 0.5 },
-  invest_return: { label: "Investments earn", unit: "%/yr", step: 0.5 },
-  cost_growth: { label: "Costs grow", unit: "%/yr", step: 0.5 },
-  years: { label: "Look ahead", unit: "years", step: 1 },
-  cpf_balance: { label: "OA balance", unit: "S$", step: 1_000 },
-  cpf_monthly: { label: "OA contributions", unit: "S$/mo", step: 100 },
-  cpf_rate: { label: "OA interest", unit: "%/yr", step: 0.1 },
+  price: { label: "购房价格", unit: "S$", step: 10_000 },
+  loan_share: { label: "贷款比例", unit: "房价 %", step: 5 },
+  loan_rate: { label: "年利率", unit: "%/年", step: 0.05 },
+  loan_years: { label: "贷款年限", unit: "年", step: 1 },
+  lock_years: { label: "固定利率期", unit: "年", step: 1 },
+  spread: { label: "之后 SORA 加点", unit: "%/年", step: 0.05 },
+  maintenance: { label: "物业 / 管理费", unit: "S$/月", step: 10 },
+  annual_value: { label: "IRAS Annual value", unit: "S$/年", step: 1_000 },
+  upkeep: { label: "维修 / 保险", unit: "S$/年", step: 100 },
+  buy_costs: { label: "法律及其他费用", unit: "S$", step: 500 },
+  renovation: { label: "装修预算", unit: "S$", step: 5_000 },
+  sell_costs: { label: "出售费用", unit: "房价 %", step: 0.5 },
+  rent: { label: "整套月租", unit: "S$/月", step: 100 },
+  rent_growth: { label: "租金增长", unit: "%/年", step: 0.5 },
+  rent_costs: { label: "租赁中介及印花税", unit: "S$/年", step: 100 },
+  growth: { label: "房价增长", unit: "%/年", step: 0.5 },
+  invest_return: { label: "投资回报", unit: "%/年", step: 0.5 },
+  cost_growth: { label: "费用增长", unit: "%/年", step: 0.5 },
+  years: { label: "持有比较年限", unit: "年", step: 1 },
+  cpf_balance: { label: "现有 OA 余额", unit: "S$", step: 1_000 },
+  cpf_monthly: { label: "OA 月缴款", unit: "S$/月", step: 100 },
+  cpf_rate: { label: "OA 年利率", unit: "%/年", step: 0.1 },
 };
 
 const isEstimated = (key: string): key is Estimated => (ESTIMATED as readonly string[]).includes(key);
@@ -111,21 +114,29 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
   const [saving, setSaving] = useState(false);
   const [stress, setStress] = useState<Stress>("none");
   const inputs = draft.inputs;
+  const [advanced, setAdvanced] = useState(!draft.inputs.guidance);
+  const ready = comparisonReady(inputs);
   // A number half typed -- an emptied field, a year of 0 -- is worked out at
   // the nearest it may be, and its field marked; saving says what is wrong.
-  const typed = useMemo(() => clampInputs(inputs), [inputs]);
+  const typed = useMemo(() => {
+    const out = clampInputs(inputs);
+    try { if (out.guidance) out.guidance = parseGuidance(out.guidance); } catch { delete out.guidance; }
+    if (out.guidance?.annual_value_auto) out.annual_value = Math.min(10_000_000, out.rent * 12);
+    return out;
+  }, [inputs]);
   // What the market's history says, for this kind of home in its market; the
   // inputs left to it take its estimates, and the comparison runs on those.
   const model = useMemo(() => marketModel(market, { kind: typed.kind, market: typed.market }), [market, typed.kind, typed.market]);
   const estimates = useMemo(() => estimatesFor(model, typed), [model, typed]);
   const resolved = useMemo(() => withEstimates(typed, estimates), [typed, estimates]);
   const result = useMemo(() => rentOrBuy(resolved, stressed(expectedEconomy(resolved, model), stress)), [resolved, model, stress]);
-  const { simulation, drawing } = useSimulation(resolved, model, stress);
+  const { simulation, drawing } = useSimulation(resolved, model, stress, ready && inputs.years <= 35);
   const kept = scenarios.find((s) => s.id === draft.id) ?? null;
   const changed = !kept || kept.name !== draft.name.trim() || JSON.stringify(kept.inputs) !== JSON.stringify(inputs);
 
   const set = (next: Partial<ScenarioInputs>) => setDraft((d) => {
     const merged = { ...d.inputs, ...next };
+    if (merged.guidance && (["residency", "nth", "kind"] as const).some(k => next[k] !== undefined && next[k] !== d.inputs[k])) merged.guidance = { ...merged.guidance, confirmed: false };
     // HDB lends for HDB flats only.
     if (merged.kind === "private" && merged.loan_type === "hdb") merged.loan_type = "bank";
     return { ...d, inputs: merged };
@@ -139,15 +150,16 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
    *  market can set goes back to its estimate. */
   const setNumber = (key: NumberKey, value: number) => {
     if (isEstimated(key) && Number.isNaN(value)) setAuto(key, true);
-    else setDraft((d) => ({ ...d, inputs: { ...d.inputs, [key]: value, auto: d.inputs.auto.filter((k) => k !== key) } }));
+    else setDraft((d) => ({ ...d, inputs: { ...d.inputs, [key]: value, ...(key === "annual_value" && d.inputs.guidance ? { guidance: { ...d.inputs.guidance, annual_value_auto: false } } : {}), auto: d.inputs.auto.filter((k) => k !== key) } }));
   };
 
   async function save(asNew: boolean) {
+    if (!ready) { toast.error("请完成必填项、身份确认及 CPF 资格确认。"); return; }
     const name = draft.name.trim();
     if (!name) { toast.error("Give it a name first"); return; }
     setSaving(true);
     try {
-      const { scenario } = await housingAction<{ scenario: Scenario }>("saveScenario", { id: asNew ? null : draft.id, name, inputs });
+      const { scenario } = await housingAction<{ scenario: Scenario }>("saveScenario", { id: asNew ? null : draft.id, name, inputs: { ...inputs, annual_value: typed.annual_value } });
       onSaved(scenario);
       setDraft(() => ({ id: scenario.id, name: scenario.name, inputs: scenario.inputs }));
       toast.success(asNew || !draft.id ? `Saved ${scenario.name}` : `Updated ${scenario.name}`);
@@ -181,7 +193,7 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
     const f = FIELDS[key]!;
     const estimate = isEstimated(key) ? estimates[key] : undefined;
     const auto = !!estimate && isEstimated(key) && inputs.auto.includes(key);
-    const label = key === "loan_rate" && typed.loan_type === "bank" ? "Fixed rate" : f.label;
+    const label = key === "loan_rate" && typed.loan_type === "bank" ? "银行固定利率" : f.label;
     return (
       <div key={key} className="min-w-0 space-y-1.5">
         <Label htmlFor={`rb-${key}`} className="flex items-baseline justify-between gap-1.5 text-xs font-normal text-muted-foreground">
@@ -190,7 +202,7 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
         </Label>
         <NumberInput
           id={`rb-${key}`}
-          value={auto ? estimate.value : inputs[key]}
+          value={key === "annual_value" && inputs.guidance?.annual_value_auto ? typed.annual_value : auto ? estimate.value : inputs[key]}
           onValueChange={(v) => setNumber(key, v)}
           // Emptied, an input the market can set goes back to it.
           emptyValue={isEstimated(key) ? Number.NaN : 0}
@@ -198,8 +210,9 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
           aria-invalid={(!auto && !withinLimits(key, inputs[key])) || undefined}
           className={cn("h-9 tabular-nums", auto && "bg-muted/50")}
         />
+        {key === "annual_value" && inputs.guidance && <button type="button" onClick={() => set({ guidance: { ...inputs.guidance!, annual_value_auto: true } })} className="text-[11px] text-muted-foreground underline">{inputs.guidance.annual_value_auto ? "粗估：整套月租 × 12" : "恢复月租 × 12 粗估"}</button>}
         {estimate && isEstimated(key) && (auto
-          ? <p className="text-[11px] text-muted-foreground">Auto: the market&rsquo;s</p>
+          ? <p className="text-[11px] text-muted-foreground">自动估算：市场历史数据</p>
           : (
             <button type="button" onClick={() => setAuto(key, true)} className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
               Market&rsquo;s: {rateText(estimate.value)}
@@ -213,7 +226,7 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,22rem)_minmax(0,1fr)]">
       <div className="space-y-4">
-        <Card title="Comparison">
+        <Card title="保存比较方案">
           <div className="space-y-3">
             <Select
               value={draft.id ?? "new"}
@@ -230,17 +243,20 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
                 {scenarios.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
               </SelectContent>
             </Select>
-            <Input aria-label="Name" placeholder="Name, to keep it" value={draft.name} maxLength={80} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} className="h-9" />
+            <Input aria-label="Name" placeholder="方案名称（保存时必填）" value={draft.name} maxLength={80} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} className="h-9" />
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" disabled={saving || !changed} onClick={() => save(false)}><Save /> {draft.id ? "Save" : "Keep"}</Button>
-              {draft.id && <Button size="sm" variant="outline" disabled={saving} onClick={() => save(true)}>Save as new</Button>}
+              <Button size="sm" disabled={saving || !changed || !ready} onClick={() => save(false)}><Save /> {draft.id ? "Save" : "Keep"}</Button>
+              {draft.id && <Button size="sm" variant="outline" disabled={saving || !ready} onClick={() => save(true)}>Save as new</Button>}
               {kept && <Button size="sm" variant="ghost" className="ml-auto text-destructive" onClick={remove} aria-label={`Delete ${kept.name}`}><Trash2 /></Button>}
             </div>
             {kept && changed && <p className="text-xs text-muted-foreground">Changed since it was saved.</p>}
           </div>
         </Card>
 
-        <Card title="The buyer and the home">
+        <GuidedInputs inputs={inputs} onChange={set} />
+        <Button type="button" variant="outline" className="w-full" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>{advanced ? "收起高级设置" : "高级设置：贷款、费用和增长假设"}</Button>
+        {advanced && <div className="space-y-4">
+        <Card title="贷款与市场参数（可调整）">
           <div className="space-y-3">
             <Choice label="Buyer">
               <Segmented label="Buyer" value={inputs.residency} onChange={(v: Residency) => set({ residency: v })} options={RESIDENCIES.map((r) => ({ value: r, label: RESIDENCY_LABELS[r] }))} />
@@ -270,7 +286,7 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
               />
             </Choice>
             <div className="grid grid-cols-2 gap-3">
-              {(["price", "loan_share", ...(bank && typed.lock_years === 0 ? [] : ["loan_rate" as const]), "loan_years"] as const).map(field)}
+              {(["loan_share", ...(bank && typed.lock_years === 0 ? [] : ["loan_rate" as const]), "loan_years"] as const).map(field)}
               {bank && (["lock_years", "spread"] as const).map(field)}
             </div>
             {bank && (
@@ -281,32 +297,33 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
           </div>
         </Card>
 
-        <Card title="Owning it">
+        <Card title="买房费用（默认估算，可调整）" sub="物业费来自管理处；装修按自己的计划；Annual value 请从 IRAS 查询，不等于挂牌年租金。">
           <div className="grid grid-cols-2 gap-3">
             {(["maintenance", "annual_value", "upkeep", "buy_costs", "renovation", "sell_costs"] as const).map(field)}
           </div>
         </Card>
 
-        <Card title="Renting instead">
+        <Card title="租房费用与增长（可调整）">
           <div className="grid grid-cols-2 gap-3">
-            {(["rent", "rent_growth", "rent_costs"] as const).map(field)}
+            {(["rent_growth", "rent_costs"] as const).map(field)}
           </div>
         </Card>
 
-        <Card title="The years ahead" sub="A rate marked auto is the market's live estimate, its reason with the results. Type over it to set your own; empty it to hand it back">
+        <Card title="增长假设（自动估算，可覆盖）" sub="A rate marked auto is the market's live estimate, its reason with the results. Type over it to set your own; empty it to hand it back">
           <div className="grid grid-cols-2 gap-3">
             {(["growth", "invest_return", "cost_growth", "years"] as const).map(field)}
           </div>
         </Card>
 
-        <Card title="CPF Ordinary Account" sub="It pays for a home and its loan, never for rent">
+        <Card title="CPF 手动参数（可调整）" sub="It pays for a home and its loan, never for rent">
           <div className="grid grid-cols-2 gap-3">
             {(["cpf_balance", "cpf_monthly", "cpf_rate"] as const).map(field)}
           </div>
         </Card>
+        </div>}
       </div>
 
-      <Results
+      {ready ? <Results
         typed={typed}
         inputs={resolved}
         result={result}
@@ -318,11 +335,11 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
         stress={stress}
         onStress={setStress}
         onAuto={setAuto}
-      />
+      /> : <Card title="完成必填项后显示比较"><p className="text-sm text-muted-foreground">填写价格和租金，确认买方身份、房产数及房屋类型。若选择地契或工资估算，还需填写相应信息。超过 35 年的比较需确认地契类型。</p></Card>}
 
       {/* On a phone the inputs and the results are a long scroll apart: the
           verdict stays in sight while the numbers change. */}
-      <Verdict inputs={resolved} result={result} simulation={drawing ? null : simulation} className="sticky bottom-3 z-10 lg:hidden" />
+      {ready && <Verdict inputs={resolved} result={result} simulation={drawing ? null : simulation} className="sticky bottom-3 z-10 lg:hidden" />}
     </div>
   );
 }
@@ -366,7 +383,7 @@ function MonthTakenApart({ inputs, months, ticks, stress }: { inputs: ScenarioIn
   const rows: Array<{ label: string; value: number; note?: string; indent?: boolean; strong?: boolean; sign?: boolean }> = [
     { label: "Goes out each month, CPF and cash", value: m.paid, strong: true },
     { label: "Principal", note: "into the home: still yours, not a cost", value: m.principal, indent: true },
-    { label: "Interest", value: m.interest, indent: true },
+    { label: "贷款利息", value: m.interest, indent: true },
     { label: "S&CC or maintenance, property tax, repairs", value: m.running, indent: true },
     { label: "Stamp duties, fees, renovation, selling", note: `paid once, spread over ${inputs.years} years`, value: m.one_off },
     {
@@ -704,28 +721,29 @@ function Results({ typed, inputs, result, estimates, model, market, simulation, 
 
   return (
     <div className="min-w-0 space-y-4">
+      <Card title="先看实际需要准备的钱"><p className="text-sm">购房时需要现金 {money(upfront.from_cash, "sgd")}，使用现有 OA {money(upfront.from_cpf, "sgd")}；第一年月均支出（含 CPF）{money(first.paid, "sgd")}，其中房贷 {money(result.instalment, "sgd")}/月。</p><p className="mt-2 text-xs text-muted-foreground">这是成本和净资产比较，不是贷款获批或负担能力结论；TDSR / MSR、年龄、已有债务和联名购房资格需另核实。</p></Card>
       <StressPicker value={stress} onChange={onStress} bank={inputs.loan_type === "bank"} />
 
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
         <Stat
-          label="Up front"
+          label="一次性投入（现金 + CPF）"
           value={compactMoney(upfront.total, "sgd", { digits: 2 })}
           title={money(upfront.total, "sgd")}
           sub={upfront.from_cpf > 0 ? `${compactMoney(upfront.from_cpf, "sgd", { digits: 1 })} CPF, ${compactMoney(upfront.from_cash, "sgd", { digits: 1 })} cash` : "All in cash"}
         />
         <Stat
-          label="Stamp duty"
+          label="购房印花税（自动计算）"
           value={compactMoney(upfront.bsd + upfront.absd, "sgd", { digits: 2 })}
           title={money(upfront.bsd + upfront.absd, "sgd")}
           sub={`BSD ${money(upfront.bsd, "sgd")}${upfront.absd ? `, ABSD ${share(absdRate, 0)} ${money(upfront.absd, "sgd")}` : ", no ABSD"}`}
         />
         <Stat
-          label="Instalment"
+          label="房贷月供"
           value={`${money(result.instalment, "sgd")}/mo`}
           sub={`${compactMoney(upfront.loan, "sgd", { digits: 2 })} over ${inputs.loan_years} years at ${rateText(years[0].loan_rate ?? inputs.loan_rate)}${terms}`}
         />
         <Stat
-          label="A month in year 1, what it costs"
+          label="第一年：买房与租房的月成本"
           value={`${money(first.net, "sgd")} vs ${money(first.rent, "sgd")}`}
           sub={`Owning against renting. ${money(first.paid, "sgd")} goes out; ${money(first.principal, "sgd")} of it is principal, still yours`}
         />
