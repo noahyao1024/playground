@@ -6,8 +6,9 @@ import { DATASETS, refreshMarket } from "@/lib/housing-data";
 /** Every day: the housing market's figures brought up to date -- from
  *  data.gov.sg, whose datasets move monthly or quarterly, so most days this
  *  reads their catalogue entries and nothing more, and the shares' history
- *  from Yahoo. The figures are public, but the answer keeps to counts and
- *  dataset ids all the same: the Daily jobs log is. */
+ *  from Yahoo once a quarter has closed -- and the page's snapshot of them
+ *  built again if any moved. The figures are public, but the answer keeps to
+ *  counts, states and dataset ids all the same: the Daily jobs log is. */
 export const dynamic = "force-dynamic";
 // A changed dataset is read whole: twelve thousand figures, in seconds.
 export const maxDuration = 60;
@@ -29,6 +30,7 @@ export async function GET(req: NextRequest) {
       points: r.points,
       failed: r.failures.length,
       failures: r.failures,
+      snapshot: r.snapshot,
     }, { status: down ? 503 : 200 });
   } catch (err) {
     return NextResponse.json({ error: reason(err) }, { status: 500 });

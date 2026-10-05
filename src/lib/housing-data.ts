@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { pagesOf } from "@/lib/paginate";
-import { EQUITY_SEGMENT, nextQuarter, quarterOfDay, quarterStart, type MarketData, type MarketSeries, type Series } from "@/lib/housing";
+import { MISSING_TABLE, pagesOf } from "@/lib/paginate";
+import {
+  EQUITY_SEGMENT, nextQuarter, quarterFromNumber, quarterNumber, quarterOfDay, quarterStart, type MarketData, type MarketSeries, type Series,
+} from "@/lib/housing";
 
 /** Singapore's housing market, from data.gov.sg: the government's open data,
  *  free and keyless. HDB publishes each town's median resale price and median
@@ -299,6 +301,9 @@ export type Refresh = {
   /** Figures written. */
   points: number;
   failures: Array<{ dataset: string; reason: string }>;
+  /** The market as the page reads it, kept whole: built again, as it was, or
+   *  not there to keep -- before its migration is applied. */
+  snapshot: "built" | "kept" | "unavailable";
 };
 
 type SourceRow = { dataset: string; source_updated_at: string | null };
@@ -318,7 +323,7 @@ export async function refreshMarket(db: SupabaseClient, {
   const { data, error } = await db.from("housing_sources").select("dataset, source_updated_at");
   if (error) throw error;
   const known = new Map(((data ?? []) as SourceRow[]).map((s) => [s.dataset, s.source_updated_at ? new Date(s.source_updated_at).toISOString() : null]));
-  const out: Refresh = { checked: 0, refreshed: 0, points: 0, failures: [] };
+  const out: Refresh = { checked: 0, refreshed: 0, points: 0, failures: [], snapshot: "unavailable" };
   const source = dataGovSg(options);
 
   for (const dataset of DATASETS) {
@@ -345,26 +350,77 @@ export async function refreshMarket(db: SupabaseClient, {
     }
   }
 
-  // The shares' history: two charts from Yahoo, every time -- it has no
-  // catalogue to ask -- but only figures that moved are written.
+  // The shares' history, a figure a quarter as it ended. Yahoo has no
+  // catalogue to ask, so the calendar is asked instead: it is read only once
+  // a quarter has ended that is not kept yet, and the quarter still running is
+  // never kept -- the estimates move when a quarter closes, not every day.
   try {
-    const rows = await readEquity(fetcher);
-    out.checked++;
+    const closed = quarterStart(quarterFromNumber(quarterNumber(quarterOfDay(now.toISOString().slice(0, 10))) - 1))!;
     const { data: kept, error: unread } = await db.from("housing_market").select("quarter, value")
       .eq("series", "equity").eq("area", "ALL").eq("segment", EQUITY.segment).limit(1000);
     if (unread) throw unread;
     const before = new Map(((kept ?? []) as Array<{ quarter: string; value: number | string }>).map((r) => [r.quarter, Number(r.value)]));
-    const moved = rows.filter((r) => before.get(r.quarter) === undefined || Math.abs(before.get(r.quarter)! - r.value) > 1e-9 * r.value);
-    if (moved.length) {
-      const { error: written } = await db.from("housing_market").upsert(moved, { onConflict: "series,area,segment,quarter" });
-      if (written) throw written;
-      out.refreshed++;
-      out.points += moved.length;
+    if (!force && before.has(closed)) {
+      out.checked++;
+    } else {
+      const rows = (await readEquity(fetcher)).filter((r) => r.quarter <= closed);
+      out.checked++;
+      const moved = rows.filter((r) => before.get(r.quarter) === undefined || Math.abs(before.get(r.quarter)! - r.value) > 1e-9 * r.value);
+      if (moved.length) {
+        const { error: written } = await db.from("housing_market").upsert(moved, { onConflict: "series,area,segment,quarter" });
+        if (written) throw written;
+        out.refreshed++;
+        out.points += moved.length;
+      }
     }
   } catch (err) {
     out.failures.push({ dataset: `yahoo:${EQUITY.symbol}`, reason: reasonOf(err) });
   }
+
+  try {
+    out.snapshot = await keepSnapshot(db, out.refreshed > 0 || force, now);
+  } catch (err) {
+    out.failures.push({ dataset: "snapshot", reason: reasonOf(err) });
+  }
   return out;
+}
+
+/** The shape the snapshot is kept in. Change readMarket's answer and this
+ *  changes with it: a snapshot in another shape is read past and built anew. */
+export const SNAPSHOT_VERSION = 1;
+
+/** The market kept whole, as the page reads it -- built again when a figure
+ *  moved, or when there is none in this shape; left as it is otherwise. Before
+ *  its migration is applied there is no table for it, and nothing to keep. */
+async function keepSnapshot(db: SupabaseClient, changed: boolean, now: Date): Promise<Refresh["snapshot"]> {
+  if (!changed) {
+    const { data, error } = await db.from("housing_snapshot").select("version").eq("id", "market").maybeSingle();
+    if (error) {
+      if (MISSING_TABLE.has(error.code)) return "unavailable";
+      throw error;
+    }
+    if ((data as { version: number } | null)?.version === SNAPSHOT_VERSION) return "kept";
+  }
+  const market = await readMarket(db);
+  const { error } = await db.from("housing_snapshot").upsert(
+    { id: "market", version: SNAPSHOT_VERSION, market, built_at: now.toISOString() },
+    { onConflict: "id" },
+  );
+  if (error) {
+    if (MISSING_TABLE.has(error.code)) return "unavailable";
+    throw error;
+  }
+  return "built";
+}
+
+/** The market as the page reads it: the snapshot, in one query -- or, where
+ *  there is none in this shape yet, every figure, as readMarket reads them. */
+export async function marketOf(db: SupabaseClient): Promise<MarketData> {
+  const { data, error } = await db.from("housing_snapshot").select("version, market").eq("id", "market").maybeSingle();
+  const kept = data as { version: number; market: MarketData } | null;
+  if (!error && kept?.version === SNAPSHOT_VERSION) return kept.market;
+  if (error && !MISSING_TABLE.has(error.code)) throw error;
+  return readMarket(db);
 }
 
 const reasonOf = (err: unknown) =>

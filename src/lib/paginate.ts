@@ -88,3 +88,8 @@ export async function* pagesOf<T>(
     if (data && data.length) yield data;
   }
 }
+
+/** How PostgREST says a table is not there: Postgres's own code, or its own
+ *  when the table is missing from its schema cache. Before a migration is
+ *  applied, code that reads its table takes this as "none yet". */
+export const MISSING_TABLE: ReadonlySet<string | undefined> = new Set(["42P01", "PGRST205"]);

@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createClient } from "@supabase/supabase-js";
 import { calls, startPostgrest, type StandIn } from "../helpers/postgrest";
 import {
-  DATASETS, EQUITY, amount, dataGovSg, equityInSgd, hdbFlatType, hdbTown, monthlyCloses, quarterlyFromMonths, readDataset, readMarket, refreshMarket,
+  DATASETS, EQUITY, SNAPSHOT_VERSION, amount, dataGovSg, equityInSgd, hdbFlatType, hdbTown, marketOf, monthlyCloses, quarterlyFromMonths, readDataset,
+  readMarket, refreshMarket,
 } from "@/lib/housing-data";
 
 const [PRICES, RENTS, RPI, PPI_TYPE, PPI_REGION, RRI, RATES, CPI] = DATASETS.map((d) => d.id);
@@ -312,7 +313,7 @@ describe("refreshMarket and readMarket", () => {
     const source = fakeDataGovSg();
     const r = await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW });
     // Eight datasets and the shares: 13 housing figures, 4 rates, 2 CPI, 2 quarters of shares.
-    expect(r).toEqual({ checked: 9, refreshed: 9, points: 21, failures: [] });
+    expect(r).toEqual({ checked: 9, refreshed: 9, points: 21, failures: [], snapshot: "built" });
     expect(db.tables.housing_market).toHaveLength(21);
     expect(db.tables.housing_sources.map((s) => [s.dataset, s.points]).sort()).toEqual(
       [[PRICES, 3], [RENTS, 2], [RPI, 2], [PPI_TYPE, 3], [PPI_REGION, 1], [RRI, 2], [RATES, 4], [CPI, 2]].sort(),
@@ -325,12 +326,15 @@ describe("refreshMarket and readMarket", () => {
     await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW });
     db.requests.length = 0;
     source.asked.length = 0;
-    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toEqual({ checked: 9, refreshed: 0, points: 0, failures: [] });
-    // The catalogue, and Yahoo's two charts -- which have no catalogue -- and nothing written.
-    expect(source.asked.filter((u) => !u.startsWith(CATALOGUE)).map((u) => decodeURIComponent(new URL(u).pathname.split("/").pop()!))).toEqual([EQUITY.symbol, EQUITY.fx]);
+    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toEqual({ checked: 9, refreshed: 0, points: 0, failures: [], snapshot: "kept" });
+    // The catalogue and nothing else -- the last quarter of shares is kept --
+    // and nothing written, the snapshot only looked at.
+    expect(source.asked.filter((u) => !u.startsWith(CATALOGUE))).toEqual([]);
     expect(calls(db, "housing_market").filter((c) => !c.startsWith("GET"))).toEqual([]);
+    expect(calls(db, "housing_snapshot").filter((c) => !c.startsWith("GET"))).toEqual([]);
 
-    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW, force: true })).toMatchObject({ refreshed: 8, points: 19 });
+    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW, force: true })).toMatchObject({ refreshed: 8, points: 19, snapshot: "built" });
+    expect(source.asked.filter((u) => !u.startsWith(CATALOGUE) && !u.startsWith(RECORDS)).map((u) => decodeURIComponent(new URL(u).pathname.split("/").pop()!))).toEqual([EQUITY.symbol, EQUITY.fx]);
   });
 
   it("reads a dataset again once it has changed, writing over what it said before", async () => {
@@ -339,7 +343,7 @@ describe("refreshMarket and readMarket", () => {
     source.records[RPI][1].index = "205.1";
     source.records[RPI].push({ quarter: "2026-Q3", index: "206" });
     source.updated[RPI] = "2026-10-24T11:00:00+08:00";
-    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toEqual({ checked: 9, refreshed: 1, points: 3, failures: [] });
+    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toEqual({ checked: 9, refreshed: 1, points: 3, failures: [], snapshot: "built" });
     const rpi = db.tables.housing_market.filter((f) => f.series === "hdb_rpi").map((f) => [f.quarter, f.value]);
     expect(rpi).toEqual([["2026-01-01", 203.4], ["2026-04-01", 205.1], ["2026-07-01", 206]]);
     expect(db.tables.housing_sources.find((s) => s.dataset === RPI)).toMatchObject({ source_updated_at: "2026-10-24T03:00:00.000Z", points: 3 });
@@ -349,10 +353,10 @@ describe("refreshMarket and readMarket", () => {
     const source = fakeDataGovSg();
     source.broken[PRICES] = 404;
     const r = await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW });
-    expect(r).toEqual({ checked: 9, refreshed: 8, points: 18, failures: [{ dataset: PRICES, reason: "HTTP 404" }] });
+    expect(r).toEqual({ checked: 9, refreshed: 8, points: 18, failures: [{ dataset: PRICES, reason: "HTTP 404" }], snapshot: "built" });
     expect(db.tables.housing_sources.some((s) => s.dataset === PRICES)).toBe(false);
     delete source.broken[PRICES];
-    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toEqual({ checked: 9, refreshed: 1, points: 3, failures: [] });
+    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toEqual({ checked: 9, refreshed: 1, points: 3, failures: [], snapshot: "built" });
   });
 
   it("reads one dataset after another, its requests for records spaced to the rate limit -- never a burst of six", async () => {
@@ -363,17 +367,72 @@ describe("refreshMarket and readMarket", () => {
     for (let i = 1; i < at.length; i++) expect(at[i] - at[i - 1], `request ${i}`).toBeGreaterThanOrEqual(35);
   });
 
-  it("writes the shares' quarters only when they move, and says why when Yahoo will not answer", async () => {
+  it("reads the shares only once a quarter has closed that is not kept, never keeping the one still running", async () => {
     const source = fakeDataGovSg();
-    await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW });
+    const yahoo = () => source.asked.filter((u) => u.startsWith("https://query1.finance.yahoo.com/")).length;
     const shares = () => db.tables.housing_market.filter((f) => f.series === "equity").map((f) => [f.quarter, f.value]);
-    expect(shares()).toEqual([["2026-04-01", 102 * 1.28], ["2026-07-01", 105 * 1.25]]);
+    // In August the third quarter is still running: the second is the last to have closed.
+    const august = new Date("2026-08-15T06:00:00Z");
+    await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: august });
+    expect(shares()).toEqual([["2026-04-01", 102 * 1.28]]);
+    expect(yahoo()).toBe(2);
+    // Kept: Yahoo is not asked again until another quarter closes.
+    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: august })).toMatchObject({ checked: 9, refreshed: 0, points: 0, failures: [] });
+    expect(yahoo()).toBe(2);
+    // October: the third quarter has closed, at September's close.
     source.yahoo.index["2026-09"] = 110;
-    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toEqual({ checked: 9, refreshed: 1, points: 1, failures: [] });
+    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toEqual({ checked: 9, refreshed: 1, points: 1, failures: [], snapshot: "built" });
     expect(shares()).toEqual([["2026-04-01", 102 * 1.28], ["2026-07-01", 110 * 1.25]]);
+    expect(yahoo()).toBe(4);
+  });
+
+  it("says why when Yahoo will not answer, and asks again the next day", async () => {
+    const source = fakeDataGovSg();
     source.broken.yahoo = 404;
     expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toEqual({
-      checked: 8, refreshed: 0, points: 0, failures: [{ dataset: `yahoo:${EQUITY.symbol}`, reason: `${EQUITY.symbol}: HTTP 404` }],
+      checked: 8, refreshed: 8, points: 19, failures: [{ dataset: `yahoo:${EQUITY.symbol}`, reason: `${EQUITY.symbol}: HTTP 404` }], snapshot: "built",
+    });
+    delete source.broken.yahoo;
+    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toMatchObject({ checked: 9, refreshed: 1, points: 2, failures: [] });
+  });
+
+  it("keeps the market whole for the page, as readMarket reads it, and the page reads it in one query", async () => {
+    const source = fakeDataGovSg();
+    await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW });
+    const market = await readMarket(client());
+    expect(db.tables.housing_snapshot).toEqual([{ id: "market", version: SNAPSHOT_VERSION, market, built_at: NOW.toISOString() }]);
+    db.requests.length = 0;
+    expect(await marketOf(client())).toEqual(market);
+    expect(db.requests.map((r) => r.table)).toEqual(["housing_snapshot"]);
+  });
+
+  it("reads every figure while there is no snapshot, or none in the shape this code reads", async () => {
+    const source = fakeDataGovSg();
+    await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW });
+    const market = await readMarket(client());
+    db.tables.housing_snapshot[0].version = SNAPSHOT_VERSION + 1;
+    db.tables.housing_snapshot[0].market = { series: [], refreshed_at: null };
+    expect(await marketOf(client())).toEqual(market);
+    db.tables.housing_snapshot = [];
+    expect(await marketOf(client())).toEqual(market);
+    // A snapshot in another shape is built anew though nothing moved.
+    db.tables.housing_snapshot = [{ id: "market", version: SNAPSHOT_VERSION + 1, market: {}, built_at: NOW.toISOString() }];
+    expect((await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).snapshot).toBe("built");
+    expect(db.tables.housing_snapshot[0]).toMatchObject({ version: SNAPSHOT_VERSION, market });
+  });
+
+  it("goes on without a snapshot before its migration is applied, and says when the table cannot be read", async () => {
+    await db.close();
+    let answer = { status: 404, body: { code: "PGRST205", message: "Could not find the table 'public.housing_snapshot' in the schema cache" } };
+    db = await startPostgrest({ housing_market: [], housing_sources: [] }, { intercept: (req) => (req.table === "housing_snapshot" ? answer : undefined) });
+    const source = fakeDataGovSg();
+    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toMatchObject({ refreshed: 9, failures: [], snapshot: "unavailable" });
+    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toMatchObject({ refreshed: 0, failures: [], snapshot: "unavailable" });
+    expect((await marketOf(client())).series).toHaveLength(14);
+    answer = { status: 500, body: { code: "XX000", message: "the database fell over" } };
+    await expect(marketOf(client())).rejects.toMatchObject({ message: "the database fell over" });
+    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toMatchObject({
+      snapshot: "unavailable", failures: [{ dataset: "snapshot", reason: "the database fell over" }],
     });
   });
 

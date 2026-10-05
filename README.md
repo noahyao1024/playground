@@ -155,7 +155,11 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
   For the years ahead it also reads SingStat's 3-month compounded SORA,
   government securities' yields (1, 2, 5 and 10 years) and consumer price index
   from data.gov.sg, and the S&P 500 with dividends reinvested, in Singapore
-  dollars, from Yahoo Finance's chart endpoint (`^SP500TR` and `SGD=X`).
+  dollars, from Yahoo Finance's chart endpoint (`^SP500TR` and `SGD=X`) — once a
+  quarter has closed, never the quarter still running. So nothing moves more
+  often than a source publishes. The page reads the market kept whole in one
+  row, built again by the daily job only when a figure moved, rather than
+  fifteen thousand figures each time it opens.
 - **The years ahead** are estimated from that history each time it is read,
   and each estimate says why. The home's price growth and the investments' are
   taken at the lower quartile of their ten-year spans — three spans in four did

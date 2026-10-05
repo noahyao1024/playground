@@ -191,15 +191,25 @@ describe("refreshing", () => {
   it("reads data.gov.sg when the owner asks, and hands back the market as it now stands", async () => {
     const { status, body } = await post({ action: "refresh" });
     expect(status).toBe(200);
-    expect(body.refresh).toEqual({ checked: 9, refreshed: 9, points: 9, failures: [] });
+    expect(body.refresh).toEqual({ checked: 9, refreshed: 9, points: 9, failures: [], snapshot: "built" });
     expect(body.market.series.map((s: Row) => `${s.series}:${s.area}:${s.segment}`).sort()).toEqual([
       "cpi:ALL:all", "equity:ALL:sp500-sgd", "hdb_rent:BEDOK:4-room", "hdb_resale:BEDOK:4-room", "hdb_rpi:ALL:all", "sora:ALL:3m",
       "ura_ppi:ALL:non-landed", "ura_ppi:OCR:non-landed", "ura_rri:OCR:non-landed",
     ]);
-    // Nothing has changed since: only the catalogue is read.
+    // Nothing has changed since: only the catalogue is read -- the shares'
+    // last closed quarter is kept -- and the snapshot kept as it is.
     asked.length = 0;
-    expect((await post({ action: "refresh" })).body.refresh).toMatchObject({ checked: 9, refreshed: 0 });
-    expect(asked.every((u) => u.startsWith("https://api-production.data.gov.sg/") || u.startsWith("https://query1.finance.yahoo.com/"))).toBe(true);
+    expect((await post({ action: "refresh" })).body.refresh).toMatchObject({ checked: 9, refreshed: 0, snapshot: "kept" });
+    expect(asked.length).toBeGreaterThan(0);
+    expect(asked.every((u) => u.startsWith("https://api-production.data.gov.sg/"))).toBe(true);
+  });
+
+  it("hands the page the market from its snapshot in one query once the daily job has kept one", async () => {
+    await post({ action: "refresh" });
+    db.requests.length = 0;
+    const body = await (await GET(get())).json();
+    expect(body.market.series).toHaveLength(9);
+    expect(db.requests.map((r) => r.table).sort()).toEqual(["housing_scenarios", "housing_snapshot"]);
   });
 });
 
@@ -210,9 +220,9 @@ describe("the daily job's call", () => {
   };
 
   it("brings the figures up to date, answering in counts", async () => {
-    expect(await cron()).toEqual({ status: 200, body: { checked: 9, refreshed: 9, points: 9, failed: 0, failures: [] } });
+    expect(await cron()).toEqual({ status: 200, body: { checked: 9, refreshed: 9, points: 9, failed: 0, failures: [], snapshot: "built" } });
     expect(db.tables.housing_market).toHaveLength(9);
-    expect(await cron()).toEqual({ status: 200, body: { checked: 9, refreshed: 0, points: 0, failed: 0, failures: [] } });
+    expect(await cron()).toEqual({ status: 200, body: { checked: 9, refreshed: 0, points: 0, failed: 0, failures: [], snapshot: "kept" } });
   });
 
   it("answers 503 when not one of data.gov.sg's datasets could be read, so the job asks again", async () => {

@@ -328,7 +328,7 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
 }
 
 /** What to try: the future expected, or one with something gone wrong. */
-function StressPicker({ value, onChange }: { value: Stress; onChange: (stress: Stress) => void }) {
+function StressPicker({ value, onChange, bank }: { value: Stress; onChange: (stress: Stress) => void; bank: boolean }) {
   return (
     <div className="space-y-2">
       <div role="radiogroup" aria-label="What if" className="flex flex-wrap items-center gap-1.5">
@@ -349,7 +349,9 @@ function StressPicker({ value, onChange }: { value: Stress; onChange: (stress: S
           </button>
         ))}
       </div>
-      <p className="text-xs text-muted-foreground">{STRESS_TEXT[value].note}</p>
+      <p className="text-xs text-muted-foreground">
+        {value === "rates" && !bank ? "SORA two points above what is expected -- but an HDB loan's rate is HDB's own, and SORA does not move it." : STRESS_TEXT[value].note}
+      </p>
     </div>
   );
 }
@@ -702,7 +704,7 @@ function Results({ typed, inputs, result, estimates, model, market, simulation, 
 
   return (
     <div className="min-w-0 space-y-4">
-      <StressPicker value={stress} onChange={onStress} />
+      <StressPicker value={stress} onChange={onStress} bank={inputs.loan_type === "bank"} />
 
       <div className="grid grid-cols-2 gap-3 xl:grid-cols-3">
         <Stat

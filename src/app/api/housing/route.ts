@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { financeDatabase, financeJson as json, isFinanceRequest, isUuid, reason } from "@/lib/finance-server";
 import { InputError, parseInputs, readInputs, type ScenarioInputs } from "@/lib/housing";
-import { readMarket, refreshMarket } from "@/lib/housing-data";
+import { marketOf, refreshMarket } from "@/lib/housing-data";
 
 /** /housing's data: Singapore's market figures and the owner's rent-or-buy
  *  scenarios. It answers whoever /api/finance answers -- the owner's session,
@@ -34,7 +34,8 @@ export async function GET(req: NextRequest) {
   const db = financeDatabase();
   if (!db) return json({ error: "Supabase not configured" }, 500);
   try {
-    const [market, scenarios] = await Promise.all([readMarket(db), readScenarios(db)]);
+    // The market as kept whole after the daily job: one query, not fifteen pages.
+    const [market, scenarios] = await Promise.all([marketOf(db), readScenarios(db)]);
     return json({ market, scenarios });
   } catch (err) {
     return json({ error: reason(err) }, 500);
@@ -70,7 +71,7 @@ export async function POST(req: NextRequest) {
         // The owner asking now, as the daily job does: only what has changed
         // is read again, unless `force`.
         const refresh = await refreshMarket(db, { force: body.force === true });
-        return json({ refresh, market: await readMarket(db) });
+        return json({ refresh, market: await marketOf(db) });
       }
       default:
         return json({ error: "Unknown action" }, 400);
