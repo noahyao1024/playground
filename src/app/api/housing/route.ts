@@ -3,12 +3,16 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { financeDatabase, financeJson as json, isFinanceRequest, isUuid, reason } from "@/lib/finance-server";
 import { InputError, parseInputs, readInputs, type ScenarioInputs } from "@/lib/housing";
 import { marketOf, refreshMarket } from "@/lib/housing-data";
+import { MAX_PROJECTS, projectName } from "@/lib/housing-projects";
+import { readProjects, refreshProjects } from "@/lib/ura";
 
-/** /housing's data: Singapore's market figures and the owner's rent-or-buy
+/** /housing's data: Singapore's market figures, the private developments the
+ *  owner follows with what URA recorded of them, and the owner's rent-or-buy
  *  scenarios. It answers whoever /api/finance answers -- the owner's session,
  *  or a token an agent carries -- and nobody else, and is never cached. */
 export const dynamic = "force-dynamic";
-// Refreshing reads whole datasets from data.gov.sg.
+// Refreshing reads whole datasets from data.gov.sg; following a development
+// reads URA's files for it.
 export const maxDuration = 60;
 
 export type Scenario = { id: string; name: string; inputs: ScenarioInputs; created_at: string; updated_at: string };
@@ -35,8 +39,9 @@ export async function GET(req: NextRequest) {
   if (!db) return json({ error: "Supabase not configured" }, 500);
   try {
     // The market as kept whole after the daily job: one query, not fifteen pages.
-    const [market, scenarios] = await Promise.all([marketOf(db), readScenarios(db)]);
-    return json({ market, scenarios });
+    const [market, scenarios, projects] = await Promise.all([marketOf(db), readScenarios(db), readProjects(db)]);
+    // Whether URA's key is set -- never the key.
+    return json({ market, scenarios, projects, ura: Boolean(process.env.URA_ACCESS_KEY) });
   } catch (err) {
     return json({ error: reason(err) }, 500);
   }
@@ -65,6 +70,30 @@ export async function POST(req: NextRequest) {
         const { data, error } = await db.from("housing_scenarios").delete().eq("id", body.id).select("id");
         if (error) throw error;
         if (!data?.length) return json({ error: "No such scenario" }, 404);
+        return json({ ok: true });
+      }
+      case "followProject": {
+        const name = projectName(body.name);
+        if (!name) throw new Invalid("A development needs its name, as URA writes it, at most 80 characters");
+        const { data: kept, error: unread } = await db.from("housing_projects").select("name");
+        if (unread) throw unread;
+        const names = ((kept ?? []) as Array<{ name: string }>).map((p) => p.name);
+        if (!names.includes(name)) {
+          if (names.length >= MAX_PROJECTS) throw new Invalid(`At most ${MAX_PROJECTS} developments can be followed`);
+          const { error } = await db.from("housing_projects").insert({ name });
+          if (error) throw error;
+        }
+        // Read for it now, whenever it was last read, so the page has its records at once.
+        const refresh = await refreshProjects(db, { only: name });
+        const project = (await readProjects(db)).find((p) => p.name === name) ?? null;
+        return json({ project, refresh });
+      }
+      case "unfollowProject": {
+        const name = projectName(body.name);
+        if (!name) throw new Invalid("A development needs its name");
+        const { data, error } = await db.from("housing_projects").delete().eq("name", name).select("name");
+        if (error) throw error;
+        if (!data?.length) return json({ error: "Not followed" }, 404);
         return json({ ok: true });
       }
       case "refresh": {

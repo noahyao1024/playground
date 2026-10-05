@@ -10,9 +10,15 @@ vi.mock("@/lib/housing-data", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/lib/housing-data")>();
   return { ...real, refreshMarket: (db: Parameters<typeof real.refreshMarket>[0], options = {}) => real.refreshMarket(db, { spacing: 0, backoff: 0, ...options }) };
 });
+// URA likewise, read without the spacing its firewall wants.
+vi.mock("@/lib/ura", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/ura")>();
+  return { ...real, refreshProjects: (db: Parameters<typeof real.refreshProjects>[0], options = {}) => real.refreshProjects(db, { spacing: 0, ...options }) };
+});
 
 const { GET, POST } = await import("@/app/api/housing/route");
 const { GET: CRON } = await import("@/app/api/cron/housing/route");
+const { GET: PROJECTS_CRON } = await import("@/app/api/cron/projects/route");
 const { DATASETS } = await import("@/lib/housing-data");
 const { DEFAULT_INPUTS } = await import("@/lib/housing");
 
@@ -49,6 +55,16 @@ beforeEach(async () => {
       asked.push(href);
       if (typeof catalogue === "number") return new Response("{}", { status: catalogue });
       return new Response(JSON.stringify({ code: 0, data: { lastUpdatedAt: catalogue } }));
+    }
+    if (href.startsWith("https://eservice.ura.gov.sg/")) {
+      asked.push(href);
+      // URA: a token, one development's sales in file 3, a lease a quarter.
+      if (href.endsWith("/insertNewToken/v1")) return Response.json({ Status: "Success", Message: "", Result: "token" });
+      const params = new URL(href).searchParams;
+      const result = params.get("service") === "PMI_Resi_Transaction"
+        ? (params.get("batch") === "3" ? [{ project: "WATERTOWN", street: "PUNGGOL CENTRAL", marketSegment: "OCR", transaction: [{ area: "98", floorRange: "06-10", noOfUnits: "1", contractDate: "0826", typeOfSale: "3", price: "1550000", propertyType: "Condominium", district: "19" }] }] : [])
+        : [{ project: "WATERTOWN", street: "PUNGGOL CENTRAL", rental: [{ leaseDate: "0826", areaSqft: "1000-1100", noOfBedRoom: "3", rent: 4500, district: "19" }] }];
+      return Response.json({ Status: "Success", Message: "", Result: result });
     }
     if (href.startsWith("https://query1.finance.yahoo.com/")) {
       asked.push(href);
@@ -187,6 +203,72 @@ describe("saving and deleting a scenario", () => {
   });
 });
 
+describe("developments followed", () => {
+  it("hands the page none at first, and whether URA's key is set -- never the key", async () => {
+    const body = await (await GET(get())).json();
+    expect(body.projects).toEqual([]);
+    expect(body.ura).toBe(false);
+    vi.stubEnv("URA_ACCESS_KEY", "secret-ura-key");
+    const text = await (await GET(get())).text();
+    expect(JSON.parse(text).ura).toBe(true);
+    expect(text).not.toContain("secret-ura-key");
+  });
+
+  it("follows one by the name URA gives it and reads URA for it at once, its records handed back", async () => {
+    vi.stubEnv("URA_ACCESS_KEY", "secret-ura-key");
+    const { status, body } = await post({ action: "followProject", name: " watertown " });
+    expect(status).toBe(200);
+    expect(body.refresh).toMatchObject({ state: "read", followed: 1, read: 1, sales: 1, rents: 4, failures: [] });
+    expect(body.project).toMatchObject({ name: "WATERTOWN", street: "PUNGGOL CENTRAL", district: "19", segment: "OCR", found: true });
+    expect(body.project.sales).toHaveLength(1);
+    expect(body.project.rents).toHaveLength(4);
+    // Following it again reads it again, and keeps one of it.
+    expect((await post({ action: "followProject", name: "WATERTOWN" })).body.refresh).toMatchObject({ read: 1 });
+    expect(db.tables.housing_projects).toHaveLength(1);
+    expect((await (await GET(get())).json()).projects.map((p: Row) => p.name)).toEqual(["WATERTOWN"]);
+  });
+
+  it("follows one without the key all the same, to be read once it is set", async () => {
+    const { body } = await post({ action: "followProject", name: "WATERTOWN" });
+    expect(body.refresh).toMatchObject({ state: "no key" });
+    expect(body.project).toMatchObject({ name: "WATERTOWN", sales: [], rents: [] });
+    // Not read: the stand-in keeps no column defaults, the table's is null.
+    expect(body.project.read_at ?? null).toBeNull();
+    expect(asked.some((u) => u.includes("ura.gov.sg"))).toBe(false);
+  });
+
+  it("refuses a name that is none, and more than ten at once", async () => {
+    for (const name of ["", "  ", 42, "x".repeat(81)]) {
+      expect((await post({ action: "followProject", name })).status, String(name)).toBe(400);
+    }
+    db.tables.housing_projects = Array.from({ length: 10 }, (_, k) => ({ name: `PROJECT ${k}`, added_at: "2026-10-01T00:00:00Z", read_at: null }));
+    const { status, body } = await post({ action: "followProject", name: "WATERTOWN" });
+    expect(status).toBe(400);
+    expect(body.error).toMatch(/At most 10/);
+  });
+
+  it("stops following one, and says so when it was not followed", async () => {
+    await post({ action: "followProject", name: "WATERTOWN" });
+    expect(await post({ action: "unfollowProject", name: "watertown" })).toEqual({ status: 200, body: { ok: true } });
+    expect(db.tables.housing_projects).toHaveLength(0);
+    expect((await post({ action: "unfollowProject", name: "WATERTOWN" })).status).toBe(404);
+  });
+
+  it("is read by the daily job's call when due, answering in counts and states without a name", async () => {
+    vi.stubEnv("URA_ACCESS_KEY", "secret-ura-key");
+    db.tables.housing_projects = [{ name: "WATERTOWN", added_at: "2026-10-01T00:00:00Z", read_at: null, district: null }];
+    const res = await PROJECTS_CRON(new NextRequest("http://localhost/api/cron/projects", { headers: { authorization: "Bearer cron-secret" } }));
+    const text = await res.text();
+    expect(res.status).toBe(200);
+    expect(JSON.parse(text)).toEqual({ state: "read", followed: 1, read: 1, sales: 1, rents: 4, failed: 0, failures: [] });
+    expect(text).not.toContain("WATERTOWN");
+    // Read today: not due again tomorrow.
+    const again = await (await PROJECTS_CRON(new NextRequest("http://localhost/api/cron/projects", { headers: { authorization: "Bearer cron-secret" } }))).json();
+    expect(again).toMatchObject({ state: "not due", read: 0 });
+    expect((await PROJECTS_CRON(new NextRequest("http://localhost/api/cron/projects"))).status).toBe(401);
+  });
+});
+
 describe("refreshing", () => {
   it("reads data.gov.sg when the owner asks, and hands back the market as it now stands", async () => {
     const { status, body } = await post({ action: "refresh" });
@@ -209,7 +291,7 @@ describe("refreshing", () => {
     db.requests.length = 0;
     const body = await (await GET(get())).json();
     expect(body.market.series).toHaveLength(9);
-    expect(db.requests.map((r) => r.table).sort()).toEqual(["housing_scenarios", "housing_snapshot"]);
+    expect(db.requests.map((r) => r.table).sort()).toEqual(["housing_projects", "housing_scenarios", "housing_snapshot"]);
   });
 });
 

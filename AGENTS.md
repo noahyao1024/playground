@@ -87,8 +87,8 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
 - Next.js 16 App Router, TypeScript, Tailwind v4, shadcn/ui
 - Supabase (`@supabase/supabase-js`) for data; NextAuth v5 + Google OAuth for sign-in
 - `.github/workflows/daily-jobs.yml` — daily, runs `scripts/daily-jobs.mjs`, which calls
-  `/api/cron/bill` on the 1st–3rd in Singapore, and `/api/cron/daily`, `/api/cron/stocks` and
-  `/api/cron/housing` every day, and fails the run when a job did not do its work, so GitHub mails the owner. `/api/cron/daily` works out
+  `/api/cron/bill` on the 1st–3rd in Singapore, and `/api/cron/daily`, `/api/cron/stocks`,
+  `/api/cron/housing` and `/api/cron/projects` every day, and fails the run when a job did not do its work, so GitHub mails the owner. `/api/cron/daily` works out
   who owes more than `UNPAID_THRESHOLD_CNY` and hands back the mail; the workflow sends it to
   `ALERT_TO` — the owner, not the people who owe — through the SMTP secrets GitHub holds. The
   site has no mail settings and no mail library. The run's log is public: counts and states
@@ -231,6 +231,18 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   (`use-simulation.ts`), and keeps the summaries of the last 32 comparisons it drew, so going
   back to one draws nothing. HDB published no rent medians for 2019 Q4: gaps of up to two
   quarters are bridged rather than breaking a series.
+  Private developments the owner follows are read from URA's Data Service (`src/lib/ura.ts`)
+  with `URA_ACCESS_KEY`, set on Vercel only. They live in `housing_projects`, with
+  `housing_project_sales` and `housing_project_rents`, private like the rest. A key gets a token
+  a day, and URA's firewall bars an address that asks for tokens again and again: this sandbox
+  was barred after its second token request in a minute. So a run asks for one token, spaces its
+  requests, and reads a development a week after it last did (`/api/cron/projects`, from the
+  daily job), or at once when it is followed. Sales come in four files by postal district
+  (01–07, 08–14, 15–21, 22–28), five years whole; rental contracts come one file a quarter, the
+  last four read. Only followed developments are kept. A development's sales are replaced whole
+  on each read, as URA gives a sale no id. The arithmetic — P50 and average by URA's rental size
+  bands and by quarter, the yields — is `src/lib/housing-projects.ts`. The daily job's log never
+  names a development: which ones the owner follows is the owner's business.
 - Chart colours are `--series-1` to `--series-3` in `globals.css`, a palette checked for
   colour-blind separation with separate dark steps. Marks wear them; text never does.
 

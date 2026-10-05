@@ -7,7 +7,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startPostgrest, type StandIn } from "../helpers/postgrest";
-import { AUDIENCE, call, isBillingDay, judgeBill, judgeDaily, judgeHousing, judgeStocks, oidcToken, quote } from "../../scripts/daily-jobs.mjs";
+import { AUDIENCE, call, isBillingDay, judgeBill, judgeDaily, judgeHousing, judgeProjects, judgeStocks, oidcToken, quote } from "../../scripts/daily-jobs.mjs";
 
 const exec = promisify(execFile);
 const SCRIPT = resolve("scripts/daily-jobs.mjs");
@@ -25,6 +25,7 @@ const quiet = { threshold: 500, over: [], mail: null };
 const valued = { valued_at: "2026-09-28T06:00:00.000Z", accounts: 1, positions: 3, failed: 0, skipped: 0 };
 const billed = { message: "Generated 2 charge(s)", month: "2026-10", generated: 2, skipped: [], details: [{ subscriber: "Alice", total_cny: 53 }] };
 const housed = { checked: 6, refreshed: 1, points: 12012, failed: 0, failures: [] };
+const followed = { state: "not due", followed: 1, read: 0, sales: 0, rents: 0, failed: 0, failures: [] };
 
 let site: StandIn;
 // Per path, the answers in turn; the last one repeats.
@@ -37,6 +38,7 @@ beforeEach(async () => {
     "/api/cron/bill": [{ status: 200, body: billed }],
     "/api/cron/stocks": [{ status: 200, body: valued }],
     "/api/cron/housing": [{ status: 200, body: housed }],
+    "/api/cron/projects": [{ status: 200, body: followed }],
     // GitHub's token endpoint, as the runner offers it.
     "/_oidc": [{ status: 200, body: { value: TOKEN } }],
   };
@@ -201,6 +203,30 @@ describe("quote", () => {
   });
 });
 
+describe("judgeProjects", () => {
+  it("is content with nothing to read: none followed, none due, no key yet, no tables yet", () => {
+    expect(judgeProjects({ status: 200, body: followed })).toEqual({ ok: true, text: "1 followed, none due" });
+    expect(judgeProjects({ status: 200, body: { ...followed, state: "none followed", followed: 0 } })).toEqual({ ok: true, text: "none followed" });
+    expect(judgeProjects({ status: 200, body: { ...followed, state: "no key" } })).toEqual({ ok: true, text: "1 followed, but URA_ACCESS_KEY is not set on Vercel" });
+    expect(judgeProjects({ status: 200, body: { ...followed, state: "unavailable", followed: 0 } })).toEqual({ ok: true, text: "no tables for them yet" });
+  });
+
+  it("counts what was read, and fails a read that failed, on one line", () => {
+    expect(judgeProjects({ status: 200, body: { ...followed, state: "read", read: 1, sales: 214, rents: 96 } }))
+      .toEqual({ ok: true, text: "1 followed, 1 read (214 sale(s), 96 rental contract(s))" });
+    const body = { ...followed, state: "read", failed: 2, failures: [{ source: "rents, Q3 2026", reason: "HTTP 502\n::stop-commands::x" }, { source: "x", reason: "y" }] };
+    expect(judgeProjects({ status: 200, body })).toEqual({
+      ok: false, text: "1 followed, 0 read (0 sale(s), 0 rental contract(s)); 2 could not be read -- rents, Q3 2026: HTTP 502 ::stop-commands::x",
+    });
+  });
+
+  it("fails a refusal, a failure, and an answer without a state", () => {
+    expect(judgeProjects({ status: 401, body: {} }).ok).toBe(false);
+    expect(judgeProjects({ status: 500, body: { error: "Supabase not configured" } })).toEqual({ ok: false, text: "failed: HTTP 500 -- Supabase not configured" });
+    expect(judgeProjects({ status: 200, body: {} })).toEqual({ ok: false, text: "unexpected answer: HTTP 200, no state" });
+  });
+});
+
 describe("isBillingDay", () => {
   it("is the 1st to 3rd in Singapore, whatever the date in UTC", () => {
     expect(isBillingDay(new Date("2026-09-30T15:59:59Z"))).toBe(false); // 30 Sep, 23:59 in Singapore
@@ -275,8 +301,8 @@ describe("a run", () => {
   it("checks who owes and values the stocks as this run, with GitHub's token, and bills nothing mid-month", async () => {
     const { code, stdout, summary } = await runScript();
     expect(code).toBe(0);
-    expect(siteCalls()).toEqual(["/api/cron/daily", "/api/cron/stocks", "/api/cron/housing"]);
-    for (const path of ["/api/cron/daily", "/api/cron/stocks", "/api/cron/housing"]) {
+    expect(siteCalls()).toEqual(["/api/cron/daily", "/api/cron/stocks", "/api/cron/housing", "/api/cron/projects"]);
+    for (const path of ["/api/cron/daily", "/api/cron/stocks", "/api/cron/housing", "/api/cron/projects"]) {
       expect(site.requests.find((r) => r.path === path)?.headers.authorization, path).toBe(`Bearer ${TOKEN}`);
     }
     expect(stdout).toContain("Unpaid alert: 1 over ¥500; mail to send");
@@ -285,6 +311,14 @@ describe("a run", () => {
     expect(summary).toContain("| Unpaid alert | ✅ 1 over ¥500; mail to send |");
     expect(summary).toContain("| Stock prices | ✅ 1 account(s) valued, 3 price(s) fetched |");
     expect(summary).toContain("| Housing data | ✅ 6 dataset(s) checked, 1 read again (12012 figure(s)) |");
+    expect(stdout).toContain("Developments: 1 followed, none due");
+  });
+
+  it("fails when URA could not be read for a development, saying why without naming it", async () => {
+    replies["/api/cron/projects"] = [{ status: 200, body: { ...followed, state: "read", failed: 1, failures: [{ source: "sales, file 3", reason: "HTTP 403" }] } }];
+    const { code, stdout } = await runScript();
+    expect(code).toBe(1);
+    expect(stdout).toContain("::error title=Developments::1 followed, 0 read (0 sale(s), 0 rental contract(s)); 1 could not be read -- sales, file 3: HTTP 403");
   });
 
   it("fails when a housing dataset could not be read, having done the rest", async () => {
@@ -324,7 +358,7 @@ describe("a run", () => {
   it("bills first on the 1st to 3rd in Singapore, so the check counts the new month", async () => {
     const { code, stdout } = await runScript({ NOW: "2026-09-30T20:00:00Z" }); // 1 Oct, 04:00 in Singapore
     expect(code).toBe(0);
-    expect(siteCalls()).toEqual(["/api/cron/bill", "/api/cron/daily", "/api/cron/stocks", "/api/cron/housing"]);
+    expect(siteCalls()).toEqual(["/api/cron/bill", "/api/cron/daily", "/api/cron/stocks", "/api/cron/housing", "/api/cron/projects"]);
     expect(stdout).toContain("Billing: 2026-10: 2 charge(s) generated");
     expect(stdout).not.toContain("Alice");
   });
@@ -333,7 +367,7 @@ describe("a run", () => {
     replies["/api/cron/bill"] = [{ status: 500, body: { error: "boom" } }];
     const { code, stdout, output } = await runScript({ NOW: "2026-10-02T02:00:00Z" });
     expect(code).toBe(1);
-    expect(siteCalls()).toEqual(["/api/cron/bill", "/api/cron/bill", "/api/cron/bill", "/api/cron/daily", "/api/cron/stocks", "/api/cron/housing"]);
+    expect(siteCalls()).toEqual(["/api/cron/bill", "/api/cron/bill", "/api/cron/bill", "/api/cron/daily", "/api/cron/stocks", "/api/cron/housing", "/api/cron/projects"]);
     expect(stdout).toContain("::error title=Billing::failed: HTTP 500 -- boom");
     expect(output).toContain("mail=true");
   });
@@ -341,12 +375,12 @@ describe("a run", () => {
   it("rides out a brief outage", async () => {
     replies["/api/cron/daily"] = [{ status: 503 }, { status: 200, body: alerted }];
     expect((await runScript()).code).toBe(0);
-    expect(siteCalls()).toEqual(["/api/cron/daily", "/api/cron/daily", "/api/cron/stocks", "/api/cron/housing"]);
+    expect(siteCalls()).toEqual(["/api/cron/daily", "/api/cron/daily", "/api/cron/stocks", "/api/cron/housing", "/api/cron/projects"]);
   });
 
   it("asks for a test mail with --test-mail", async () => {
     await runScript({}, ["--test-mail"]);
-    expect(siteCalls()).toEqual(["/api/cron/daily?test=1", "/api/cron/stocks", "/api/cron/housing"]);
+    expect(siteCalls()).toEqual(["/api/cron/daily?test=1", "/api/cron/stocks", "/api/cron/housing", "/api/cron/projects"]);
   });
 
   it("says so when the site refuses it", async () => {

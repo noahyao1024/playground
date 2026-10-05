@@ -1,7 +1,24 @@
 import type { MarketData, ScenarioInputs } from "@/lib/housing";
+import type { Project } from "@/lib/housing-projects";
 
 export type Scenario = { id: string; name: string; inputs: ScenarioInputs; created_at: string; updated_at: string };
-export type HousingData = { market: MarketData; scenarios: Scenario[] };
+export type HousingData = {
+  market: MarketData;
+  scenarios: Scenario[];
+  /** The developments followed, with what URA recorded of them. */
+  projects: Project[];
+  /** Whether URA's key is set on the site. */
+  ura: boolean;
+};
+/** What following a development read of URA, in counts and a state. */
+export type ProjectsRefresh = {
+  state: "read" | "not due" | "no key" | "none followed" | "unavailable";
+  followed: number;
+  read: number;
+  sales: number;
+  rents: number;
+  failures: Array<{ source: string; reason: string }>;
+};
 export type Refresh = { checked: number; refreshed: number; points: number; failures: Array<{ dataset: string; reason: string }> };
 
 /** The route's own message on failure. */
