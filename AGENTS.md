@@ -197,7 +197,11 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   which names the datasets and makes one spelling of their towns ("Ang Mo Kio", "QUEENSTOWN ",
   CENTRAL AREA) and flat types ("4-RM" beside "4-room"); of two records for one figure the later
   stands. `/api/cron/housing` reads a dataset again only when its catalogue `lastUpdatedAt`
-  moves, and a dataset it cannot read fails the daily run. If data.gov.sg retires a dataset id,
+  moves, and a dataset it cannot read fails the daily run. Without a key data.gov.sg answers
+  four record requests every ten seconds and turns the rest away with 429 — six datasets asked
+  for at once from Vercel lost two that way — so the datasets are read one after another, each
+  request for records 2.6 s after the last, and a 429 waits out its window before asking again.
+  `DATA_GOV_SG_API_KEY`, optional, raises the limit. If data.gov.sg retires a dataset id,
   that is the failure you will see: find its successor in the catalogue and change the id.
   The arithmetic is `src/lib/housing.ts`: stamp duties and property tax as IRAS published them
   in October 2026 — when IRAS changes a rate, change it there and its test's figures with it —

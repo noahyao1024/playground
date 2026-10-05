@@ -102,53 +102,94 @@ export const DATASETS: Dataset[] = [
 
 const RECORDS = "https://data.gov.sg/api/action/datastore_search";
 const CATALOGUE = "https://api-production.data.gov.sg/v2/public/api/datasets";
-const PAGE = 5000;
+/** Records a request: more than any of these datasets holds, so each is read in one. */
+const PAGE = 20_000;
 const TIMEOUT_MS = 25_000;
 /** A dataset's figures go in this many at a time. */
 const WRITE_BATCH = 2000;
+/** Tries a request gets, in all. */
+const ATTEMPTS = 3;
 
 /** Why a dataset could not be read. */
 export class SourceError extends Error {}
 
-/** GET as JSON, asking again once on what may pass by itself: no answer, a
- *  5xx, or 429 when data.gov.sg asks callers to slow down. */
-async function getJson(url: string, fetcher: typeof fetch): Promise<unknown> {
-  let last = "no answer";
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      const res = await fetcher(url, { headers: { accept: "application/json" }, cache: "no-store", signal: AbortSignal.timeout(TIMEOUT_MS) });
-      if (res.ok) return await res.json();
-      last = `HTTP ${res.status}`;
-      if (res.status !== 429 && res.status < 500) break;
-    } catch (err) {
-      last = err instanceof Error ? err.message : String(err);
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export type SourceOptions = {
+  fetcher?: typeof fetch;
+  /** data.gov.sg's API key, which lifts its rate limits: DATA_GOV_SG_API_KEY unless given. */
+  apiKey?: string | null;
+  /** The least time between two requests for records. Without a key
+   *  data.gov.sg answers four every ten seconds and turns away the rest with
+   *  a 429 -- which is how the first backfill, asking for six datasets at once
+   *  from Vercel, lost two of them. */
+  spacing?: number;
+  /** How long to wait before asking again after no answer, a 5xx, or a 429
+   *  that does not say (its window is ten seconds). */
+  backoff?: number;
+};
+
+/** data.gov.sg, as this reads it: a dataset's catalogue entry and its records.
+ *  Requests for records are spaced to its rate limit; one turned away or not
+ *  answered is asked again, up to three tries in all, after a pause -- the
+ *  429's Retry-After where it gives one. Anything else is said at once. */
+export function dataGovSg({
+  fetcher = fetch,
+  apiKey = process.env.DATA_GOV_SG_API_KEY?.trim() || null,
+  spacing = 2_600,
+  backoff = 10_000,
+}: SourceOptions = {}) {
+  const headers: Record<string, string> = { accept: "application/json", ...(apiKey ? { "x-api-key": apiKey } : {}) };
+  let lastRecords = Number.NEGATIVE_INFINITY;
+
+  async function get(url: string, records: boolean): Promise<unknown> {
+    let reason = "no answer";
+    for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
+      if (records) {
+        const wait = lastRecords + spacing - Date.now();
+        if (wait > 0) await sleep(wait);
+        lastRecords = Date.now();
+      }
+      let pause = backoff;
+      try {
+        const res = await fetcher(url, { headers, cache: "no-store", signal: AbortSignal.timeout(TIMEOUT_MS) });
+        if (res.ok) return await res.json();
+        reason = `HTTP ${res.status}`;
+        if (res.status !== 429 && res.status < 500) break;
+        const after = Number(res.headers.get("retry-after"));
+        if (after > 0) pause = Math.min(after * 1000, 30_000);
+      } catch (err) {
+        reason = err instanceof Error ? err.message : String(err);
+      }
+      if (attempt < ATTEMPTS) await sleep(pause);
     }
-    if (attempt === 1) await new Promise((resolve) => setTimeout(resolve, 2000));
+    throw new SourceError(reason);
   }
-  throw new SourceError(last);
-}
 
-/** When data.gov.sg last changed a dataset, as its catalogue says. */
-export async function lastUpdated(id: string, fetcher: typeof fetch = fetch): Promise<string> {
-  const body = await getJson(`${CATALOGUE}/${id}/metadata`, fetcher) as { data?: { lastUpdatedAt?: unknown } };
-  const at = body?.data?.lastUpdatedAt;
-  if (typeof at !== "string" || Number.isNaN(Date.parse(at))) throw new SourceError("its catalogue entry has no update time");
-  return new Date(at).toISOString();
-}
+  return {
+    /** When data.gov.sg last changed a dataset, as its catalogue says. */
+    async lastUpdated(id: string): Promise<string> {
+      const body = await get(`${CATALOGUE}/${id}/metadata`, false) as { data?: { lastUpdatedAt?: unknown } };
+      const at = body?.data?.lastUpdatedAt;
+      if (typeof at !== "string" || Number.isNaN(Date.parse(at))) throw new SourceError("its catalogue entry has no update time");
+      return new Date(at).toISOString();
+    },
 
-/** Every record of a dataset, in the order it was published -- so of two
- *  records for the same figure, as the rents have for 2020 Q1, the later wins. */
-export async function datasetRecords(id: string, fetcher: typeof fetch = fetch): Promise<Record<string, unknown>[]> {
-  const out: Record<string, unknown>[] = [];
-  for (let offset = 0; ; offset += PAGE) {
-    const url = `${RECORDS}?resource_id=${id}&limit=${PAGE}&offset=${offset}&sort=${encodeURIComponent("_id asc")}`;
-    const body = await getJson(url, fetcher) as { success?: boolean; result?: { records?: unknown; total?: unknown } };
-    const records = body?.result?.records;
-    if (body?.success !== true || !Array.isArray(records)) throw new SourceError("an answer without records");
-    out.push(...(records as Record<string, unknown>[]));
-    const total = Number(body.result?.total);
-    if (records.length < PAGE || (Number.isFinite(total) && out.length >= total)) return out;
-  }
+    /** Every record of a dataset, in the order it was published -- so of two
+     *  records for the same figure, as the rents have for 2020 Q1, the later wins. */
+    async records(id: string): Promise<Record<string, unknown>[]> {
+      const out: Record<string, unknown>[] = [];
+      for (let offset = 0; ; offset += PAGE) {
+        const url = `${RECORDS}?resource_id=${id}&limit=${PAGE}&offset=${offset}&sort=${encodeURIComponent("_id asc")}`;
+        const body = await get(url, true) as { success?: boolean; result?: { records?: unknown; total?: unknown } };
+        const records = body?.result?.records;
+        if (body?.success !== true || !Array.isArray(records)) throw new SourceError("an answer without records");
+        out.push(...(records as Record<string, unknown>[]));
+        const total = Number(body.result?.total);
+        if (records.length < PAGE || (Number.isFinite(total) && out.length >= total)) return out;
+      }
+    },
+  };
 }
 
 /** A dataset's records as figures, one per series, place, kind and quarter. */
@@ -175,25 +216,27 @@ type SourceRow = { dataset: string; source_updated_at: string | null };
 
 /** Brings the market figures up to date: each dataset whose catalogue entry
  *  has moved since it was last read -- or every one, with `force` -- read
- *  whole and written over what is kept. A dataset that fails is reported and
- *  left as it was; the others go on. Its record of being read is written
- *  last, so one cut short is read again next time. */
+ *  whole and written over what is kept, one dataset after another. A dataset
+ *  that fails is reported and left as it was; the others go on. Its record of
+ *  being read is written last, so one cut short -- by a failure, or by the
+ *  function's time running out -- is read again next time. */
 export async function refreshMarket(db: SupabaseClient, {
-  fetcher = fetch,
   force = false,
   now = new Date(),
-}: { fetcher?: typeof fetch; force?: boolean; now?: Date } = {}): Promise<Refresh> {
+  ...options
+}: SourceOptions & { force?: boolean; now?: Date } = {}): Promise<Refresh> {
   const { data, error } = await db.from("housing_sources").select("dataset, source_updated_at");
   if (error) throw error;
   const known = new Map(((data ?? []) as SourceRow[]).map((s) => [s.dataset, s.source_updated_at ? new Date(s.source_updated_at).toISOString() : null]));
   const out: Refresh = { checked: 0, refreshed: 0, points: 0, failures: [] };
+  const source = dataGovSg(options);
 
-  await Promise.all(DATASETS.map(async (dataset) => {
+  for (const dataset of DATASETS) {
     try {
-      const updated = await lastUpdated(dataset.id, fetcher);
+      const updated = await source.lastUpdated(dataset.id);
       out.checked++;
-      if (!force && known.get(dataset.id) === updated) return;
-      const figures = readDataset(dataset, await datasetRecords(dataset.id, fetcher));
+      if (!force && known.get(dataset.id) === updated) continue;
+      const figures = readDataset(dataset, await source.records(dataset.id));
       if (figures.length === 0) throw new SourceError("no figures in it");
       for (let i = 0; i < figures.length; i += WRITE_BATCH) {
         const { error: written } = await db.from("housing_market")
@@ -211,7 +254,7 @@ export async function refreshMarket(db: SupabaseClient, {
       const reason = err instanceof Error ? err.message : typeof err === "object" && err && "message" in err ? String(err.message) : String(err);
       out.failures.push({ dataset: dataset.id, reason });
     }
-  }));
+  }
   return out;
 }
 

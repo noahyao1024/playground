@@ -148,7 +148,8 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
   which is what gives a town's gross yield (a year's rent over the price). URA
   publishes no prices without a key, so a private home's own price and rent
   are typed into the comparison. The daily job asks data.gov.sg every day and
-  reads a dataset again only when its catalogue says it changed.
+  reads a dataset again only when its catalogue says it changed, paced to the
+  rate limit data.gov.sg sets without a key; `DATA_GOV_SG_API_KEY` raises it.
 - **Rent or buy** starts both sides with the same money. The buyer pays the
   down payment, stamp duties, fees and renovation — CPF first where CPF may —
   and the renter invests that cash instead. Each month both spend the dearer
