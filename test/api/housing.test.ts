@@ -4,6 +4,12 @@ import { startPostgrest, type Row, type StandIn } from "../helpers/postgrest";
 
 const session = vi.hoisted(() => ({ current: null as { user: { email: string } } | null }));
 vi.mock("@/lib/auth", () => ({ auth: async () => session.current }));
+// The routes refresh as in production, but without spacing their requests to
+// data.gov.sg's rate limit: the stand-in has none. The spacing has its own tests.
+vi.mock("@/lib/housing-data", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/housing-data")>();
+  return { ...real, refreshMarket: (db: Parameters<typeof real.refreshMarket>[0], options = {}) => real.refreshMarket(db, { spacing: 0, backoff: 0, ...options }) };
+});
 
 const { GET, POST } = await import("@/app/api/housing/route");
 const { GET: CRON } = await import("@/app/api/cron/housing/route");

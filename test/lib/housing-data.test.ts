@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createClient } from "@supabase/supabase-js";
 import { calls, startPostgrest, type StandIn } from "../helpers/postgrest";
 import {
-  DATASETS, amount, datasetRecords, hdbFlatType, hdbTown, lastUpdated, readDataset, readMarket, refreshMarket,
+  DATASETS, amount, dataGovSg, hdbFlatType, hdbTown, readDataset, readMarket, refreshMarket,
 } from "@/lib/housing-data";
 
 const [PRICES, RENTS, RPI, PPI_TYPE, PPI_REGION, RRI] = DATASETS.map((d) => d.id);
@@ -90,76 +90,132 @@ const RECORDS = "https://data.gov.sg/api/action/datastore_search";
 
 /** data.gov.sg, as far as the code uses it: each dataset's catalogue entry and
  *  its records a page at a time. `broken` answers a dataset's records with
- *  that status; every request is noted. */
-function dataGovSg(records = sample(), updated: Record<string, string> = {}) {
+ *  that status, `retryAfter` adding the header a 429 may carry; every request
+ *  is noted, with its headers and when it came. */
+function fakeDataGovSg(records = sample(), updated: Record<string, string> = {}) {
   const asked: string[] = [];
+  const requests: Array<{ url: string; headers: Headers; at: number }> = [];
   const broken: Record<string, number> = {};
-  const fetcher = (async (input: string | URL | Request) => {
+  const retryAfter: Record<string, string> = {};
+  const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input instanceof Request ? input.url : input));
     asked.push(url.toString());
+    requests.push({ url: url.toString(), headers: new Headers(init?.headers), at: performance.now() });
     if (url.href.startsWith(CATALOGUE)) {
       const id = url.pathname.split("/").at(-2)!;
       return new Response(JSON.stringify({ code: 0, data: { datasetId: id, lastUpdatedAt: updated[id] ?? "2026-07-24T11:43:21+08:00" } }));
     }
     if (url.href.startsWith(RECORDS)) {
       const id = url.searchParams.get("resource_id")!;
-      if (broken[id]) return new Response("{}", { status: broken[id] });
+      if (broken[id]) return new Response("{}", { status: broken[id], headers: retryAfter[id] ? { "retry-after": retryAfter[id] } : {} });
       const all = (records[id] ?? []).map((r, i) => ({ _id: i + 1, ...r }));
       const offset = Number(url.searchParams.get("offset")), limit = Number(url.searchParams.get("limit"));
       return new Response(JSON.stringify({ success: true, result: { records: all.slice(offset, offset + limit), total: all.length } }));
     }
     return new Response("not here", { status: 404 });
   }) as typeof fetch;
-  return { fetcher, asked, broken, records, updated };
+  return { fetcher, asked, requests, broken, retryAfter, records, updated };
 }
+
+/** The source over the fake, with no waiting unless a test asks for it. */
+const quick = { spacing: 0, backoff: 0, apiKey: null };
 
 describe("the source", () => {
   it("reads when a dataset last changed from its catalogue entry", async () => {
-    const source = dataGovSg(sample(), { [RPI]: "2026-07-24T11:36:15+08:00" });
-    expect(await lastUpdated(RPI, source.fetcher)).toBe("2026-07-24T03:36:15.000Z");
+    const fake = fakeDataGovSg(sample(), { [RPI]: "2026-07-24T11:36:15+08:00" });
+    expect(await dataGovSg({ ...quick, fetcher: fake.fetcher }).lastUpdated(RPI)).toBe("2026-07-24T03:36:15.000Z");
   });
 
-  it("reads every record, a page of 5,000 at a time, in the order they were published", async () => {
-    const many = Array.from({ length: 7_001 }, (_, i) => ({ quarter: "2026-Q2", index: String(i + 1) }));
-    const source = dataGovSg({ [RPI]: many });
-    const records = await datasetRecords(RPI, source.fetcher);
-    expect(records).toHaveLength(7_001);
-    expect(records.at(-1)).toMatchObject({ _id: 7_001, index: "7001" });
-    expect(source.asked.map((u) => new URL(u).searchParams.get("offset"))).toEqual(["0", "5000"]);
-    expect(new URL(source.asked[0]).searchParams.get("sort")).toBe("_id asc");
+  it("reads every record, 20,000 a request, in the order they were published", async () => {
+    const many = Array.from({ length: 20_001 }, (_, i) => ({ quarter: "2026-Q2", index: String(i + 1) }));
+    const fake = fakeDataGovSg({ [RPI]: many });
+    const records = await dataGovSg({ ...quick, fetcher: fake.fetcher }).records(RPI);
+    expect(records).toHaveLength(20_001);
+    expect(records.at(-1)).toMatchObject({ _id: 20_001, index: "20001" });
+    expect(fake.asked.map((u) => new URL(u).searchParams.get("offset"))).toEqual(["0", "20000"]);
+    expect(new URL(fake.asked[0]).searchParams.get("sort")).toBe("_id asc");
   });
 
-  it("says why when the source will not answer, asking again once after a 5xx or a 429", async () => {
-    const source = dataGovSg();
-    source.broken[RPI] = 404;
-    await expect(datasetRecords(RPI, source.fetcher)).rejects.toThrow("HTTP 404");
-    expect(source.asked).toHaveLength(1);
+  it("says why when the source will not answer, asking again twice after a 5xx, a 429 or no answer, and never after anything else", async () => {
+    const fake = fakeDataGovSg();
+    const source = dataGovSg({ ...quick, fetcher: fake.fetcher });
+    fake.broken[RPI] = 404;
+    await expect(source.records(RPI)).rejects.toThrow("HTTP 404");
+    expect(fake.asked).toHaveLength(1);
+    for (const status of [503, 429]) {
+      fake.asked.length = 0;
+      fake.broken[RPI] = status;
+      await expect(source.records(RPI)).rejects.toThrow(`HTTP ${status}`);
+      expect(fake.asked).toHaveLength(3);
+    }
+    // A later try that works is as good as a first.
+    let tries = 0;
+    const flaky = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (++tries < 3) throw new TypeError("fetch failed");
+      delete fake.broken[RPI];
+      return fake.fetcher(input, init);
+    }) as typeof fetch;
+    expect(await dataGovSg({ ...quick, fetcher: flaky }).records(RPI)).toHaveLength(2);
+    expect(tries).toBe(3);
+  });
 
+  it("waits out a 429 as long as its Retry-After says, and its ten-second window when it says nothing", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout"] });
     try {
-      for (const status of [503, 429]) {
-        source.asked.length = 0;
-        source.broken[RPI] = status;
-        const failing = datasetRecords(RPI, source.fetcher);
-        const settled = expect(failing).rejects.toThrow(`HTTP ${status}`);
-        await vi.advanceTimersByTimeAsync(2_000);
-        await settled;
-        expect(source.asked).toHaveLength(2);
-      }
-      // A second try that works is as good as a first.
-      source.asked.length = 0;
-      let first = true;
-      const flaky = (async (input: string | URL | Request) => {
-        if (first) { first = false; return new Response("{}", { status: 502 }); }
-        delete source.broken[RPI];
-        return source.fetcher(input);
-      }) as typeof fetch;
-      const reading = datasetRecords(RPI, flaky);
-      await vi.advanceTimersByTimeAsync(2_000);
+      const fake = fakeDataGovSg();
+      fake.broken[RPI] = 429;
+      fake.retryAfter[RPI] = "4";
+      const reading = dataGovSg({ fetcher: fake.fetcher, spacing: 0, apiKey: null }).records(RPI).catch((err) => err);
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(fake.asked).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fake.asked).toHaveLength(2);
+      delete fake.retryAfter[RPI];
+      delete fake.broken[RPI];
+      await vi.advanceTimersByTimeAsync(4_000);
       expect(await reading).toHaveLength(2);
+
+      fake.asked.length = 0;
+      fake.broken[RPI] = 429;
+      const again = dataGovSg({ fetcher: fake.fetcher, spacing: 0, apiKey: null }).records(RPI).catch((err) => err);
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(fake.asked).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fake.asked).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(String(await again)).toContain("HTTP 429");
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("spaces its requests for records, and only those, to the rate limit", async () => {
+    const fake = fakeDataGovSg();
+    const source = dataGovSg({ fetcher: fake.fetcher, spacing: 60, backoff: 0, apiKey: null });
+    for (const id of [RPI, PPI_TYPE, PPI_REGION]) await source.records(id);
+    await Promise.all([RPI, PPI_TYPE, PPI_REGION].map((id) => source.lastUpdated(id)));
+    const records = fake.requests.filter((r) => r.url.startsWith(RECORDS)).map((r) => r.at);
+    expect(records[1] - records[0]).toBeGreaterThanOrEqual(55);
+    expect(records[2] - records[1]).toBeGreaterThanOrEqual(55);
+    const catalogue = fake.requests.filter((r) => r.url.startsWith(CATALOGUE)).map((r) => r.at);
+    expect(catalogue[2] - catalogue[0]).toBeLessThan(55);
+  });
+
+  it("sends data.gov.sg's API key when there is one, DATA_GOV_SG_API_KEY by default", async () => {
+    const fake = fakeDataGovSg();
+    await dataGovSg({ ...quick, fetcher: fake.fetcher, apiKey: "key-from-options" }).records(RPI);
+    expect(fake.requests[0].headers.get("x-api-key")).toBe("key-from-options");
+    vi.stubEnv("DATA_GOV_SG_API_KEY", " key-from-env ");
+    try {
+      const source = dataGovSg({ fetcher: fake.fetcher, spacing: 0, backoff: 0 });
+      await source.lastUpdated(RPI);
+      await source.records(RPI);
+      expect(fake.requests.slice(1).map((r) => r.headers.get("x-api-key"))).toEqual(["key-from-env", "key-from-env"]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    await dataGovSg({ ...quick, fetcher: fake.fetcher }).records(RPI);
+    expect(fake.requests.at(-1)!.headers.has("x-api-key")).toBe(false);
   });
 });
 
@@ -172,8 +228,8 @@ describe("refreshMarket and readMarket", () => {
   afterEach(async () => { await db.close(); });
 
   it("reads every dataset the first time, keeping each figure and when each dataset was read", async () => {
-    const source = dataGovSg();
-    const r = await refreshMarket(client(), { fetcher: source.fetcher, now: NOW });
+    const source = fakeDataGovSg();
+    const r = await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW });
     expect(r).toEqual({ checked: 6, refreshed: 6, points: 13, failures: [] });
     expect(db.tables.housing_market).toHaveLength(13);
     expect(db.tables.housing_sources.map((s) => [s.dataset, s.points]).sort()).toEqual(
@@ -183,48 +239,56 @@ describe("refreshMarket and readMarket", () => {
   });
 
   it("reads nothing again while the catalogue says nothing changed -- every dataset, with force", async () => {
-    const source = dataGovSg();
-    await refreshMarket(client(), { fetcher: source.fetcher, now: NOW });
+    const source = fakeDataGovSg();
+    await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW });
     db.requests.length = 0;
     source.asked.length = 0;
-    expect(await refreshMarket(client(), { fetcher: source.fetcher, now: NOW })).toEqual({ checked: 6, refreshed: 0, points: 0, failures: [] });
+    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toEqual({ checked: 6, refreshed: 0, points: 0, failures: [] });
     expect(source.asked.every((u) => u.startsWith(CATALOGUE))).toBe(true);
     expect(calls(db, "housing_market")).toEqual([]);
 
-    expect(await refreshMarket(client(), { fetcher: source.fetcher, now: NOW, force: true })).toMatchObject({ refreshed: 6, points: 13 });
+    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW, force: true })).toMatchObject({ refreshed: 6, points: 13 });
   });
 
   it("reads a dataset again once it has changed, writing over what it said before", async () => {
-    const source = dataGovSg();
-    await refreshMarket(client(), { fetcher: source.fetcher, now: NOW });
+    const source = fakeDataGovSg();
+    await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW });
     source.records[RPI][1].index = "205.1";
     source.records[RPI].push({ quarter: "2026-Q3", index: "206" });
     source.updated[RPI] = "2026-10-24T11:00:00+08:00";
-    expect(await refreshMarket(client(), { fetcher: source.fetcher, now: NOW })).toEqual({ checked: 6, refreshed: 1, points: 3, failures: [] });
+    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toEqual({ checked: 6, refreshed: 1, points: 3, failures: [] });
     const rpi = db.tables.housing_market.filter((f) => f.series === "hdb_rpi").map((f) => [f.quarter, f.value]);
     expect(rpi).toEqual([["2026-01-01", 203.4], ["2026-04-01", 205.1], ["2026-07-01", 206]]);
     expect(db.tables.housing_sources.find((s) => s.dataset === RPI)).toMatchObject({ source_updated_at: "2026-10-24T03:00:00.000Z", points: 3 });
   });
 
   it("goes on past a dataset it cannot read, and reads it again next time, its record of being read left as it was", async () => {
-    const source = dataGovSg();
+    const source = fakeDataGovSg();
     source.broken[PRICES] = 404;
-    const r = await refreshMarket(client(), { fetcher: source.fetcher, now: NOW });
+    const r = await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW });
     expect(r).toEqual({ checked: 6, refreshed: 5, points: 10, failures: [{ dataset: PRICES, reason: "HTTP 404" }] });
     expect(db.tables.housing_sources.some((s) => s.dataset === PRICES)).toBe(false);
     delete source.broken[PRICES];
-    expect(await refreshMarket(client(), { fetcher: source.fetcher, now: NOW })).toEqual({ checked: 6, refreshed: 1, points: 3, failures: [] });
+    expect(await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW })).toEqual({ checked: 6, refreshed: 1, points: 3, failures: [] });
+  });
+
+  it("reads one dataset after another, its requests for records spaced to the rate limit -- never a burst of six", async () => {
+    const source = fakeDataGovSg();
+    await refreshMarket(client(), { fetcher: source.fetcher, now: NOW, spacing: 40, backoff: 0, apiKey: null });
+    const at = source.requests.filter((r) => r.url.startsWith(RECORDS)).map((r) => r.at);
+    expect(at).toHaveLength(6);
+    for (let i = 1; i < at.length; i++) expect(at[i] - at[i - 1], `request ${i}`).toBeGreaterThanOrEqual(35);
   });
 
   it("calls an answer with no figures in it a failure, rather than keep a dataset's place empty", async () => {
-    const source = dataGovSg({ ...sample(), [RPI]: [{ quarter: "2026-Q2", index: "-" }] });
-    const r = await refreshMarket(client(), { fetcher: source.fetcher, now: NOW });
+    const source = fakeDataGovSg({ ...sample(), [RPI]: [{ quarter: "2026-Q2", index: "-" }] });
+    const r = await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW });
     expect(r.failures).toEqual([{ dataset: RPI, reason: "no figures in it" }]);
   });
 
   it("hands the page each series from its first quarter on, a value a quarter, null where none was published", async () => {
-    const source = dataGovSg();
-    await refreshMarket(client(), { fetcher: source.fetcher, now: NOW });
+    const source = fakeDataGovSg();
+    await refreshMarket(client(), { ...quick, fetcher: source.fetcher, now: NOW });
     const market = await readMarket(client());
     expect(market.refreshed_at).toBe(NOW.toISOString());
     const rent = market.series.find((s) => s.series === "hdb_rent" && s.area === "BEDOK" && s.segment === "4-room")!;
