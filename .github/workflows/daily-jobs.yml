@@ -5,10 +5,11 @@ name: Daily jobs
 # fails. Vercel Cron on the Hobby plan neither retries nor tells anyone, and
 # keeps an hour of logs.
 #
-# The work itself happens on the site, in /api/cron/bill and /api/cron/daily,
-# next to the configuration it needs. scripts/daily-jobs.mjs calls them and
-# decides what counts as a failure; its tests say what that is. The site knows
-# this workflow by its GitHub OIDC token, so no secret is copied here for that.
+# The work itself happens on the site, in /api/cron/bill, /api/cron/daily,
+# /api/cron/stocks and /api/cron/housing, next to the configuration it needs.
+# scripts/daily-jobs.mjs calls them and decides what counts as a failure; its
+# tests say what that is. The site knows this workflow by its GitHub OIDC
+# token, so no secret is copied here for that.
 # The mail goes out from here, through the SMTP account GitHub holds.
 #
 # Vercel Cron still bills and keeps the database awake on its own (vercel.json),
@@ -45,7 +46,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
-      - name: Bill on the 1st to 3rd, check who owes
+      - name: Bill on the 1st to 3rd, check who owes, value stocks, refresh housing data
         id: jobs
         run: node scripts/daily-jobs.mjs ${{ inputs.test_mail && '--test-mail' || '' }}
       - name: Mail the owner
