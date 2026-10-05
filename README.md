@@ -171,6 +171,14 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
   3-month SORA plus the spread, reset every three months. An input left to the
   market follows its estimate as the figures move; typing a number makes it
   yours, and emptying the field hands it back.
+- **Developments you follow** — a private condo by the name URA gives it,
+  WATERTOWN say — are read from URA's Data Service with the owner's access key
+  (`URA_ACCESS_KEY`, on Vercel): every sale caveated in the last five years and
+  the last four quarters of rental contracts, read when followed and weekly
+  after. The page shows the middle (P50) and the average of the latest year's
+  prices, prices a square foot and rents, by size as URA bands its rental
+  contracts, the gross yield, and the price a square foot quarter by quarter;
+  a size's middle price and rent fill Rent or buy.
 - **Across 500 futures**: each replays the quarters since 2006 two years at a
   time from random places, every series from the same quarter, so prices,
   rents, costs, shares and SORA move together as they did — rents up while

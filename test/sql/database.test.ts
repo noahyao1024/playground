@@ -671,6 +671,42 @@ describe.skipIf(!SERVER)("database", () => {
       expect((await failure(c, `insert into housing_sources (dataset, points) values ('d_14f63e595975691e7c24a27ae4c07c79', -1)`)).code).toBe("23514");
     });
 
+    it("keeps the developments followed and their records private, checked, and gone with the development", async () => {
+      await c.query(`insert into housing_projects (name) values ('WATERTOWN')`);
+      await c.query(`insert into housing_project_sales (project, month, price, area_sqm, floor_range, sale_type, property_type) values ('WATERTOWN', '2026-08-01', 1550000, 98, '06-10', 'resale', 'Condominium')`);
+      await c.query(`insert into housing_project_rents (project, quarter, month, rent, sqft_low, sqft_high, bedrooms) values ('WATERTOWN', '2026-07-01', '2026-08-01', 4500, 1000, 1100, 3)`);
+      for (const role of ["anon", "authenticated"]) {
+        await c.query(`set local role ${role}`);
+        for (const sql of [
+          `select * from housing_projects`,
+          `insert into housing_projects (name) values ('X')`,
+          `select * from housing_project_sales`,
+          `delete from housing_project_sales`,
+          `select * from housing_project_rents`,
+          `update housing_project_rents set rent = 1`,
+        ]) {
+          expect((await failure(c, sql)).code, `${role}: ${sql}`).toBe("42501");
+        }
+        await c.query(`reset role`);
+      }
+      for (const sql of [
+        `insert into housing_projects (name) values ('Watertown')`,
+        `insert into housing_projects (name) values (' WATERTOWN')`,
+        `insert into housing_projects (name, district) values ('A', '9')`,
+        `insert into housing_projects (name, segment) values ('B', 'NORTH')`,
+        `insert into housing_project_sales (project, month, price, area_sqm) values ('WATERTOWN', '2026-08-02', 1, 1)`,
+        `insert into housing_project_sales (project, month, price, area_sqm) values ('WATERTOWN', '2026-08-01', 0, 1)`,
+        `insert into housing_project_sales (project, month, price, area_sqm, sale_type) values ('WATERTOWN', '2026-08-01', 1, 1, 'auction')`,
+        `insert into housing_project_rents (project, quarter, month, rent) values ('WATERTOWN', '2026-08-01', '2026-08-01', 1)`,
+        `insert into housing_project_rents (project, quarter, month, rent, bedrooms) values ('WATERTOWN', '2026-07-01', '2026-08-01', 1, 0)`,
+      ]) {
+        expect((await failure(c, sql)).code, sql).toBe("23514");
+      }
+      expect((await failure(c, `insert into housing_project_sales (project, month, price, area_sqm) values ('NOWHERE', '2026-08-01', 1, 1)`)).code).toBe("23503");
+      await c.query(`delete from housing_projects where name = 'WATERTOWN'`);
+      expect((await c.query(`select (select count(*) from housing_project_sales) + (select count(*) from housing_project_rents) as n`)).rows[0].n).toBe("0");
+    });
+
     it("keeps the market whole as one row, in a shape it names", async () => {
       await c.query(`insert into housing_snapshot (id, version, market) values ('market', 1, '{"series": [], "refreshed_at": null}')`);
       expect((await failure(c, `insert into housing_snapshot (id, version, market) values ('market', 1, '{}')`)).code).toBe("23505");

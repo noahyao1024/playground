@@ -174,6 +174,30 @@ export function judgeHousing(answer) {
   return { ok: false, text: `${text}; ${failed} could not be read${why}` };
 }
 
+/** The developments followed: read from URA a week after they were last, so
+ *  most days there is nothing to do. A state that read nothing is no failure
+ *  -- no key set yet, none followed, none due -- but a read that failed is. */
+export function judgeProjects(answer) {
+  const { status, body } = answer;
+  if (status === 401) return { ok: false, text: REFUSED };
+  if (status !== 200) return { ok: false, text: `failed: ${failure(answer)}` };
+  if (typeof body.state !== "string" || typeof body.followed !== "number") {
+    return { ok: false, text: `unexpected answer: HTTP ${status}, no state` };
+  }
+  const text = {
+    read: `${body.followed} followed, ${body.read} read (${Number(body.sales) || 0} sale(s), ${Number(body.rents) || 0} rental contract(s))`,
+    "not due": `${body.followed} followed, none due`,
+    "no key": `${body.followed} followed, but URA_ACCESS_KEY is not set on Vercel`,
+    "none followed": "none followed",
+    unavailable: "no tables for them yet",
+  }[body.state] ?? `state ${quote(body.state)}`;
+  const failed = Number(body.failed) || 0;
+  if (!failed) return { ok: true, text };
+  const first = Array.isArray(body.failures) && body.failures[0];
+  const why = first ? ` -- ${quote(`${first.source}: ${first.reason}`)}` : "";
+  return { ok: false, text: `${text}; ${failed} could not be read${why}` };
+}
+
 /** The 1st to 3rd of the month in Singapore: the days vercel.json bills on. */
 export function isBillingDay(now) {
   const day = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Singapore", day: "numeric" }).format(now));
@@ -196,6 +220,7 @@ async function main() {
   results.push(["Unpaid alert", daily]);
   results.push(["Stock prices", judgeStocks(await call(`${SITE}/api/cron/stocks`))]);
   results.push(["Housing data", judgeHousing(await call(`${SITE}/api/cron/housing`))]);
+  results.push(["Developments", judgeProjects(await call(`${SITE}/api/cron/projects`))]);
 
   // The mail names people, so it goes to a file for the next step, not the log.
   if (daily.mail) {

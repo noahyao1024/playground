@@ -12,7 +12,8 @@ import {
   FLAT_TYPE_LABELS, PRIVATE_SEGMENTS, clampInputs, findSeries, inputsFromMarket, latestPoint, parseInputs, quarterFromNumber, quarterLabel,
   quarterNumber, readInputs, townLabel,
 } from "@/lib/housing";
-import { housingAction, loadHousing, messageOf, type HousingData, type Refresh, type Scenario } from "./api";
+import { housingAction, loadHousing, messageOf, type HousingData, type ProjectsRefresh, type Refresh, type Scenario } from "./api";
+import type { Project } from "@/lib/housing-projects";
 import { MarketView, type MarketChoice } from "./market-view";
 import { NEW_DRAFT, RentOrBuy, type Draft } from "./rent-or-buy";
 
@@ -49,6 +50,9 @@ function storedDraft(): Draft {
 
 /** What the market's figures filled in, said in a sentence. */
 function filledFrom(data: HousingData, choice: MarketChoice): string {
+  if (choice.kind === "project") {
+    return `Filled in from ${choice.label}: the middle price and rent of the latest year. Price and rent growth follow URA's indices for its market.`;
+  }
   if (choice.kind === "private") {
     const market = PRIVATE_SEGMENTS.find((s) => s.area === choice.area && s.segment === choice.segment);
     return `Price and rent growth follow URA's indices for ${market?.noun ?? "private homes"}. Put in the home's own price and rent.`;
@@ -110,7 +114,11 @@ export function HousingApp() {
 
   function compare(choice: MarketChoice) {
     if (!data) return;
-    const filled = inputsFromMarket(data.market, choice);
+    // A development's size brings its own price and rent; the annual value is
+    // taken as a year's rent, which is how IRAS sets it.
+    const filled = choice.kind === "project"
+      ? { kind: "private" as const, market: choice.market, loan_type: "bank" as const, price: choice.price, rent: choice.rent, annual_value: choice.rent * 12 }
+      : inputsFromMarket(data.market, choice);
     let inputs;
     try {
       // The growth of prices and rents is the market's: left to its estimates.
@@ -128,6 +136,29 @@ export function HousingApp() {
     setTab("compare");
     toast.success(filledFrom(data, choice));
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  /** Follows a development: URA is read for it at once, if its key is set. */
+  async function follow(name: string) {
+    try {
+      const { project, refresh } = await housingAction<{ project: Project | null; refresh: ProjectsRefresh }>("followProject", { name });
+      if (project) setData((d) => (d ? { ...d, projects: [...d.projects.filter((p) => p.name !== project.name), project] } : d));
+      if (refresh.failures.length) toast.error(`Following ${name}, but URA could not be read: ${refresh.failures[0].reason}`);
+      else if (refresh.state === "no key") toast.message(`Following ${name}: URA is read once URA_ACCESS_KEY is set on Vercel`);
+      else if (project?.found === false) toast.error(`URA has no records under ${name}: check how URA spells it`);
+      else toast.success(`Following ${name}: ${refresh.sales} sale(s) and ${refresh.rents} rental contract(s) read`);
+    } catch (err) {
+      toast.error(messageOf(err));
+    }
+  }
+
+  async function unfollow(name: string) {
+    try {
+      await housingAction("unfollowProject", { name });
+      setData((d) => (d ? { ...d, projects: d.projects.filter((p) => p.name !== name) } : d));
+    } catch (err) {
+      toast.error(messageOf(err));
+    }
   }
 
   if (!data) {
@@ -189,7 +220,11 @@ export function HousingApp() {
             <Button className="mt-4" disabled={refreshing} onClick={() => void refresh()}><RotateCw /> Read them now</Button>
           </section>
         ) : (
-          <MarketView market={data.market} onCompare={compare} />
+          <MarketView
+            market={data.market}
+            following={{ projects: data.projects ?? [], ura: data.ura ?? false, onFollow: follow, onUnfollow: unfollow }}
+            onCompare={compare}
+          />
         )
       ) : (
         <RentOrBuy

@@ -11,7 +11,9 @@ import {
   quarterFromNumber, quarterLabel, quarterNumber, quarterYear, townLabel, townTable,
   type MarketData, type MarketSeries, type TownRow,
 } from "@/lib/housing";
+import type { Project } from "@/lib/housing-projects";
 import { cn } from "@/lib/utils";
+import { Developments, type ProjectChoice } from "./developments";
 import { LinesChart, yearTicks, type LineRow, type LineSeries } from "./line-chart";
 
 /** Where the market view was left, kept per browser. */
@@ -43,11 +45,20 @@ const indexText = (n: number) => n.toFixed(1);
 /** An axis tick, as round as the tick is. */
 const tickText = (n: number) => String(Number(n.toFixed(1)));
 
-export type MarketChoice = { kind: "hdb"; town: string; flatType: string } | { kind: "private"; area: string; segment: string };
+export type MarketChoice = { kind: "hdb"; town: string; flatType: string } | { kind: "private"; area: string; segment: string } | ProjectChoice;
+
+/** The developments followed, and what can be done with them. */
+export type Following = {
+  projects: Project[];
+  /** Whether URA's key is set on the site. */
+  ura: boolean;
+  onFollow: (name: string) => Promise<void>;
+  onUnfollow: (name: string) => Promise<void>;
+};
 
 /** The market, from HDB's medians and URA's indices: how prices and rents have
  *  moved, against each other. */
-export function MarketView({ market, onCompare }: { market: MarketData; onCompare: (choice: MarketChoice) => void }) {
+export function MarketView({ market, following, onCompare }: { market: MarketData; following: Following; onCompare: (choice: MarketChoice) => void }) {
   const [state, setState] = useState<Saved>(stored);
   const update = (next: Partial<Saved>) => setState((s) => {
     const merged = { ...s, ...next };
@@ -63,7 +74,7 @@ export function MarketView({ market, onCompare }: { market: MarketData; onCompar
       </div>
       {state.kind === "hdb"
         ? <HdbMarket market={market} state={state} update={update} onCompare={onCompare} />
-        : <PrivateMarket market={market} state={state} update={update} onCompare={onCompare} />}
+        : <PrivateMarket market={market} state={state} update={update} following={following} onCompare={onCompare} />}
     </div>
   );
 }
@@ -248,10 +259,11 @@ function TownsCard({ market, flatType, town, onPick }: { market: MarketData; fla
   );
 }
 
-function PrivateMarket({ market, state, update, onCompare }: {
+function PrivateMarket({ market, state, update, following, onCompare }: {
   market: MarketData;
   state: Saved;
   update: (next: Partial<Saved>) => void;
+  following: Following;
   onCompare: (choice: MarketChoice) => void;
 }) {
   const segment = PRIVATE_SEGMENTS.find((s) => s.key === state.segment) ?? PRIVATE_SEGMENTS[2];
@@ -267,6 +279,14 @@ function PrivateMarket({ market, state, update, onCompare }: {
 
   return (
     <>
+      <Developments
+        projects={following.projects}
+        ura={following.ura}
+        onFollow={following.onFollow}
+        onUnfollow={following.onUnfollow}
+        onCompare={onCompare}
+      />
+
       <div className="flex flex-wrap items-center gap-2">
         <Select value={segment.key} onValueChange={(v) => update({ segment: v as string })}>
           <SelectTrigger aria-label="Kind of home" className="h-9 min-w-56">
@@ -303,7 +323,7 @@ function PrivateMarket({ market, state, update, onCompare }: {
           </Card>
 
           <p className="text-xs text-muted-foreground">
-            URA publishes indices for private homes, not prices. For a particular development, put its price and rent into Rent or buy.
+            URA&rsquo;s indices move with a kind of home, not a particular development: follow one above for its own sales and rents.
             {pointsOf(rri).length > 0 && ` Rental figures start in ${quarterLabel(pointsOf(rri)[0].quarter)}.`}
           </p>
         </>
