@@ -158,6 +158,14 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
   home as though sold: its grown price less the loan, the agent and legal fees,
   and seller's stamp duty within four years. The year buying pulls ahead is the
   first whose end finds it ahead.
+- **A month of owning, taken apart**: what goes out (the instalment and the
+  running costs) against what is a cost. Principal is not one — it stays yours,
+  in the home. Interest, S&CC, property tax and repairs are; so are the stamp
+  duties, fees, renovation and selling costs, spread over the years looked at,
+  and what the money in the home would have earned invested; the home's rise
+  in value counts against them. With nothing earning, those months add up to
+  the gap in net worth exactly; with returns, the net worth compounds them and
+  is the comparison to go by.
 - **Tax rules** are IRAS's as published in October 2026: BSD up to 6%; ABSD by
   residency and which home it is (citizen 0/20/30%, PR 5/30/35%, foreigner
   60%); SSD 16/12/8/4% within four years for homes bought from 4 Jul 2025;
