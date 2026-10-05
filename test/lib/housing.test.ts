@@ -176,7 +176,7 @@ describe("parseInputs", () => {
       null, [], "inputs",
       { residency: "tourist" }, { kind: "hotel" }, { loan_type: "friend" },
       { price: "600000" }, { price: Number.NaN }, { price: 5_000 }, { loan_share: 95 }, { loan_rate: -1 },
-      { years: 0 }, { years: 40 }, { years: 10.5 }, { nth: 1.5 }, { nth: 4 }, { growth: 50 },
+      { years: 0 }, { years: 100 }, { years: 10.5 }, { nth: 1.5 }, { nth: 4 }, { growth: 50 },
       { market: "Punggol" }, { market: "OCR:landed" }, { auto: "growth" }, { auto: ["growth", "price"] }, { auto: [1] },
     ]) {
       expect(() => parseInputs(bad), JSON.stringify(bad)).toThrow(InputError);

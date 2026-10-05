@@ -1,3 +1,4 @@
+import { cpfHousingLimit, leaseFactor, parseGuidance, remainingLease, salaryOa, type HousingGuidance } from "@/lib/housing-guidance";
 import { addMonths } from "@/lib/dates";
 import { loanSchedule, type LoanRateChangeTerms } from "@/lib/finance";
 
@@ -307,6 +308,7 @@ export type ScenarioInputs = {
   years: number;
   /** The inputs left to the market's live estimates. */
   auto: Estimated[];
+  guidance?: HousingGuidance;
 };
 
 export const DEFAULT_INPUTS: ScenarioInputs = {
@@ -342,7 +344,7 @@ export const DEFAULT_INPUTS: ScenarioInputs = {
 };
 
 /** What each number may be, and whether it is whole. */
-export const INPUT_LIMITS: Record<Exclude<keyof ScenarioInputs, "residency" | "kind" | "loan_type" | "market" | "auto">, [number, number, boolean?]> = {
+export const INPUT_LIMITS: Record<Exclude<keyof ScenarioInputs, "residency" | "kind" | "loan_type" | "market" | "auto" | "guidance">, [number, number, boolean?]> = {
   nth: [1, 3, true],
   price: [10_000, 100_000_000],
   loan_share: [0, 90],
@@ -365,7 +367,7 @@ export const INPUT_LIMITS: Record<Exclude<keyof ScenarioInputs, "residency" | "k
   cpf_balance: [0, 10_000_000],
   cpf_monthly: [0, 100_000],
   cpf_rate: [0, 10],
-  years: [1, 35, true],
+  years: [1, 99, true],
 };
 
 export class InputError extends Error {}
@@ -400,7 +402,23 @@ export function parseInputs(raw: unknown): ScenarioInputs {
     if (whole && !Number.isInteger(v)) throw new InputError(`${key} must be a whole number`);
     (out as Record<string, unknown>)[key] = v;
   }
+  if (given.guidance !== undefined) {
+    try { out.guidance = parseGuidance(given.guidance); }
+    catch (err) { throw new InputError(err instanceof Error ? err.message : "Invalid guidance"); }
+  }
   return out;
+}
+
+/** Required facts are separate from numerical defaults used while typing. */
+export function comparisonReady(i: ScenarioInputs): boolean {
+  try { parseInputs(i); } catch { return false; }
+  const g = i.guidance;
+  if (!g) return true; // already saved legacy scenarios
+  if (!g.confirmed || (i.years > 35 && g.tenure === "unknown")) return false;
+  if (g.tenure === "leasehold" && (g.lease_start === null || (remainingLease(g) ?? 0) <= 0)) return false;
+  if (g.build_year !== null && g.build_year > Number(g.as_of.slice(0,4))) return false;
+  if (g.cpf_mode === "salary" && (!g.cpf_eligible || i.residency === "foreigner" || g.salary === null || g.age === null || g.retirement_age < g.age)) return false;
+  return true;
 }
 
 /** Inputs as kept somewhere they may have gone stale -- a scenario saved under
@@ -412,7 +430,7 @@ export function readInputs(raw: unknown): ScenarioInputs {
   } catch {
     const given = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
     const out: ScenarioInputs = { ...DEFAULT_INPUTS };
-    for (const key of Object.keys(DEFAULT_INPUTS) as Array<keyof ScenarioInputs>) {
+    for (const key of [...Object.keys(DEFAULT_INPUTS), "guidance"] as Array<keyof ScenarioInputs>) {
       try {
         (out as Record<string, unknown>)[key] = parseInputs({ [key]: given[key] })[key];
       } catch { /* this one stays at its default */ }
@@ -593,7 +611,8 @@ export function bankRateChanges(i: ScenarioInputs, sora: number[], loanMonths: n
  *  `economy` is how prices, rents, costs, returns and SORA move: steady at the
  *  inputs' rates unless a path is given, as the growth model gives one. */
 export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection {
-  const i = inputs;
+  const i = inputs.guidance?.annual_value_auto
+    ? { ...inputs, annual_value: Math.min(10_000_000, inputs.rent * 12) } : inputs;
   const e = economy ?? steadyEconomy(i);
   const loan = round(i.price * (i.loan_share / 100));
   const downPayment = round(i.price - loan);
@@ -604,7 +623,9 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
   // in cash, and BSD.
   const cashDown = i.loan_type === "bank" && loan > 0 ? Math.min(downPayment, round(i.price * 0.05)) : 0;
   let cpfBuy = i.cpf_balance;
-  const fromCpf = Math.min(cpfBuy, downPayment - cashDown + bsd);
+  const cpfLimit = i.guidance ? cpfHousingLimit(i.guidance, i.price) : Infinity;
+  const fromCpf = Math.min(cpfBuy, downPayment - cashDown + bsd, cpfLimit);
+  let cpfPrincipalUsed = fromCpf;
   cpfBuy -= fromCpf;
   const upfrontTotal = downPayment + bsd + absd + i.buy_costs + i.renovation;
   const fromCash = round(upfrontTotal - fromCpf);
@@ -626,7 +647,7 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
   const years: ProjectionYear[] = [];
 
   const yearEnd = (year: number, ownMonthly: number, rentMonthly: number) => {
-    const value = i.price * e.price[year * 12];
+    const value = i.price * e.price[year * 12] * leaseFactor(i.guidance, year * 12);
     const saleCosts = value * (i.sell_costs / 100) + sellerStampDuty(value, year);
     const rateThen = year === 0 ? schedule[0]?.rate : balance > 0 ? schedule[year * 12 - 1]?.rate : undefined;
     years.push({
@@ -650,7 +671,7 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
   // Owning taken apart. The one-off costs are spread over every month looked
   // at, selling's at the end included; the money in the home is what was paid
   // on buying and the principal since, kept apart by where it came from.
-  const valueAt = (month: number) => i.price * e.price[month];
+  const valueAt = (month: number) => i.price * e.price[month] * leaseFactor(i.guidance, month);
   const endValue = valueAt(months);
   const oneOff = (bsd + absd + i.buy_costs + i.renovation + endValue * (i.sell_costs / 100) + sellerStampDuty(endValue, i.years)) / months;
   let inHomeCash = fromCash, inHomeCpf = fromCpf;
@@ -666,9 +687,10 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
     // The lease, the annual value and the running costs are set for the year
     // at its start, at the market then.
     const renewal = year * 12;
-    const tax = ownerOccupierTax(i.annual_value * e.rent[renewal]) / 12;
+    const expired = leaseFactor(i.guidance, m - 1) === 0;
+    const tax = expired ? 0 : ownerOccupierTax(i.annual_value * e.rent[renewal]) / 12;
     const rent = i.rent * e.rent[renewal];
-    const running = (i.maintenance + i.upkeep / 12) * e.costs[renewal];
+    const running = expired ? 0 : (i.maintenance + i.upkeep / 12) * e.costs[renewal];
     const grow = e.invest[m];
     // What the money already in the home would have earned this month.
     sum.opportunity += inHomeCash * grow + inHomeCpf * cpfGrow;
@@ -676,21 +698,23 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
     // The month's growth on what each holds, then the month's money.
     cashBuy *= 1 + grow;
     cashRent *= 1 + grow;
-    cpfBuy = cpfBuy * (1 + cpfGrow) + i.cpf_monthly;
-    cpfRent = cpfRent * (1 + cpfGrow) + i.cpf_monthly;
+    const contribution = i.guidance?.cpf_mode === "none" ? 0 : i.guidance?.cpf_mode === "salary" ? salaryOa(i.guidance, m - 1) : i.cpf_monthly;
+    cpfBuy = cpfBuy * (1 + cpfGrow) + contribution;
+    cpfRent = cpfRent * (1 + cpfGrow) + contribution;
     cpfUsed *= 1 + cpfGrow;
 
-    const byCpf = Math.min(cpfBuy, instalment);
+    const byCpf = expired ? 0 : Math.min(cpfBuy, instalment, Math.max(0, cpfLimit - cpfPrincipalUsed));
+    cpfPrincipalUsed += byCpf;
     cpfBuy -= byCpf;
     cpfUsed += byCpf;
-    ownMonthly = instalment + running + tax;
+    ownMonthly = instalment + running + tax + (expired ? rent + i.rent_costs / 12 : 0);
     rentMonthly = rent + i.rent_costs / 12;
     const ownCash = ownMonthly - byCpf;
     const budget = Math.max(ownCash, rentMonthly);
     cashBuy += budget - ownCash;
     cashRent += budget - rentMonthly;
 
-    ownSpent += (period?.interest ?? 0) + running + tax;
+    ownSpent += (period?.interest ?? 0) + running + tax + (expired ? rent + i.rent_costs / 12 : 0);
     rentSpent += rentMonthly;
     if (period) balance = period.balance;
 
@@ -703,7 +727,7 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
     sum.paid += ownMonthly;
     sum.principal += principal;
     sum.interest += period?.interest ?? 0;
-    sum.running += running + tax;
+    sum.running += running + tax + (expired ? rent + i.rent_costs / 12 : 0);
     sum.appreciation += valueAt(m) - valueAt(m - 1);
     sum.rent += rentMonthly;
 
@@ -750,6 +774,10 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
 /** What the figures assume that the rules may not allow: said, never refused. */
 export function notesOn(i: ScenarioInputs): string[] {
   const notes: string[] = [];
+  if (i.guidance?.tenure === "leasehold") notes.push("地契按起始年份估算，价值采用 3% 折现的居住权衰减假设；到期价值为零，随后计入替代租金，不假设续期或集体出售。");
+  if (i.years > 35) notes.push("超过 35 年的结果仅用于探索假设；历史样本不足以支持远期胜率预测。");
+  if (i.guidance?.cpf_mode === "salary") notes.push("CPF 工资估算采用 2026 及已公布的 2027 年规则，之后沿用 2027 规则；月薪不变、每年增长一岁并在设定年龄停缴，不含奖金或退休账户溢出。");
+  if (i.guidance && i.guidance.cpf_mode !== "none" && cpfHousingLimit(i.guidance, i.price) === 0) notes.push("CPF 买房额度未核实或剩余地契不足：暂按现金付款。请用 CPF 官方计算器确认额度后填写。");
   if (i.kind === "hdb" && i.residency === "foreigner") notes.push("Foreigners cannot buy HDB flats; the figures go ahead as though they could.");
   if (i.kind === "hdb" && i.residency === "pr") notes.push("A PR household buys HDB flats on the resale market only, and only after three years as PRs.");
   if (i.kind === "hdb" && i.years < 5) notes.push("An HDB flat cannot be sold within its five-year minimum occupation period.");

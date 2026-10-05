@@ -41,7 +41,10 @@ function storedDraft(): Draft {
     return {
       id: typeof saved.id === "string" ? saved.id : null,
       name: typeof saved.name === "string" ? saved.name.slice(0, 80) : "",
-      inputs: readInputs(saved.inputs),
+      inputs: { ...readInputs(saved.inputs),
+        ...(saved.inputs?.price === null ? { price: NaN } : {}),
+        ...(saved.inputs?.rent === null ? { rent: NaN } : {}),
+      },
     };
   } catch {
     return NEW_DRAFT;
@@ -115,7 +118,7 @@ export function HousingApp() {
   function compare(choice: MarketChoice) {
     if (!data) return;
     // A development's size brings its own price and rent; the annual value is
-    // taken as a year's rent, which is how IRAS sets it.
+    // approximated as a year's rent; the owner must verify the actual IRAS AV.
     const filled = choice.kind === "project"
       ? { kind: "private" as const, market: choice.market, loan_type: "bank" as const, price: choice.price, rent: choice.rent, annual_value: choice.rent * 12 }
       : inputsFromMarket(data.market, choice);
@@ -127,6 +130,7 @@ export function HousingApp() {
         ...filled,
         ...(filled.kind === "private" && draft.inputs.loan_type === "hdb" ? { loan_type: "bank" } : {}),
         auto: [...draft.inputs.auto, "growth", "rent_growth"],
+        ...(draft.inputs.guidance ? { guidance: { ...draft.inputs.guidance, confirmed: false, tenure: "unknown", lease_start: null, build_year: null } } : {}),
       });
     } catch (err) {
       toast.error(`The market's figures could not be used: ${messageOf(err)}`);

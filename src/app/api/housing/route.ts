@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { financeDatabase, financeJson as json, isFinanceRequest, isUuid, reason } from "@/lib/finance-server";
-import { InputError, parseInputs, readInputs, type ScenarioInputs } from "@/lib/housing";
+import { InputError, comparisonReady, parseInputs, readInputs, type ScenarioInputs } from "@/lib/housing";
 import { marketOf, refreshMarket } from "@/lib/housing-data";
 import { MAX_PROJECTS, projectName } from "@/lib/housing-projects";
 import { readProjects, refreshProjects } from "@/lib/ura";
@@ -118,6 +118,7 @@ async function saveScenario(db: SupabaseClient, body: Record<string, unknown>): 
   const name = body.name.trim();
   if (name.length > 80) throw new Invalid("A name is at most 80 characters");
   const inputs = parseInputs(body.inputs);
+  if (inputs.guidance && !comparisonReady(inputs)) throw new Invalid("Confirm the required buyer, lease and CPF details before saving");
   if (body.id === undefined || body.id === null) {
     const { data, error } = await db.from("housing_scenarios").insert({ name, inputs }).select().single();
     if (error) throw error;

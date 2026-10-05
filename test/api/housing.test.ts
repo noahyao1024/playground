@@ -136,13 +136,23 @@ describe("reading", () => {
   });
 
   it("opens a scenario kept under limits since narrowed with what still passes, the rest at their defaults", async () => {
-    db.tables.housing_scenarios[0].inputs = { price: 700_000, years: 99, residency: "citizen" };
+    db.tables.housing_scenarios[0].inputs = { price: 700_000, years: 100, residency: "citizen" };
     const body = await (await GET(get())).json();
     expect(body.scenarios[1].inputs).toEqual({ ...DEFAULT_INPUTS, price: 700_000, residency: "citizen" });
   });
 });
 
 describe("saving and deleting a scenario", () => {
+  it("saves the guided lease/CPF metadata in JSON without requiring a migration", async () => {
+    const guidance = { as_of:"2026-10-05", confirmed:true, tenure:"leasehold", lease_start:2000, lease_term:99, cpf_mode:"none" };
+    const res = await post({ action:"saveScenario", name:"Guided example", inputs:{ years:99, guidance } });
+    expect(res.status).toBe(200);
+    expect(res.body.scenario.inputs.guidance).toMatchObject(guidance);
+    expect(res.body.scenario.inputs.guidance.cpf_rules).toBe("2026-2027-v1");
+    const loaded = await (await GET(get())).json();
+    expect(loaded.scenarios.find((s: Row)=>s.id === res.body.scenario.id).inputs.guidance).toEqual(res.body.scenario.inputs.guidance);
+    expect((await post({ action:"saveScenario", name:"Unconfirmed", inputs:{ guidance:{ ...guidance, confirmed:false } } })).status).toBe(400);
+  });
   it("keeps a new one under its name, with every input, defaults and all", async () => {
     const { status, body } = await post({ action: "saveScenario", name: "  Condo in Bishan ", inputs: { kind: "private", loan_type: "bank", price: 1_500_000 } });
     expect(status).toBe(200);
@@ -176,7 +186,7 @@ describe("saving and deleting a scenario", () => {
       [{ name: "x".repeat(81), inputs: {} }, /at most 80/],
       [{ name: "x", inputs: { price: "a lot" } }, /price must be a number/],
       [{ name: "x", inputs: { residency: "tourist" } }, /residency must be one of citizen, pr, foreigner/],
-      [{ name: "x", inputs: { years: 50 } }, /years must be between 1 and 35/],
+      [{ name: "x", inputs: { years: 100 } }, /years must be between 1 and 99/],
       [{ name: "x", inputs: "everything" }, /inputs must be an object/],
       [{ name: "x", inputs: { auto: ["price"] } }, /auto must list some of loan_rate, growth, rent_growth, cost_growth, invest_return/],
       [{ name: "x", inputs: { market: "Punggol" } }, /market must be one of ALL:all, ALL:landed/],
