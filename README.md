@@ -17,7 +17,9 @@ Personal tools, deployed on Vercel.
   and rents from the government's open data — HDB's medians by town and flat
   type, URA's indices for private homes — as trends side by side, and renting
   against buying a particular home, year by year: stamp duties, the loan, CPF,
-  what the money not spent would have earned.
+  what the money not spent would have earned. The years ahead are read off the
+  market's own history, live, and played out over 500 futures drawn from it,
+  with SORA, rents and prices moving together as they have.
 
 ## Stack
 
@@ -150,6 +152,30 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
   are typed into the comparison. The daily job asks data.gov.sg every day and
   reads a dataset again only when its catalogue says it changed, paced to the
   rate limit data.gov.sg sets without a key; `DATA_GOV_SG_API_KEY` raises it.
+  For the years ahead it also reads SingStat's 3-month compounded SORA,
+  government securities' yields (1, 2, 5 and 10 years) and consumer price index
+  from data.gov.sg, and the S&P 500 with dividends reinvested, in Singapore
+  dollars, from Yahoo Finance's chart endpoint (`^SP500TR` and `SGD=X`).
+- **The years ahead** are estimated from that history each time it is read,
+  and each estimate says why. The home's price growth and the investments' are
+  taken at the lower quartile of their ten-year spans — three spans in four did
+  better — conservative, and the same rule for both so neither side is
+  flattered; rents and consumer prices at the middle span. SORA is expected to
+  follow what government bond yields say, each yield less the premium it has
+  paid over SORA on average since 2005. A bank loan's fixed rate is SORA's
+  expected average over the lock-in plus the spread; after it, the loan pays
+  3-month SORA plus the spread, reset every three months. An input left to the
+  market follows its estimate as the figures move; typing a number makes it
+  yours, and emptying the field hands it back.
+- **Across 500 futures**: each replays the quarters since 2006 two years at a
+  time from random places, every series from the same quarter, so prices,
+  rents, costs, shares and SORA move together as they did — rents up while
+  rates rose — but around the comparison's own rates. SORA strays from its
+  expected path by each quarter's surprise in its history, the departures
+  fading as SORA's have, never below zero. The page shows the spread of the gap
+  between buying and renting, the chance buying is ahead each year, when it
+  first pulls ahead, and what happens if SORA runs two points higher, rents
+  stand still for three years, or prices fall 15% in the second year.
 - **Rent or buy** starts both sides with the same money. The buyer pays the
   down payment, stamp duties, fees and renovation — CPF first where CPF may —
   and the renter invests that cash instead. Each month both spend the dearer

@@ -3,8 +3,8 @@ import { loanSchedule } from "@/lib/finance";
 import {
   DEFAULT_INPUTS, InputError, additionalBuyerStampDuty, buyerStampDuty, changeOver, clampInputs, grossYield, hdbTowns, inputsFromMarket, latestPoint,
   nextQuarter, notesOn, ownerOccupierTax, paired, parseInputs, pointsOf, quarterLabel, quarterNumber, quarterOfDay, quarterStart, quarterYear, readInputs,
-  rentOrBuy, sellerStampDuty, townLabel, townTable, valueIn, withinLimits, yearlyGrowth,
-  type MarketData, type MarketSeries, type ScenarioInputs,
+  bankRateChanges, rentOrBuy, sellerStampDuty, steadyEconomy, townLabel, townTable, valueIn, withinLimits, yearlyGrowth,
+  type Economy, type MarketData, type MarketSeries, type ScenarioInputs,
 } from "@/lib/housing";
 
 describe("quarters", () => {
@@ -113,8 +113,10 @@ describe("the market's figures", () => {
     });
     expect(inputsFromMarket(market, { kind: "private", area: "OCR", segment: "non-landed" })).toEqual({
       // 100 to 300 and 100 to 180 over ten years.
-      kind: "private", loan_type: "bank", growth: 11.6, rent_growth: 6.1,
+      kind: "private", market: "OCR:non-landed", loan_type: "bank", growth: 11.6, rent_growth: 6.1,
     });
+    // A market URA's indices do not divide homes into is no market.
+    expect(inputsFromMarket(market, { kind: "private", area: "OCR", segment: "landed" })).toEqual({ kind: "private", loan_type: "bank" });
   });
 
   it("writes a town as people do", () => {
@@ -175,9 +177,18 @@ describe("parseInputs", () => {
       { residency: "tourist" }, { kind: "hotel" }, { loan_type: "friend" },
       { price: "600000" }, { price: Number.NaN }, { price: 5_000 }, { loan_share: 95 }, { loan_rate: -1 },
       { years: 0 }, { years: 40 }, { years: 10.5 }, { nth: 1.5 }, { nth: 4 }, { growth: 50 },
+      { market: "Punggol" }, { market: "OCR:landed" }, { auto: "growth" }, { auto: ["growth", "price"] }, { auto: [1] },
     ]) {
       expect(() => parseInputs(bad), JSON.stringify(bad)).toThrow(InputError);
     }
+  });
+
+  it("takes a private home's market, and the inputs left to the market's estimates, in their own order and once each", () => {
+    expect(parseInputs({ kind: "private", market: "OCR:non-landed" })).toEqual({ ...DEFAULT_INPUTS, kind: "private", market: "OCR:non-landed" });
+    expect(parseInputs({ auto: ["invest_return", "growth", "growth"] }).auto).toEqual(["growth", "invest_return"]);
+    expect(parseInputs({ auto: [] }).auto).toEqual([]);
+    // A scenario kept before the estimates keeps its own numbers.
+    expect(DEFAULT_INPUTS.auto).toEqual([]);
   });
 });
 
@@ -188,6 +199,7 @@ describe("readInputs", () => {
     expect(readInputs(half)).toEqual({ ...DEFAULT_INPUTS, price: 900_000, residency: "citizen" });
     for (const nothing of [null, "x", [], 42]) expect(readInputs(nothing)).toEqual(DEFAULT_INPUTS);
     expect(readInputs({ ...DEFAULT_INPUTS, rent: 4_000 })).toEqual({ ...DEFAULT_INPUTS, rent: 4_000 });
+    expect(readInputs({ auto: ["growth", "nonsense"], market: "RCR:non-landed", price: 1 })).toEqual({ ...DEFAULT_INPUTS, market: "RCR:non-landed" });
   });
 });
 
@@ -228,7 +240,8 @@ describe("rentOrBuy", () => {
     expect(long.years[10].loan_balance).toBe(0);
     expect(long.years[11].own_monthly).toBeLessThan(long.years[10].own_monthly);
     // Year 12's months are the twelfth year's: rents, and so the annual value, grown eleven times.
-    expect(long.years[12].own_monthly).toBeCloseTo(base.maintenance + ownerOccupierTax(base.annual_value * 1.02 ** 11) / 12 + base.upkeep / 12, 2);
+    // Its running costs, as prices in general have grown eleven times too.
+    expect(long.years[12].own_monthly).toBeCloseTo((base.maintenance + base.upkeep / 12) * 1.025 ** 11 + ownerOccupierTax(base.annual_value * 1.02 ** 11) / 12, 2);
   });
 
   it("keeps every dollar: with nothing earning and nothing growing, the gap is the rent paid less what owning has cost and the duty on selling", () => {
@@ -283,9 +296,65 @@ describe("rentOrBuy", () => {
     const p = rentOrBuy({ ...base, rent: 4_000, rent_growth: 10, growth: 5, annual_value: 48_000, years: 3, loan_share: 0 });
     expect(p.years.map((y) => Math.round(y.rent_monthly))).toEqual([4_000, 4_000, 4_400, 4_840]);
     expect(p.years[3].home_value).toBeCloseTo(1_000_000 * 1.05 ** 3, 2);
-    // No loan, no maintenance: a month of owning is the year's tax and upkeep.
-    expect(p.years[3].own_monthly).toBeCloseTo((ownerOccupierTax(48_000 * 1.1 ** 2) + base.upkeep) / 12 + base.maintenance, 6);
+    // No loan: a month of owning is the year's tax, and the running costs grown with prices twice.
+    expect(p.years[3].own_monthly).toBeCloseTo(ownerOccupierTax(48_000 * 1.1 ** 2) / 12 + (base.upkeep / 12 + base.maintenance) * 1.025 ** 2, 2);
     expect(p.instalment).toBe(0);
+  });
+});
+
+describe("rentOrBuy in a moving economy", () => {
+  const base: ScenarioInputs = { ...DEFAULT_INPUTS, residency: "pr", kind: "private", loan_type: "bank", price: 1_000_000, loan_rate: 2, spread: 0.5, lock_years: 2, years: 6 };
+  const months = base.years * 12;
+  /** The steady economy, with some of its paths replaced. */
+  const economy = (i: ScenarioInputs, change: Partial<Economy>): Economy => ({ ...steadyEconomy(i), ...change });
+  const flat = (value: number) => Array(months + 1).fill(value);
+
+  it("is the steady comparison when the economy is the steady one", () => {
+    expect(rentOrBuy(base, steadyEconomy(base))).toEqual(rentOrBuy(base));
+    expect(rentOrBuy(DEFAULT_INPUTS, steadyEconomy(DEFAULT_INPUTS))).toEqual(rentOrBuy(DEFAULT_INPUTS));
+  });
+
+  it("fixes a bank loan's rate for its lock-in, then charges SORA and the spread, resetting the instalment every three months", () => {
+    // SORA at 1% for two years, then 3%, then 2% from the fourth year.
+    const sora = Array.from({ length: months + 1 }, (_, m) => (m <= 24 ? 1 : m <= 36 ? 3 : 2));
+    const p = rentOrBuy(base, economy(base, { sora }));
+    expect(p.years.map((y) => y.loan_rate)).toEqual([2, 2, 2, 3.5, 2.5, 2.5, 2.5]);
+    expect(bankRateChanges(base, sora, base.loan_years * 12).slice(0, 2)).toEqual([
+      { effective_date: "2028-01-01", rate: 3.5, payment: null },
+      { effective_date: "2029-01-01", rate: 2.5, payment: null },
+    ]);
+    // The instalment rises with the rate, and the loan still clears in its term.
+    const periods = loanSchedule({ principal: 750_000, rate: 2, start: "2026-01-01", months: base.loan_years * 12, method: "annuity", rateChanges: bankRateChanges(base, sora, base.loan_years * 12) }).periods;
+    expect(periods[24].payment).toBeGreaterThan(periods[23].payment);
+    expect(periods.at(-1)!.balance).toBe(0);
+    expect(periods).toHaveLength(base.loan_years * 12);
+    // An HDB loan pays its own rate whatever SORA does.
+    expect(rentOrBuy({ ...base, loan_type: "hdb", kind: "hdb", loan_rate: 2.6 }, economy(base, { sora })).years.map((y) => y.loan_rate)).toEqual(Array(7).fill(2.6));
+  });
+
+  it("renews the lease each year at the market rent then, and moves the annual value with it", () => {
+    // The market jumps 20% halfway through the second year.
+    const rent = Array.from({ length: months + 1 }, (_, m) => (m < 18 ? 1 : 1.2));
+    const p = rentOrBuy({ ...base, rent_costs: 0 }, economy(base, { rent }));
+    expect(p.monthly.map((m) => m.rent)).toEqual([3000, 3000, 3600, 3600, 3600, 3600]);
+    expect(p.years[3].own_monthly - p.years[2].own_monthly).toBeCloseTo((ownerOccupierTax(base.annual_value * 1.2) - ownerOccupierTax(base.annual_value)) / 12 + (base.maintenance + base.upkeep / 12) * (1.025 ** 2 - 1.025), 2);
+  });
+
+  it("grows the running costs with prices in general, set each year", () => {
+    // Rents held, so the property tax on the annual value stays put.
+    const costs = Array.from({ length: months + 1 }, (_, m) => (m < 24 ? 1 : 1.5));
+    const p = rentOrBuy({ ...base, loan_share: 0 }, economy(base, { costs, rent: flat(1) }));
+    const running = base.maintenance + base.upkeep / 12;
+    expect(p.monthly[1].running - p.monthly[0].running).toBeCloseTo(0, 6);
+    expect(p.monthly[2].running - p.monthly[1].running).toBeCloseTo(running * 0.5, 2);
+  });
+
+  it("earns what the economy's investments earn, month by month", () => {
+    // Nothing earned but 10% in the twelfth month; rent dear enough that the renter saves nothing.
+    const invest = Array.from({ length: months + 1 }, (_, m) => (m === 12 ? 0.1 : 0));
+    const i = { ...base, rent: 10_000, cpf_balance: 0 };
+    const p = rentOrBuy(i, economy(i, { invest }));
+    expect(p.years[1].rent_net_worth).toBeCloseTo(p.upfront.from_cash * 1.1, 2);
   });
 });
 
