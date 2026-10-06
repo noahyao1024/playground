@@ -1,7 +1,7 @@
 "use client";
 
 import { GuidedInputs } from "./guided-inputs";
-import { newGuidance, parseGuidance } from "@/lib/housing-guidance";
+import { CPF_PR_RULES, newGuidance, parseGuidance } from "@/lib/housing-guidance";
 import { dayInSG } from "@/lib/dates";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -15,7 +15,7 @@ import { Segmented } from "@/components/finance/segmented";
 import type { Confirmation } from "@/components/finance/confirm-dialog";
 import { compactMoney, money } from "@/lib/finance-format";
 import {
-  ABSD_RATES, DEFAULT_INPUTS, ESTIMATED, HOME_KINDS, LOAN_TYPES, PRIVATE_MARKETS, PRIVATE_SEGMENTS, RESIDENCIES, RESIDENCY_LABELS, comparisonReady, clampInputs, findSeries,
+  ABSD_RATES, DEFAULT_INPUTS, ESTIMATED, HOME_KINDS, LOAN_TYPES, PRIVATE_MARKETS, PRIVATE_SEGMENTS, RESIDENCIES, RESIDENCY_LABELS, comparisonReady, clampInputs, findSeries, inTodaysMoney,
   pointsOf, quarterFromNumber, quarterLabel, quarterNumber, quarterYear, rentOrBuy, withinLimits,
   type Estimated, type HomeKind, type LoanType, type MarketData, type OwningMonth, type Projection, type Residency, type ScenarioInputs,
 } from "@/lib/housing";
@@ -56,7 +56,7 @@ const FIELDS: Partial<Record<NumberKey, { label: string; unit: string; step?: nu
   rent_costs: { label: "租赁中介及印花税", unit: "S$/年", step: 100 },
   growth: { label: "房价增长", unit: "%/年", step: 0.5 },
   invest_return: { label: "投资回报", unit: "%/年", step: 0.5 },
-  cost_growth: { label: "费用增长", unit: "%/年", step: 0.5 },
+  cost_growth: { label: "通胀 / 费用增长", unit: "%/年", step: 0.5 },
   years: { label: "持有比较年限", unit: "年", step: 1 },
   cpf_balance: { label: "现有 OA 余额", unit: "S$", step: 1_000 },
   cpf_monthly: { label: "OA 月缴款", unit: "S$/月", step: 100 },
@@ -70,7 +70,7 @@ const ESTIMATE_LABELS: Record<Estimated, string> = {
   loan_rate: "The loan's rate",
   growth: "The home's price",
   rent_growth: "Rents",
-  cost_growth: "Running costs",
+  cost_growth: "Inflation and running costs",
   invest_return: "Investments",
 };
 
@@ -137,6 +137,7 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
   const set = (next: Partial<ScenarioInputs>) => setDraft((d) => {
     const merged = { ...d.inputs, ...next };
     if (merged.guidance && (["residency", "nth", "kind"] as const).some(k => next[k] !== undefined && next[k] !== d.inputs[k])) merged.guidance = { ...merged.guidance, confirmed: false };
+    if (next.residency === "pr" && next.residency !== d.inputs.residency && merged.guidance?.cpf_mode === "salary") merged.guidance = { ...merged.guidance, cpf_rules:CPF_PR_RULES, cpf_scheme:"graduated" };
     // HDB lends for HDB flats only.
     if (merged.kind === "private" && merged.loan_type === "hdb") merged.loan_type = "bank";
     return { ...d, inputs: merged };
@@ -690,6 +691,7 @@ function Verdict({ inputs, result, simulation, className }: { inputs: ScenarioIn
       {result.break_even === null ? `Renting stays ahead all ${inputs.years} years` : `Buying pulls ahead in year ${result.break_even}`}
       <span className="text-muted-foreground">
         {` · ${lead === subject ? "" : `${lead} `}${amount} ahead at year ${inputs.years}`}
+        {` · 今天的钱 ${compactMoney(Math.abs(inTodaysMoney(difference, inputs.cost_growth, inputs.years)), "sgd", { digits: 1 })}`}
         {chance !== undefined && ` · buying ahead in ${share(chance, 0)} of futures`}
       </span>
     </p>
@@ -766,7 +768,7 @@ function Results({ typed, inputs, result, estimates, model, market, simulation, 
           label={`After ${inputs.years} years, ${difference >= 0 ? "buying" : "renting"} is ahead by`}
           value={compactMoney(Math.abs(difference), "sgd", { digits: 2 })}
           title={money(Math.abs(difference), "sgd")}
-          sub="The home sold at the end, its costs paid"
+          sub={`折合今天的钱 ${compactMoney(Math.abs(inTodaysMoney(difference, inputs.cost_growth, inputs.years)), "sgd", { digits: 2 })} · 通胀 ${rateText(inputs.cost_growth)}/年${inputs.guidance ? ` · 基准 ${inputs.guidance.as_of}` : " · 基准为比较起点"}`}
         />
       </div>
 
@@ -837,7 +839,7 @@ function Results({ typed, inputs, result, estimates, model, market, simulation, 
         Stamp duties and property tax as IRAS published them in October 2026: BSD up to 6%; ABSD by who buys and which home it is;
         seller&rsquo;s stamp duty on a sale within four years; owner-occupier property tax on the annual value, which moves with rents.
         Both sides start with the same money and spend the same each month; whichever costs less invests the rest. A lease and the
-        annual value are renewed each year at the market then. In Singapore dollars of the day, not adjusted for inflation.
+        annual value are renewed each year at the market then. Charts show Singapore dollars of the future. The gap also shows today’s purchasing power, discounted at the CPI-based inflation / cost-growth assumption (or your override) from the comparison’s baseline date.
       </p>
     </div>
   );

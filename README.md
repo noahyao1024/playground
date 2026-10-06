@@ -73,28 +73,43 @@ zero/simple/more templates, each editable. These are cost comparisons, not mortg
 
 The holding period supports 1–99 years independently of the mortgage. Optional
 lease start year and original term calculate remaining tenure at a saved assessment
-date; TOP/build year calculates building age only. Expiry assumes 1 January of
+date; the lease start is separate from the building's TOP year. Expiry assumes 1 January of
 start year + term. Leasehold value multiplies market growth by a normalized
 3% discounted occupancy factor, not an official valuation. At expiry the home is
 worth zero and the buyer pays replacement rent while still servicing any debt.
 Scenarios beyond 35 years show assumptions only, without simulated win probabilities.
 
-Salary-based CPF estimates cover employed citizens / PRs on full rates (PR year 3
-onwards), ordinary wages up to S$8,000, age allocation and an editable retirement
-age. They include published [2026 contribution rates](https://www.cpf.gov.sg/content/dam/web/employer/employer-obligations/documents/CPFcontributionratesfrom1Jan2026.pdf),
+The final buy/rent gap shows both its nominal future amount and “今天的钱”:
+`future gap / (1 + inflation / 100) ^ holding years`. Inflation uses the comparison's
+CPI-based cost-growth assumption, or its manual override. The displayed rate and
+saved baseline date explain the purchasing-power figure; charts and the winner
+continue to use nominal projections.
+
+Salary-based CPF estimates cover employed citizens and PRs, ordinary wages up to
+S$8,000, age allocation and an editable retirement age. PRs enter their grant date
+to use standard graduated (G/G) contributions: at age 55 or under with monthly
+wages over S$750, the total rates are 9%, 24% and 37%. Only the OA share is counted
+as available savings. Rates advance in the month after each anniversary month,
+as explained in [CPF's PR-stage rules](https://www.cpf.gov.sg/service/article/how-do-i-determine-the-year-of-my-singapore-permanent-resident-status-for-the-purpose-of-cpf-contributions).
+An approved full-rate (F/F) arrangement can be selected. For the grant month the
+model estimates eligible wages using calendar-day proration; use manual OA for
+actual payroll proration, F/G arrangements, bonuses or special account allocation.
+The estimate includes published [2026 contribution rates](https://www.cpf.gov.sg/content/dam/web/employer/employer-obligations/documents/CPFcontributionratesfrom1Jan2026.pdf),
 [2026 allocation rates](https://www.cpf.gov.sg/service/sfc/servlet.shepherd/document/download/069IW00000DZMxZYAX),
 [2027 contribution rates](https://www.cpf.gov.sg/content/dam/web/employer/employer-obligations/documents/jan2027cpfcontributionrates.pdf)
 and [2027 allocation rates](https://www.cpf.gov.sg/content/dam/web/employer/employer-obligations/documents/jan2027cpfallocationrates.pdf).
 After 2027 the model holds those rules, with unchanged salary and birthdays
-approximated at annual anniversaries. Bonuses, graduated PR rates and retirement
-account overflow require manual OA contributions. Existing OA savings are separate.
+approximated at annual anniversaries. Retirement account overflow requires manual
+OA contributions. Existing OA savings are separate.
 CPF housing spending is capped at the purchase price unless the user supplies a
 verified allowance; unknown/short tenure uses cash until an allowance is verified.
 A lease of 20 years or less permits no CPF housing usage. Use the
 [CPF housing usage calculator](https://www.cpf.gov.sg/member/tools-and-services/calculators/cpf-housing-usage)
 to verify limits, including valuation and lease-to-age-95 restrictions. Saved
 `guidance` JSON includes the date and rule version; older comparisons without it
-retain their original arithmetic until edited through the guided inputs.
+retain their original arithmetic until edited through the guided inputs. Saved
+`2026-2027-v1` salary scenarios retain the full-rate assumption; entering a PR date
+opts into `2026-2027-pr-v2`, which saves `pr_since` and `cpf_scheme` alongside it.
 
 Every response also carries `frame-ancestors 'none'` and its old-browser twin,
 `nosniff`, a referrer policy and a permissions policy (`next.config.ts`).

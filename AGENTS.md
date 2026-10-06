@@ -246,7 +246,8 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   scenario's optional `guidance` (`src/lib/housing-guidance.ts`); a scenario without it keeps
   the arithmetic it was saved with. With it, a comparison is shown and saved only once
   `comparisonReady` (the route refuses one that is not): the buyer confirmed, a lease that has
-  not run out, and for CPF from a salary an eligible buyer of known age. A lease runs from
+  not run out, and for CPF from a salary an eligible buyer of known age; PRs on the new rules
+  also need a grant date on or before `as_of`. A lease runs from
   1 January of its first year (the lease's, never the TOP year's: the form no longer asks that,
   which counted for nothing, and `parseGuidance` passes over a `build_year` saved before),
   counted at the `as_of` date kept with the scenario; the home's
@@ -254,12 +255,22 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   buyer pays rent. CPF from a salary is the Ordinary Account's share at CPF's 2026 rates and
   its announced 2027 ones, ordinary wages to S$8,000; later years keep 2027's. When CPF
   publishes new rates, add them to `estimatedOa` and its test's figures with them.
+  New guidance uses `2026-2027-pr-v2`: `pr_since` chooses the G/G contribution stage,
+  switching in the month after the anniversary month, and `cpf_scheme` can select an approved
+  F/F full-rate arrangement. Grant-month wages use labeled calendar-day proration; actual
+  payroll proration, F/G, bonuses and special allocations need manual OA. Only the OA share
+  of contributions is added to each side's savings. Older `2026-2027-v1` scenarios keep the
+  full-rate assumption until the user enters a PR date; switching to salary CPF or switching
+  buyer identity to PR also selects the new rules.
   `cpf_rules` names the rules a scenario was saved under and `parseGuidance` refuses any
   other: renaming it without still accepting the old name drops every saved scenario's
   guidance when read. CPF pays for the home up to a limit: none at 20 years of lease or less;
   else the verified limit, where one is given; else the price, for freehold or a lease that
   sees the youngest buyer to 95, and none otherwise. Comparisons run to 99 years; futures
   are drawn to `SIMULATED_YEARS` (35), past which only the central projection is shown.
+  The final nominal gap also shows `inTodaysMoney`, deflated by `cost_growth` over the
+  holding period. That assumption comes from CPI unless overridden; show its rate and the
+  scenario's baseline date, and keep the nominal chart and winner unchanged.
   Private developments the owner follows are read from URA's Data Service (`src/lib/ura.ts`)
   with `URA_ACCESS_KEY`, set on Vercel only. They live in `housing_projects`, with
   `housing_project_sales` and `housing_project_rents`, private like the rest. A key gets a token

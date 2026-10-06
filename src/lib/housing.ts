@@ -1,4 +1,4 @@
-import { cpfHousingLimit, leaseFactor, parseGuidance, remainingLease, salaryOa, type HousingGuidance } from "@/lib/housing-guidance";
+import { CPF_PR_RULES, cpfHousingLimit, leaseFactor, parseGuidance, remainingLease, salaryOa, type HousingGuidance } from "@/lib/housing-guidance";
 import { addMonths } from "@/lib/dates";
 import { loanSchedule, type LoanRateChangeTerms } from "@/lib/finance";
 
@@ -418,6 +418,7 @@ export function comparisonReady(i: ScenarioInputs): boolean {
   if (!g.confirmed || (i.years > 35 && g.tenure === "unknown")) return false;
   if (g.tenure === "leasehold" && (g.lease_start === null || (remainingLease(g) ?? 0) <= 0)) return false;
   if (g.cpf_mode === "salary" && (!g.cpf_eligible || i.residency === "foreigner" || g.salary === null || g.age === null || g.retirement_age < g.age)) return false;
+  if (g.cpf_mode === "salary" && i.residency === "pr" && g.cpf_rules === CPF_PR_RULES && !g.pr_since) return false;
   return true;
 }
 
@@ -574,6 +575,12 @@ export function steadyEconomy(i: ScenarioInputs, months = i.years * 12): Economy
   };
 }
 
+/** Purchasing power at the comparison's baseline. Inflation follows the same
+ * CPI-based (or manually overridden) cost-growth assumption as the projection. */
+export function inTodaysMoney(amount: number, inflation: number, years: number): number {
+  return amount / (1 + inflation / 100) ** years;
+}
+
 /** The day the schedule starts on: any will do, its repayments 30/360. */
 const LOAN_START = "2026-01-01";
 
@@ -698,7 +705,7 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
     // The month's growth on what each holds, then the month's money.
     cashBuy *= 1 + grow;
     cashRent *= 1 + grow;
-    const contribution = i.guidance?.cpf_mode === "none" ? 0 : i.guidance?.cpf_mode === "salary" ? salaryOa(i.guidance, m - 1) : i.cpf_monthly;
+    const contribution = i.guidance?.cpf_mode === "none" ? 0 : i.guidance?.cpf_mode === "salary" ? salaryOa(i.guidance, m - 1, i.residency) : i.cpf_monthly;
     cpfBuy = cpfBuy * (1 + cpfGrow) + contribution;
     cpfRent = cpfRent * (1 + cpfGrow) + contribution;
     cpfUsed *= 1 + cpfGrow;
@@ -776,6 +783,7 @@ export function notesOn(i: ScenarioInputs): string[] {
   const notes: string[] = [];
   if (i.guidance?.tenure === "leasehold") notes.push("地契按起始年份估算，价值采用 3% 折现的居住权衰减假设；到期价值为零，随后计入替代租金，不假设续期或集体出售。");
   if (i.years > 35) notes.push("超过 35 年的结果仅用于探索假设；历史样本不足以支持远期胜率预测。");
+  if (i.guidance?.cpf_mode === "salary" && i.residency === "pr" && i.guidance.cpf_rules === "2026-2027-v1") notes.push("旧方案保留完整 CPF 费率假设；填写 PR 日期后启用分阶段估算。");
   if (i.guidance?.cpf_mode === "salary") notes.push("CPF 工资估算采用 2026 及已公布的 2027 年规则，之后沿用 2027 规则；月薪不变、每年增长一岁并在设定年龄停缴，不含奖金或退休账户溢出。");
   if (i.guidance && i.guidance.cpf_mode !== "none" && cpfHousingLimit(i.guidance, i.price) === 0) notes.push("CPF 买房额度未核实或剩余地契不足：暂按现金付款。请用 CPF 官方计算器确认额度后填写。");
   if (i.kind === "hdb" && i.residency === "foreigner") notes.push("Foreigners cannot buy HDB flats; the figures go ahead as though they could.");
