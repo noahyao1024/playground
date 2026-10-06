@@ -48,7 +48,6 @@ import {
   type AutoSettled,
 } from "@/lib/store";
 
-import { ALLOWED_EMAILS } from "@/lib/auth";
 import { SG_TZ, todayInSG } from "@/lib/dates";
 import { toCSV } from "@/lib/csv";
 import { Button } from "@/components/ui/button";
@@ -371,7 +370,8 @@ export default function SubscriptionPage() {
   const router = useRouter();
   const searchRef = useRef<HTMLInputElement>(null);
 
-  const canEdit = !!session?.user?.email && ALLOWED_EMAILS.includes(session.user.email);
+  // The session says whether this address may edit (`withRoles`); the API checks again.
+  const canEdit = session?.user?.canEdit === true;
 
   const [data, setData] = useState<SubscriptionData | null>(null);
   const [loading, setLoading] = useState(true);

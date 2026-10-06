@@ -49,9 +49,10 @@ bearer token; no code change needed.
 **Finance is the exception to all of the above.** `finance_accounts` and
 `finance_balances` have RLS on and *no* policy, and every privilege is revoked
 from `anon` and `authenticated`: the public key reads nothing there, and only the
-service role, server-side, reaches them. `/api/finance` answers one address —
+service role, server-side, reaches them. `/api/finance` answers the owner —
 `FINANCE_OWNER` in [`src/lib/access.ts`](src/lib/access.ts), narrower than the
-split bill's allowlist — with 401 for anyone else, and marks every response
+split bill's allowlist — and any address in `ADMIN_EMAILS`, set on Vercel only
+so that no other address is published here, with 401 for anyone else, and marks every response
 `private, no-store`. `/finance` is a 404 to everyone but the owner, signed in or
 not, and names itself to nobody else — no title, no breadcrumb. Signed out, the
 owner comes in by `/auth/signin?callbackUrl=/finance`. The navbar item appears

@@ -37,4 +37,14 @@ describe("/housing", () => {
     expect(page.type).toBe(HousingApp);
     expect(await generateMetadata()).toEqual({ title: "Housing | Playground", robots: { index: false, follow: false } });
   });
+
+  it("is the comparison to an address in ADMIN_EMAILS too", async () => {
+    session.current = { user: { email: "partner@example.com" } };
+    vi.stubEnv("ADMIN_EMAILS", "partner@example.com");
+    try {
+      expect(((await HousingPage()) as { type: unknown }).type).toBe(HousingApp);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
 });

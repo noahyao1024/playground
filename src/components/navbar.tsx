@@ -7,7 +7,6 @@ import { Moon, Sun, LogOut, Wallet, House } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useSession, signOut } from "next-auth/react";
 import { Button } from "@/components/ui/button";
-import { isFinanceOwner } from "@/lib/access";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,9 +24,11 @@ export function Navbar() {
   const { theme, setTheme } = useTheme();
   const { data: session } = useSession();
 
-  // /finance and /housing are named for their owner only: to anyone else they
-  // are missing pages, and the breadcrumb would give them away.
-  const names = isFinanceOwner(session?.user?.email) ? { ...pageNames, "/finance": "Finance", "/housing": "Housing" } : pageNames;
+  // /finance and /housing are named for their owners only: to anyone else they
+  // are missing pages, and the breadcrumb would give them away. The session
+  // says whether this address is one (`withRoles`); the browser never sees who.
+  const owner = session?.user?.isOwner === true;
+  const names = owner ? { ...pageNames, "/finance": "Finance", "/housing": "Housing" } : pageNames;
   const currentPage = Object.entries(names).find(([path]) =>
     pathname.startsWith(path)
   );
@@ -84,8 +85,8 @@ export function Navbar() {
                   <p className="text-sm font-medium">{session.user.name}</p>
                   <p className="text-xs text-muted-foreground truncate">{session.user.email}</p>
                 </div>
-                {/* Only the owner is shown the way in; the page and its API check again. */}
-                {isFinanceOwner(session.user.email) && (
+                {/* Only an owner is shown the way in; the page and its API check again. */}
+                {owner && (
                   <>
                     <DropdownMenuItem render={<Link href="/finance" />} className="gap-2">
                       <Wallet className="h-3.5 w-3.5" />

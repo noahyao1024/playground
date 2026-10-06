@@ -131,8 +131,15 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   wallet is `coalesce(pays_from, id)`, one level deep, which a trigger holds. Reversing
   a settlement does not stop the next run paying the charge again while the wallet
   covers it; to stop paying a charge, delete it.
-- `/finance` and `/api/finance` — the owner's accounts and balances, answering only
-  `FINANCE_OWNER` in `src/lib/access.ts`. `finance_accounts` and `finance_balances` are the one
+- Who may do what is `src/lib/access.ts`: `FINANCE_OWNER` sees `/finance` and `/housing`,
+  `ALLOWED_EMAILS` edit the split bill, and the addresses in `ADMIN_EMAILS` — set on Vercel
+  only — have all of the owner's rights. Never write another address into this repository: it
+  is public, and the address would be published for good. The environment is read on the
+  server; the browser is told what the signed-in address may do through the session
+  (`withRoles`, NextAuth's session callback: `canEdit`, `isOwner`), never who else may, so
+  client components go by those flags, not by comparing addresses.
+- `/finance` and `/api/finance` — the owner's accounts and balances, answering only the owners
+  (`isFinanceOwner`). `finance_accounts` and `finance_balances` are the one
   private corner of the database: RLS with no policy, privileges revoked from `anon` and
   `authenticated`. Do not give them a `select` policy to match the other tables — that publishes
   the owner's balances to anyone holding the public key. The arithmetic (carry-forward, archive
