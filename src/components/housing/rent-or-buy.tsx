@@ -20,7 +20,7 @@ import {
   type Estimated, type HomeKind, type LoanType, type MarketData, type OwningMonth, type Projection, type Residency, type ScenarioInputs,
 } from "@/lib/housing";
 import {
-  STRESSES, estimatesFor, expectedEconomy, marketModel, stressed, withEstimates,
+  SIMULATED_YEARS, STRESSES, estimatesFor, expectedEconomy, marketModel, stressed, withEstimates,
   type Estimates, type Model, type Simulation, type SoraOutlook, type Stress,
 } from "@/lib/housing-model";
 import { cn } from "@/lib/utils";
@@ -130,7 +130,7 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
   const estimates = useMemo(() => estimatesFor(model, typed), [model, typed]);
   const resolved = useMemo(() => withEstimates(typed, estimates), [typed, estimates]);
   const result = useMemo(() => rentOrBuy(resolved, stressed(expectedEconomy(resolved, model), stress)), [resolved, model, stress]);
-  const { simulation, drawing } = useSimulation(resolved, model, stress, ready && inputs.years <= 35);
+  const { simulation, drawing } = useSimulation(resolved, model, stress, ready && inputs.years <= SIMULATED_YEARS);
   const kept = scenarios.find((s) => s.id === draft.id) ?? null;
   const changed = !kept || kept.name !== draft.name.trim() || JSON.stringify(kept.inputs) !== JSON.stringify(inputs);
 
@@ -470,6 +470,16 @@ function Futures({ result, simulation, drawing, model, ticks }: {
         <p className="text-sm text-muted-foreground">
           There is not enough of the market&rsquo;s history yet -- prices, rents, consumer prices, shares and SORA, quarter by quarter together -- to draw futures from.
           It comes with the daily job, or with Refresh data.
+        </p>
+      </Card>
+    );
+  }
+  // None are drawn this far ahead: say so, rather than wait for them.
+  if (result.years.length - 1 > SIMULATED_YEARS) {
+    return (
+      <Card title="Across many futures">
+        <p className="text-sm text-muted-foreground">
+          Futures are drawn for up to {SIMULATED_YEARS} years ahead. Past that, the market&rsquo;s history is too short to say how often buying comes out ahead, so this comparison shows its central projection and assumptions only.
         </p>
       </Card>
     );

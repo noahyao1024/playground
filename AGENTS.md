@@ -231,6 +231,22 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   (`use-simulation.ts`), and keeps the summaries of the last 32 comparisons it drew, so going
   back to one draws nothing. HDB published no rent medians for 2019 Q4: gaps of up to two
   quarters are bridged rather than breaking a series.
+  The guided comparison (`src/components/housing/guided-inputs.tsx`) keeps what it asks in a
+  scenario's optional `guidance` (`src/lib/housing-guidance.ts`); a scenario without it keeps
+  the arithmetic it was saved with. With it, a comparison is shown and saved only once
+  `comparisonReady` (the route refuses one that is not): the buyer confirmed, a lease that has
+  not run out, and for CPF from a salary an eligible buyer of known age. A lease runs from
+  1 January of its first year, counted at the `as_of` date kept with the scenario; the home's
+  value carries a 3% discounted right-to-occupy factor, nothing at expiry, after which the
+  buyer pays rent. CPF from a salary is the Ordinary Account's share at CPF's 2026 rates and
+  its announced 2027 ones, ordinary wages to S$8,000; later years keep 2027's. When CPF
+  publishes new rates, add them to `estimatedOa` and its test's figures with them.
+  `cpf_rules` names the rules a scenario was saved under and `parseGuidance` refuses any
+  other: renaming it without still accepting the old name drops every saved scenario's
+  guidance when read. CPF pays for the home up to a limit: none at 20 years of lease or less;
+  else the verified limit, where one is given; else the price, for freehold or a lease that
+  sees the youngest buyer to 95, and none otherwise. Comparisons run to 99 years; futures
+  are drawn to `SIMULATED_YEARS` (35), past which only the central projection is shown.
   Private developments the owner follows are read from URA's Data Service (`src/lib/ura.ts`)
   with `URA_ACCESS_KEY`, set on Vercel only. They live in `housing_projects`, with
   `housing_project_sales` and `housing_project_rents`, private like the rest. A key gets a token

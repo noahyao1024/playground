@@ -33,6 +33,10 @@ const MAX_GAP = 2;
 const MIN_MEDIANS = 5;
 /** Futures drawn. */
 export const PATHS = 500;
+/** The longest look ahead futures are drawn for. Past it the history they
+ *  replay is too short to say how often buying comes out ahead, and a
+ *  comparison shows its central projection and assumptions only. */
+export const SIMULATED_YEARS = 35;
 /** The longest look ahead, in quarters. */
 const MAX_QUARTERS = INPUT_LIMITS.years[1] * 4;
 /** HDB's concessionary rate: 0.1% over the CPF Ordinary Account's 2.5%. */
