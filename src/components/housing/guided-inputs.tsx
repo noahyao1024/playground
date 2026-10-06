@@ -8,6 +8,7 @@ import { CPF_PR_RULES, newGuidance, prContributionYear, remainingLease, salaryOa
 import type { ScenarioInputs } from "@/lib/housing";
 import { bankFinancing, DEFAULT_FINANCING } from "@/lib/housing-financing";
 import { Card } from "./market-view";
+import { quoteSource } from "@/lib/housing-property";
 
 export function GuidedInputs({ inputs, onChange: changeInputs }: { inputs: ScenarioInputs; onChange: (v: Partial<ScenarioInputs>) => void }) {
   const g = inputs.guidance ?? { ...newGuidance(dayInSG(new Date())), annual_value_auto: false };
@@ -40,6 +41,8 @@ export function GuidedInputs({ inputs, onChange: changeInputs }: { inputs: Scena
           <Label htmlFor={`quick-${key}`}>{key === "price" ? "购房价格 *" : "整套月租 *"}</Label>
           <NumberInput id={`quick-${key}`} value={inputs[key]} emptyValue={NaN} required min={key === "price" ? 10000 : 0} step={key === "price" ? 10000 : 100} onValueChange={v=>onChange({[key]:v})}/>
           <p className="text-xs text-muted-foreground">{key === "price" ? "例如 PropertyGuru 当前挂牌价，可改为议价后的价格。" : "选相近面积、房型及装修的整套租金；不填单间租金。"}</p>
+          <p className="text-xs text-muted-foreground">来源：{quoteSource(inputs, key).label}{quoteSource(inputs, key).source?.read_at ? ` · ${quoteSource(inputs, key).source!.read_at!.slice(0,10)} 快照` : ""}</p>
+          {!quoteSource(inputs, key).context_matches && <p className="text-xs text-muted-foreground">楼盘、面积或房型已变动，来源快照的可比条件需重新核对。</p>}
         </div>)}
       </div>
       <div className="mt-3 space-y-1.5">{select("quick-renovation", "装修预算模板（粗估，可在高级设置自定义）", String(inputs.renovation), [["0","无需装修：S$0"],["30000","简单装修：S$30,000"],["80000","较多装修：S$80,000"],...(![0,30000,80000].includes(inputs.renovation) ? [[String(inputs.renovation),`自定义：S$${inputs.renovation.toLocaleString()}`] as [string,string]] : [])],v=>onChange({renovation:Number(v)}))}</div>

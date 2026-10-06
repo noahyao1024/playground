@@ -14,6 +14,7 @@ import {
 } from "@/lib/housing";
 import { housingAction, loadHousing, messageOf, type HousingData, type ProjectsRefresh, type Refresh, type Scenario } from "./api";
 import type { Project } from "@/lib/housing-projects";
+import { EMPTY_PROPERTY, linkHousingProject, referenceQuote } from "@/lib/housing-property";
 import { MarketView, type MarketChoice } from "./market-view";
 import { NEW_DRAFT, RentOrBuy, type Draft } from "./rent-or-buy";
 import { ApiAccessDialog } from "@/components/finance/api-access-dialog";
@@ -55,7 +56,7 @@ function storedDraft(): Draft {
 /** What the market's figures filled in, said in a sentence. */
 function filledFrom(data: HousingData, choice: MarketChoice): string {
   if (choice.kind === "project") {
-    return `Filled in from ${choice.label}: the middle price and rent of the latest year. Price and rent growth follow URA's indices for its market.`;
+    return `已采用 ${choice.label} 的同面积 P50 价格和租金，并应用区域及可识别地契。请核对后重新确认；手动增长假设保留。`;
   }
   if (choice.kind === "private") {
     const market = PRIVATE_SEGMENTS.find((s) => s.area === choice.area && s.segment === choice.segment);
@@ -119,21 +120,31 @@ export function HousingApp() {
 
   function compare(choice: MarketChoice) {
     if (!data) return;
-    // A development's size brings its own price and rent; the annual value is
-    // approximated as a year's rent; the owner must verify the actual IRAS AV.
+    // A selected band supplies quotes. AV is rent × 12 only when its auto
+    // proxy is enabled; an actual IRAS annual value is retained.
     const filled = choice.kind === "project"
-      ? { kind: "private" as const, market: choice.market, loan_type: "bank" as const, price: choice.price, rent: choice.rent, annual_value: choice.rent * 12 }
+      ? { kind: "private" as const, market: choice.market, loan_type: "bank" as const, price: choice.price, rent: choice.rent }
       : inputsFromMarket(data.market, choice);
     let inputs;
     try {
       // The growth of prices and rents is the market's: left to its estimates.
+      const project = choice.kind === "project" ? data.projects.find(p => p.name === choice.name) : undefined;
+      const property = choice.kind === "project" ? { ...EMPTY_PROPERTY, ...draft.inputs.property, project: choice.name, area: null, area_band: choice.band, bedrooms: null } : undefined;
+      const priceSource = project && property ? referenceQuote(property, project, "price", "p50") : null;
+      const rentSource = project && property ? referenceQuote(property, project, "rent", "p50") : null;
+      if (choice.kind === "project") {
+        if (priceSource) filled.price = priceSource.amount;
+        if (rentSource) filled.rent = rentSource.amount;
+      }
+      const base = project ? linkHousingProject(clampInputs(draft.inputs), project) : clampInputs(draft.inputs);
       inputs = parseInputs({
-        ...clampInputs(draft.inputs),
+        ...base,
         ...filled,
+        ...(project && property ? { property: { ...property, price_source: priceSource, rent_source: rentSource } } : { property: { ...EMPTY_PROPERTY, ...draft.inputs.property, project: null, price_source: null, rent_source: null } }),
         ...(filled.kind === "private" && draft.inputs.loan_type === "hdb" ? { loan_type: "bank" } : {}),
-        auto: [...draft.inputs.auto, "growth", "rent_growth"],
+        auto: choice.kind === "project" ? draft.inputs.auto : [...draft.inputs.auto, "growth", "rent_growth"],
         // A development brings its lease as URA records it; anything else, none until given.
-        ...(draft.inputs.guidance ? { guidance: { ...draft.inputs.guidance, confirmed: false,
+        ...(base.guidance ? { guidance: { ...base.guidance, confirmed: false,
           ...(choice.kind === "project" && choice.lease ? choice.lease : { tenure: "unknown", lease_start: null }) } } : {}),
       });
     } catch (err) {
@@ -148,13 +159,15 @@ export function HousingApp() {
 
   /** Follows a development: URA is read for it at once, if its key is set. */
   async function follow(name: string) {
+    const prefix = data?.projects.some(p => p.name === name) ? `Updated ${name}` : `Following ${name}`;
     try {
       const { project, refresh } = await housingAction<{ project: Project | null; refresh: ProjectsRefresh }>("followProject", { name });
       if (project) setData((d) => (d ? { ...d, projects: [...d.projects.filter((p) => p.name !== project.name), project] } : d));
-      if (refresh.failures.length) toast.error(`Following ${name}, but URA could not be read: ${refresh.failures[0].reason}`);
-      else if (refresh.state === "no key") toast.message(`Following ${name}: URA is read once URA_ACCESS_KEY is set on Vercel`);
+      if (refresh.failures.length) toast.error(`${name}: URA could not be read: ${refresh.failures[0].reason}`);
+      else if (refresh.state === "no key") toast.message(`${name}: URA is read once URA_ACCESS_KEY is set on Vercel`);
       else if (project?.found === false) toast.error(`URA has no records under ${name}: check how URA spells it`);
-      else toast.success(`Following ${name}: ${refresh.sales} sale(s) and ${refresh.rents} rental contract(s) read`);
+      else if (refresh.state !== "read") toast.message(`${name}: ${refresh.state}; existing data kept`);
+      else toast.success(`${prefix}: ${refresh.sales} sale(s) and ${refresh.rents} rental contract(s) read`);
     } catch (err) {
       toast.error(messageOf(err));
     }
@@ -212,13 +225,13 @@ export function HousingApp() {
             </span>
           )}
           <Button variant="outline" disabled={refreshing} onClick={() => void refresh()}>
-            <RotateCw className={refreshing ? "animate-spin" : undefined} /> {refreshing ? "Reading…" : "Refresh data"}
+            <RotateCw className={refreshing ? "animate-spin" : undefined} /> {refreshing ? "Reading…" : "Refresh market data"}
           </Button>
         </div>
       </div>
 
       <Segmented label="View" value={tab} onChange={setTab} options={TABS} />
-      <ApiAccessDialog open={apiAccess} onClose={()=>setApiAccess(false)} defaultScope="housing:read" context={{scenarioId:draft.id,projects:(data.projects ?? []).map(p=>p.name)}} />
+      <ApiAccessDialog open={apiAccess} onClose={()=>setApiAccess(false)} defaultScope="housing:read" context={{scenarioId:draft.id,projects:(data.projects ?? []).map(p=>p.name),project:draft.inputs.property?.project}} />
 
       {tab === "market" ? (
         empty ? (
@@ -245,6 +258,8 @@ export function HousingApp() {
           onSaved={(saved: Scenario) => setData((d) => (d ? { ...d, scenarios: [saved, ...d.scenarios.filter((s) => s.id !== saved.id)] } : d))}
           onDeleted={(id) => setData((d) => (d ? { ...d, scenarios: d.scenarios.filter((s) => s.id !== id) } : d))}
           onConfirm={setConfirmation}
+          projects={data.projects ?? []}
+          onRefreshProject={follow}
         />
       )}
 

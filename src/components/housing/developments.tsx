@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowRight, Plus, X } from "lucide-react";
+import { ArrowRight, Plus, RotateCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { compactMoney, dayLabel, money } from "@/lib/finance-format";
@@ -9,10 +9,11 @@ import { townLabel, type PrivateMarket } from "@/lib/housing";
 import { MAX_PROJECTS, byBand, byBedrooms, lastYear, leaseOf, marketForProject, projectName, summarize, psfOf, type BandRow, type Lease, type Project } from "@/lib/housing-projects";
 import { projectPriceRows } from "@/lib/housing-charts";
 import { dayInSG } from "@/lib/dates";
+import { EMPTY_PROPERTY, referenceQuote } from "@/lib/housing-property";
 import { LinesChart, yearTicks } from "./line-chart";
 
 /** What a development's size fills a comparison with: its lease too, as URA records it. */
-export type ProjectChoice = { kind: "project"; name: string; label: string; market: PrivateMarket; price: number; rent: number; lease: Lease | null };
+export type ProjectChoice = { kind: "project"; name: string; label: string; market: PrivateMarket; price: number; rent: number; lease: Lease | null; band: BandRow["band"]; bedrooms: number | null };
 
 /** A lease as the page writes it: "Freehold", "99-year lease from 2012". */
 const leaseText = (l: Lease) => (l.tenure === "freehold" ? "Freehold" : `${l.lease_term}-year lease from ${l.lease_start}`);
@@ -70,7 +71,7 @@ export function Developments({ projects, ura, onFollow, onUnfollow, onCompare }:
           onChange={(e) => setName(e.target.value)}
           className="h-9 min-w-0 flex-1 basis-56"
         />
-        <Button type="submit" disabled={!typed || busy || projects.length >= MAX_PROJECTS}>
+        <Button type="submit" disabled={!typed || busy || (projects.length >= MAX_PROJECTS && !projects.some(p => p.name === typed))}>
           <Plus /> {busy ? "Reading URA…" : "Follow"}
         </Button>
       </form>
@@ -82,19 +83,25 @@ export function Developments({ projects, ura, onFollow, onUnfollow, onCompare }:
       {projects.length === 0 && <p className="text-sm text-muted-foreground">None followed yet.</p>}
       <div className="space-y-6">
         {projects.map((p) => (
-          <Development key={p.name} project={p} ura={ura} onUnfollow={onUnfollow} onCompare={onCompare} />
+          <Development key={p.name} project={p} ura={ura} onUnfollow={onUnfollow} onCompare={onCompare} onRefresh={onFollow} />
         ))}
       </div>
     </section>
   );
 }
 
-function Development({ project: p, ura, onUnfollow, onCompare }: {
+function Development({ project: p, ura, onUnfollow, onCompare, onRefresh }: {
   project: Project;
   ura: boolean;
   onUnfollow: (name: string) => Promise<void>;
   onCompare: (choice: ProjectChoice) => void;
+  onRefresh: (name: string) => Promise<void>;
 }) {
+  const [reading, setReading] = useState(false);
+  async function refresh() {
+    setReading(true);
+    try { await onRefresh(p.name); } finally { setReading(false); }
+  }
   const label = townLabel(p.name);
   const lease = leaseOf(p.tenure);
   const where = [p.street && townLabel(p.street), p.district && `D${p.district}`, p.segment, lease && leaseText(lease)].filter(Boolean).join(" · ");
@@ -106,9 +113,12 @@ function Development({ project: p, ura, onUnfollow, onCompare }: {
           {where || "Not read yet"}{p.read_at && ` · read ${dayLabel(dayInSG(p.read_at))}`}
         </p>
       </div>
-      <Button variant="ghost" size="sm" aria-label={`Stop following ${label}`} onClick={() => void onUnfollow(p.name)}>
+      <div className="flex shrink-0 items-center gap-1">
+      <Button variant="outline" size="sm" disabled={reading} onClick={() => void refresh()}><RotateCw className={reading ? "animate-spin" : undefined} />{reading ? "Reading…" : "更新 URA"}</Button>
+      <Button variant="ghost" size="sm" disabled={reading} aria-label={`Stop following ${label}`} onClick={() => void onUnfollow(p.name)}>
         <X />
       </Button>
+      </div>
     </div>
   );
 
@@ -139,7 +149,14 @@ function Development({ project: p, ura, onUnfollow, onCompare }: {
   const bedrooms = byBedrooms(p);
   const trend = projectPriceRows(p);
   const market = marketForProject(p);
-  const compare = (row: BandRow) => onCompare({ kind: "project", name: p.name, label: `${label}, ${row.label}`, market, price: Math.round(row.prices!.p50), rent: Math.round(row.rents!.p50), lease });
+  const quotes = (row: BandRow) => {
+    const property = { ...EMPTY_PROPERTY, project: p.name, area_band: row.band };
+    return { price: referenceQuote(property, p, "price", "p50"), rent: referenceQuote(property, p, "rent", "p50") };
+  };
+  const compare = (row: BandRow) => {
+    const q = quotes(row);
+    if (q.price && q.rent) onCompare({ kind: "project", name: p.name, label: `${label}, ${row.label}`, market, price: q.price.amount, rent: q.rent.amount, lease, band: row.band, bedrooms: row.bedrooms });
+  };
 
   return (
     <div className="space-y-4 border-t pt-4 first:border-0 first:pt-0">
@@ -204,7 +221,7 @@ function Development({ project: p, ura, onUnfollow, onCompare }: {
                 </td>
                 <td className="py-2 pr-2 text-right tabular-nums">{row.yield === null ? "–" : yieldText(row.yield)}</td>
                 <td className="py-2 text-right">
-                  {row.prices && row.rents && (
+                  {quotes(row).price && quotes(row).rent && (
                     <Button variant="ghost" size="sm" className="h-7 px-2" aria-label={`Rent or buy: ${label}, ${row.label}`} onClick={() => compare(row)}>
                       <ArrowRight />
                     </Button>

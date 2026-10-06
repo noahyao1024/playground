@@ -2,6 +2,7 @@ import { DEFAULT_INPUTS, ESTIMATED, HOME_KINDS, INPUT_LIMITS, LOAN_TYPES, PRIVAT
 import { CPF_PR_RULES, CPF_RULES, GUIDANCE_LIMITS, newGuidance } from "./housing-guidance";
 import { MAX_PROJECTS } from "./housing-projects";
 import { housingAnalysisPaths, housingAnalysisSchemas } from "./housing-analysis-openapi";
+import { QUOTE_KINDS } from "./housing-property";
 
 /** Keep this inventory aligned with POST /api/housing; the contract test reads
  * the route's switch, so a new action cannot disappear from the description. */
@@ -63,12 +64,12 @@ export function housingOpenApi(origin: string) {
     openapi: "3.1.0",
     info: {
       title: "Playground Housing",
-      version: "3",
+      version: "4",
       description: [
         "Singapore housing market data, followed private developments and saved rent-or-buy scenario inputs.",
         "Use Authorization: Bearer <token>, generated in /housing → AI access or /finance → API access (or FINANCE_API_TOKEN). The owner's signed-in session also works. housing:read permits housing reads; finance:read permits finance and housing reads; finance:write permits both reads and writes. New tokens default to read-only; older tokens retain read/write permission. The contract omits operations outside the token's scope; ?read_only=true returns a compact read-only contract for GPT Actions even with an owner session. All responses are private, no-store. The description requires authentication too: download it from the page for import if your agent cannot authenticate its schema fetch.",
         "Money is S$, rates are percent unless stated otherwise. GET /api/housing reads saved data without contacting URA. A project's sales cover up to five years; rental records cover six quarters. Size is sqm for sales and sqft bands for rentals. GET /api/housing/analysis returns project P50 / means and, with scenario_id, the same projections and chart rows as the page. GET /api/housing/chart renders an authenticated SVG image. POST analysis / chart support read-only what-ifs, without saving inputs.",
-        "Agent workflow: GET /api/housing for the complete raw data and scenario ids; GET /api/housing/analysis?scenario_id=<id>&project=<optional URA name>&years=15 for calculations, checks, assumptions, 500 seeded historical replay scenarios and chart export URLs; fetch svg_url with the same Authorization header. Compare 10 / 15 / 20 / 30 years or POST unsaved input variants for sensitivity. Over 35 years, simulation is unavailable and the central projection still works. CPF uses monthly accrual and annual compounding on modelled transactions, not a CPF statement. Replay shares are not calibrated future probabilities. Native read-only MCP: POST /api/housing/mcp using Streamable HTTP and the same bearer header. The page includes client setup and a copyable Chinese analysis prompt.",
+        "Agent workflow: GET /api/housing for the complete raw data and scenario ids; GET /api/housing/analysis?scenario_id=<id>&project=<optional URA name>&years=15 for calculations, checks, assumptions, 500 seeded historical replay scenarios and chart export URLs; fetch svg_url with the same Authorization header. Compare 10 / 15 / 20 / 30 years or POST unsaved input variants for sensitivity. Over 35 years, simulation is unavailable and the central projection still works. CPF uses monthly accrual and annual compounding on modelled transactions, not a CPF statement. Replay shares are not calibrated future probabilities. Optional property metadata keeps explicit development, dimensions and source snapshots; property_context provides matched comparables without replacing quotes. comparison.breakdown provides each year's cumulative / annual PK flows, asset components and additive gap; cumulative-costs exports costs paid excluding principal and hypothetical sale fees. Native read-only MCP: POST /api/housing/mcp using Streamable HTTP and the same bearer header. The page includes client setup and a copyable Chinese analysis prompt.",
         "For bank loans, financing.outstanding_loans is independent of the ABSD property count. financing.borrower_age is the bank-assessed borrower age; absent this, guidance.age is assumed to describe a single borrower, or the lower LTV band is used conservatively when age is unknown. Eligibility sets minimum cash downpayment (5/10/25%), not the voluntarily chosen loan_share. Inputs exceeding estimated LTV / term limits are flagged, never certified as approved or silently overwritten.",
         "Save scenario inputs with the buyer's actual residency, property count and home / loan kind. Omitted inputs take the documented defaults. With guidance, confirm required buyer, lease and CPF facts before setting confirmed=true; salary CPF for a PR on the new rules also requires pr_since on or before as_of.",
         "Following a development persists its name before reading URA. A 200 can still report refresh.failures or state=no key: inspect the refresh result, found and read_at before treating data as current. Market refresh likewise reports partial source failures in refresh.failures. The shared finance document is /api/finance/openapi.",
@@ -135,8 +136,18 @@ export function housingOpenApi(origin: string) {
             auto:{type:"array",items:{type:"string",enum:[...ESTIMATED]},default:[],description:"Inputs that the page resolves from live market estimates; the saved numeric values are fallbacks."},
             guidance:ref("HousingGuidance"),
             financing:ref("HousingFinancing"),
+            property:ref("HousingProperty"),
           }, []),
           description:"Optional input fields default as documented. Existing saved values are preserved; bank cash requirements and CPF are recalculated under the corrected rules. Without guidance CPF contributions are manual, and the monthly model starts in January 2026. This endpoint saves inputs only.",
+        },
+        HousingAreaBand: object({low:nullable("number",{minimum:0}),high:nullable("number",{minimum:1})}),
+        HousingQuoteSource: {
+          ...object({kind:{type:"string",enum:[...QUOTE_KINDS]},amount:{type:"number",minimum:0,maximum:100_000_000},project:nullable("string",{maxLength:80}),area_sqft:nullable("number",{minimum:1,maximum:1_000_000}),band:{oneOf:[ref("HousingAreaBand"),{type:"null"}]},bedrooms:nullable("integer",{minimum:0,maximum:20}),bathrooms:nullable("integer",{minimum:1,maximum:20}),read_at:nullable("string",{format:"date-time"}),url:nullable("string",{format:"uri",maxLength:4096})},["kind","amount"]),
+          description:"User-recorded provenance snapshot, not a verified scrape. listing requires a single-listing PropertyGuru HTTPS URL; URA kinds require project. amount must still match price/rent to label it as applied. read_at is URA read time or the manual listing-quote recording time. Dimensions are the conditions when adopted, not automatically refreshed.",
+        },
+        HousingProperty: {
+          ...object({project:nullable("string",{maxLength:80}),area:nullable("number",{minimum:1,maximum:1_000_000}),area_unit:{type:"string",enum:["sqft","sqm"],default:"sqft"},area_band:{oneOf:[ref("HousingAreaBand"),{type:"null"}],description:"Optional chosen reference range; never an exact property area."},bedrooms:nullable("integer",{minimum:0,maximum:20,description:"0 denotes a studio."}),bathrooms:nullable("integer",{minimum:1,maximum:20}),buy_url:nullable("string",{format:"uri",maxLength:4096}),rent_url:nullable("string",{format:"uri",maxLength:4096}),price_source:{oneOf:[ref("HousingQuoteSource"),{type:"null"}]},rent_source:{oneOf:[ref("HousingQuoteSource"),{type:"null"}]}},[]),
+          description:"Optional property identity and source links, saved with the scenario. Links must use HTTPS on propertyguru.com.sg or www.propertyguru.com.sg; no credentials / nonstandard port. URLs are stored, not scraped. A search URL supplies filter boundaries, never an exact quote or area. Project does not override numeric inputs, market or lease on API calls; the page applies project details only when explicitly linked. Sales match area and exclude bulk deals, rentals also match bedrooms where supplied; URA has no bathroom field.",
         },
         HousingGuidance: object({
           ...Object.fromEntries(Object.entries(GUIDANCE_LIMITS).map(([key,[minimum,maximum]]) => [key,{

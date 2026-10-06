@@ -3,6 +3,7 @@ import { addMonths } from "@/lib/dates";
 import { loanSchedule, type LoanRateChangeTerms } from "@/lib/finance";
 import { bankFinancing, parseFinancing, type HousingFinancing } from "./housing-financing";
 import { CpfHousingLedger, CpfOaLedger } from "./housing-cpf";
+import { parseProperty, type HousingProperty } from "./housing-property";
 
 /** /housing's arithmetic, shared by the page and the server: quarters, the
  *  market's figures as the page reads them, Singapore's stamp duties and
@@ -312,6 +313,8 @@ export type ScenarioInputs = {
   auto: Estimated[];
   guidance?: HousingGuidance;
   financing?: HousingFinancing;
+  /** Optional property identity and quote snapshots; existing inputs are never inferred from a scenario name. */
+  property?: HousingProperty;
 };
 
 export const DEFAULT_INPUTS: ScenarioInputs = {
@@ -348,7 +351,7 @@ export const DEFAULT_INPUTS: ScenarioInputs = {
 };
 
 /** What each number may be, and whether it is whole. */
-export const INPUT_LIMITS: Record<Exclude<keyof ScenarioInputs, "residency" | "kind" | "loan_type" | "market" | "auto" | "guidance" | "financing">, [number, number, boolean?]> = {
+export const INPUT_LIMITS: Record<Exclude<keyof ScenarioInputs, "residency" | "kind" | "loan_type" | "market" | "auto" | "guidance" | "financing" | "property">, [number, number, boolean?]> = {
   nth: [1, 3, true],
   price: [10_000, 100_000_000],
   loan_share: [0, 90],
@@ -414,6 +417,10 @@ export function parseInputs(raw: unknown): ScenarioInputs {
     try { out.financing = parseFinancing(given.financing); }
     catch (err) { throw new InputError(err instanceof Error ? err.message : "Invalid financing"); }
   }
+  if (given.property !== undefined) {
+    try { out.property = parseProperty(given.property); }
+    catch (err) { throw new InputError(err instanceof Error ? err.message : "Invalid property"); }
+  }
   return out;
 }
 
@@ -438,7 +445,7 @@ export function readInputs(raw: unknown): ScenarioInputs {
   } catch {
     const given = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
     const out: ScenarioInputs = { ...DEFAULT_INPUTS };
-    for (const key of [...Object.keys(DEFAULT_INPUTS), "guidance", "financing"] as Array<keyof ScenarioInputs>) {
+    for (const key of [...Object.keys(DEFAULT_INPUTS), "guidance", "financing", "property"] as Array<keyof ScenarioInputs>) {
       try {
         (out as Record<string, unknown>)[key] = parseInputs({ [key]: given[key] })[key];
       } catch { /* this one stays at its default */ }
@@ -468,6 +475,12 @@ export function clampInputs(inputs: ScenarioInputs): ScenarioInputs {
 
 /** A year of the comparison: where each choice stands at its end -- the home
  *  as though sold then -- and what each costs a month during it. */
+export const HOUSING_CUMULATIVE_FIELDS = [
+  "cash_budget", "buy_cash_paid", "buy_cpf_paid", "rent_cash_paid", "mortgage_principal", "mortgage_interest",
+  "maintenance", "property_tax", "upkeep", "replacement_rent", "replacement_rent_fees", "rent", "rent_fees",
+  "buy_invested", "rent_invested", "buy_investment_gain", "rent_investment_gain", "cpf_contributions", "buy_cpf_interest", "rent_cpf_interest",
+] as const;
+export type HousingCumulative = Record<(typeof HOUSING_CUMULATIVE_FIELDS)[number], number>;
 export type ProjectionYear = {
   year: number;
   home_value: number;
@@ -498,6 +511,10 @@ export type ProjectionYear = {
   cpf_rent_pending_interest: number;
   cpf_housing_principal: number;
   cpf_housing_interest: number;
+  buy_investments: number;
+  rent_investments: number;
+  /** Nominal cash flows / actual accrued gains since the baseline; excludes hypothetical sale costs. */
+  cumulative: HousingCumulative;
 };
 
 /** A month of a year, on average, owning taken apart: what goes out, and what
@@ -553,7 +570,7 @@ export type Projection = {
   notes: string[];
 };
 
-const round = (n: number) => Math.round(n * 100) / 100;
+const round = (n: number) => { const value = Math.round(n * 100) / 100; return value === 0 ? 0 : value; };
 const monthly = (yearlyPercent: number) => (1 + yearlyPercent / 100) ** (1 / 12) - 1;
 
 /** How the world moves while a comparison plays out, month by month from month
@@ -665,11 +682,18 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
   let ownSpent = bsd + absd + i.buy_costs + i.renovation, rentSpent = 0;
   let balance = loan;
   const years: ProjectionYear[] = [];
+  const cumulative = Object.fromEntries(HOUSING_CUMULATIVE_FIELDS.map(key => [key, 0])) as HousingCumulative;
+  cumulative.cash_budget = fromCash;
+  cumulative.buy_cash_paid = fromCash;
+  cumulative.buy_cpf_paid = fromCpf;
+  cumulative.rent_invested = fromCash;
 
   const yearEnd = (year: number, ownMonthly: number, rentMonthly: number) => {
     const value = i.price * e.price[year * 12] * leaseFactor(i.guidance, year * 12);
     const saleCosts = value * (i.sell_costs / 100) + sellerStampDuty(value, year);
     const rateThen = year === 0 ? schedule[0]?.rate : balance > 0 ? schedule[year * 12 - 1]?.rate : undefined;
+    cumulative.buy_cpf_interest = buyerOa.total - i.cpf_balance - cumulative.cpf_contributions + cumulative.buy_cpf_paid;
+    cumulative.rent_cpf_interest = renterOa.total - i.cpf_balance - cumulative.cpf_contributions;
     years.push({
       year,
       home_value: round(value),
@@ -686,6 +710,8 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
       cpf_buy_balance: round(buyerOa.balance), cpf_rent_balance: round(renterOa.balance),
       cpf_buy_pending_interest: round(buyerOa.pending), cpf_rent_pending_interest: round(renterOa.pending),
       cpf_housing_principal: round(housingCpf.principal), cpf_housing_interest: round(housingCpf.interest),
+      buy_investments: round(cashBuy), rent_investments: round(cashRent),
+      cumulative: Object.fromEntries(HOUSING_CUMULATIVE_FIELDS.map(key => [key, round(cumulative[key])])) as HousingCumulative,
     });
   };
   const firstOwn = (schedule[0]?.payment ?? 0) + (i.maintenance + i.upkeep / 12) * e.costs[0] + ownerOccupierTax(i.annual_value * e.rent[0]) / 12;
@@ -719,6 +745,8 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
     sum.opportunity += inHomeCash * grow + inHomeCpf * i.cpf_rate / 1200;
 
     // The month's growth on what each holds, then the month's money.
+    cumulative.buy_investment_gain += cashBuy * grow;
+    cumulative.rent_investment_gain += cashRent * grow;
     cashBuy *= 1 + grow;
     cashRent *= 1 + grow;
     const contribution = i.guidance?.cpf_mode === "none" ? 0 : i.guidance?.cpf_mode === "salary" ? salaryOa(i.guidance, m - 1, i.residency) : i.cpf_monthly;
@@ -733,6 +761,22 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
     const budget = Math.max(ownCash, rentMonthly);
     cashBuy += budget - ownCash;
     cashRent += budget - rentMonthly;
+    cumulative.cash_budget += budget;
+    cumulative.buy_cash_paid += ownCash;
+    cumulative.buy_cpf_paid += byCpf;
+    cumulative.rent_cash_paid += rentMonthly;
+    cumulative.mortgage_principal += period?.principal ?? 0;
+    cumulative.mortgage_interest += period?.interest ?? 0;
+    cumulative.maintenance += expired ? 0 : i.maintenance * e.costs[renewal];
+    cumulative.upkeep += expired ? 0 : i.upkeep / 12 * e.costs[renewal];
+    cumulative.property_tax += tax;
+    cumulative.replacement_rent += expired ? rent : 0;
+    cumulative.replacement_rent_fees += expired ? i.rent_costs / 12 : 0;
+    cumulative.rent += rent;
+    cumulative.rent_fees += i.rent_costs / 12;
+    cumulative.buy_invested += budget - ownCash;
+    cumulative.rent_invested += budget - rentMonthly;
+    cumulative.cpf_contributions += contribution;
 
     ownSpent += (period?.interest ?? 0) + running + tax + (expired ? rent + i.rent_costs / 12 : 0);
     rentSpent += rentMonthly;

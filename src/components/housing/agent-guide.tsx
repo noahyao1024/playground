@@ -7,10 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { housingAgentPrompt } from "@/lib/housing-agent-prompt";
 
-export type HousingAgentContext = { scenarioId?: string | null; projects?: string[] };
+export type HousingAgentContext = { scenarioId?: string | null; projects?: string[]; project?: string | null };
 
-export function HousingAgentGuide({ scenarioId, projects = [] }: HousingAgentContext) {
-  const [project, setProject] = useState("");
+export function HousingAgentGuide({ scenarioId, projects = [], project: selectedProject }: HousingAgentContext) {
+  const [project, setProject] = useState(selectedProject && projects.includes(selectedProject) ? selectedProject : "");
   const origin = typeof window === "undefined" ? "" : window.location.origin;
   const prompt = housingAgentPrompt(origin, scenarioId, project);
   const codex = `[mcp_servers.playground_housing]\nurl = "${origin}/api/housing/mcp"\nbearer_token_env_var = "FINANCE_TOKEN"`;
@@ -53,6 +53,7 @@ export function HousingAgentGuide({ scenarioId, projects = [] }: HousingAgentCon
       <Label htmlFor="agent-project">Prompt 中指定的楼盘（选填）</Label>
       <select id="agent-project" value={project} onChange={e=>setProject(e.target.value)} className="h-9 rounded-md border bg-background px-2 text-sm">
         <option value="">让 AI 列出关注楼盘后选择</option>
+        {project && !projects.includes(project) && <option value={project}>{project}（未关注）</option>}
         {projects.map(name=><option key={name} value={name}>{name}</option>)}
       </select>
     </div>}

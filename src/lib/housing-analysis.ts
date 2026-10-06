@@ -5,8 +5,10 @@ import { comparisonCharts, marketChartId, projectCharts, type Chart } from "./ho
 import { SIMULATED_YEARS, simulate, summarize as summarizeFutures, type Stress } from "./housing-model";
 import { byBand, byBedrooms, byQuarter, lastYear, leaseOf, marketForProject, psfOf, summarize, type Project } from "./housing-projects";
 import { bankFinancing } from "./housing-financing";
+import { propertyContext, quoteSource } from "./housing-property";
+import { breakdownAtYear } from "./housing-breakdown";
 
-export const ANALYSIS_VERSION = "2";
+export const ANALYSIS_VERSION = "3";
 export type AnalysisCheck = { code: string; fields: string[]; message: string };
 
 function checks(comparison: Comparison, project?: Project): AnalysisCheck[] {
@@ -28,6 +30,13 @@ function checks(comparison: Comparison, project?: Project): AnalysisCheck[] {
     const lease=leaseOf(project.tenure);
     if (g && lease && (g.tenure !== lease.tenure || (lease.tenure === "leasehold" && (g.lease_start !== lease.lease_start || g.lease_term !== lease.lease_term)))) add("project_lease_mismatch",["guidance.tenure","guidance.lease_start","guidance.lease_term"],`选定项目的 URA 租约记录为 ${project.tenure}，与情景不一致。核对产权文件后修正，API 不会替你改写保存的数据。`);
     if (i.kind === "private" && i.market !== marketForProject(project)) add("project_market",["market"],`项目对应市场为 ${marketForProject(project)}，当前使用 ${i.market}；若比较此项目，应核对市场选择。`);
+  }
+  if (i.property) {
+    if (i.property.project && !project) add("property_project_unavailable",["property.project"],"关联楼盘目前没有可用资料；计算保留已保存金额、区域与地契，不推断为已匹配。");
+    for (const key of ["price","rent"] as const) {
+      const source = quoteSource(i,key);
+      if (source.source && (!source.matches_input || !source.context_matches)) add(`property_${key}_source_changed`,[key,"property"],"金额或房源条件已改变，来源快照需重新核对；不自动替换你的输入。");
+    }
   }
   return out;
 }
@@ -65,7 +74,9 @@ export function analyseHousing(market: MarketData, projects: Project[], inputs: 
       financing:c.resolved.loan_type === "bank" && c.resolved.loan_share > 0 ? bankFinancing(c.resolved) : null,
       simulation_method:{kind:"historical_block_bootstrap",block_quarters:8,seed:1,interpretation:"Shares of historical replay scenarios, not calibrated probabilities of future outcomes."},
       history:{from:c.model.history[0]?.quarter ?? null,to:c.model.history.at(-1)?.quarter ?? null,quarters:c.model.history.length},
-      checks:checks(c,selectedProject),calculation_rules:CALCULATION_RULES,
+      checks:checks(c,selectedProject ?? projects.find(p=>p.name === c.resolved.property?.project)),calculation_rules:CALCULATION_RULES,
+      property_context:propertyContext(c.resolved,projects),
+      breakdown:c.projection.years.map(row=>breakdownAtYear(c.projection,row.year)),
     } : null,
     projects:analyseProjects(projects),charts,market_charts,
   };
