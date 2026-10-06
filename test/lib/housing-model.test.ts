@@ -43,14 +43,16 @@ describe("the estimates, from ten-year spans", () => {
   const cpi = grown("cpi", "ALL", "all", "1990-Q1", 49, (k) => quarterly(rate(k)));
   const market: MarketData = { series: [shares, ppi, rri, cpi], refreshed_at: null };
   const pct = (r: number) => Math.round(r * 1000) / 10;
+  /** The investments' estimate: the index's, less 0.3% a year for holding it. */
+  const net = (r: number) => Math.round((pct(r) - 0.3) * 10) / 10;
 
   it("takes the investments and the home's price at the lower quartile, and says why", () => {
     const { estimates } = marketModel(market, { kind: "private", market: "OCR:non-landed" });
-    expect(estimates.invest_return!.value).toBe(pct(span(2)));
+    expect(estimates.invest_return!.value).toBe(net(span(2)));
     expect(estimates.growth!.value).toBe(pct(span(2)));
     expect(span(2)).not.toBeCloseTo(span(4), 3);
     expect(estimates.invest_return!.reason).toBe(
-      `The S&P 500 with dividends, in Singapore dollars, earned more than ${(span(2) * 100).toFixed(1)}% a year in three of every four ten-year spans since 2003, ${(span(4) * 100).toFixed(1)}% in the middle one. The lower figure is taken, to be conservative: the years ahead need not be as kind.`,
+      `The S&P 500 with dividends, in Singapore dollars, earned more than ${(span(2) * 100).toFixed(1)}% a year in three of every four ten-year spans since 2003, ${(span(4) * 100).toFixed(1)}% in the middle one. The lower figure is taken, to be conservative: the years ahead need not be as kind. Less 0.3% a year for holding it: the US tax withheld on its dividends and an index fund's fees.`,
     );
     expect(estimates.growth!.reason).toMatch(/^URA's price index for condos outside central grew more than 2\.4% a year .* since 2004, 2\.8% in the middle one\. The lower figure is taken, as the investments' is/);
   });
@@ -73,7 +75,7 @@ describe("the estimates, from ten-year spans", () => {
   it("bridges a quarter or two missing, and lets a longer gap break the spans", () => {
     const holed = (gap: number) => ({ series: [{ ...shares, values: shares.values.map((v, k) => (k >= 20 && k < 20 + gap ? null : v)) }], refreshed_at: null });
     // Moving evenly over the hole changes no span that spans it: the same nine.
-    expect(marketModel(holed(2), { kind: "hdb", market: "ALL:non-landed" }).estimates.invest_return!.value).toBe(pct(span(2)));
+    expect(marketModel(holed(2), { kind: "hdb", market: "ALL:non-landed" }).estimates.invest_return!.value).toBe(net(span(2)));
     expect(marketModel(holed(3), { kind: "hdb", market: "ALL:non-landed" }).estimates.invest_return).toBeUndefined();
   });
 
@@ -198,15 +200,17 @@ const calm = (n = 40) => model(Array.from({ length: n }, () => ({})));
 describe("estimatesFor and withEstimates", () => {
   const bank: ScenarioInputs = { ...DEFAULT_INPUTS, kind: "private", loan_type: "bank", lock_years: 2, spread: 0.6 };
 
-  it("prices a bank's fixed rate at SORA's expected average over the lock-in and the spread", () => {
+  it("prices a bank's fixed rate at SORA's expected average over the lock-in and what banks ask over it, whatever the spread after", () => {
     const expected = Array.from({ length: 141 }, (_, j) => 1 + j * 0.1);
     const m = model([{}], { expected, latest: { quarter: "2026-Q3", value: 1 } });
-    // Eight quarters, each the average of its ends: 1.4 on average.
+    // Eight quarters, each the average of its ends: 1.4 on average, and 0.3 over it.
     expect(estimatesFor(m, bank).loan_rate).toEqual({
-      value: 2,
-      reason: "Fixed for 2 years, priced near what floating would cost over them: SORA is expected to average 1.40%, and the spread is 0.60%.",
+      value: 1.7,
+      reason: "Fixed for 2 years, priced as banks price it: SORA is expected to average 1.40% over them, and banks ask 0.30% over that. After, SORA and the 0.60% spread.",
     });
-    expect(estimatesFor(m, { ...bank, lock_years: 1 }).loan_rate!.value).toBe(1.8);
+    // The spread is what is charged after the lock-in: it does not price the fixed rate.
+    expect(estimatesFor(m, { ...bank, spread: 1.2 }).loan_rate!.value).toBe(1.7);
+    expect(estimatesFor(m, { ...bank, lock_years: 1 }).loan_rate!.value).toBe(1.5);
     expect(estimatesFor(m, { ...bank, lock_years: 0 }).loan_rate).toEqual({
       value: 1.6,
       reason: "Floating from the start: SORA, 1.00% in Q3 2026, and the 0.60% spread.",

@@ -314,6 +314,12 @@ describe("rentOrBuy in a moving economy", () => {
     expect(rentOrBuy(DEFAULT_INPUTS, steadyEconomy(DEFAULT_INPUTS))).toEqual(rentOrBuy(DEFAULT_INPUTS));
   });
 
+  it("charges a new comparison's bank loan SORA and 0.7% after its lock-in, as banks' spreads settle", () => {
+    const sora = Array(months + 1).fill(1.2);
+    const loan = { ...DEFAULT_INPUTS, kind: "private" as const, loan_type: "bank" as const, lock_years: 2 };
+    expect(bankRateChanges(loan, sora, loan.loan_years * 12)[0]).toEqual({ effective_date: "2028-01-01", rate: 1.9, payment: null });
+  });
+
   it("fixes a bank loan's rate for its lock-in, then charges SORA and the spread, resetting the instalment every three months", () => {
     // SORA at 1% for two years, then 3%, then 2% from the fourth year.
     const sora = Array.from({ length: months + 1 }, (_, m) => (m <= 24 ? 1 : m <= 36 ? 3 : 2));

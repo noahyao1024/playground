@@ -322,7 +322,8 @@ export const DEFAULT_INPUTS: ScenarioInputs = {
   loan_rate: 2.6,
   loan_years: 25,
   lock_years: 2,
-  spread: 0.5,
+  // After a lock-in, banks' spreads over 3M SORA settle at 0.65-0.75.
+  spread: 0.7,
   buy_costs: 5_000,
   renovation: 30_000,
   maintenance: 90,
