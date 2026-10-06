@@ -35,12 +35,12 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.3.6",
-    "pg": "^8.23.0",
-    "shadcn": "^4.0.2",
+    "eslint-config-next": "16.3.8",
+    "pg": "^8.23.1",
+    "shadcn": "^4.21.1",
     "tailwindcss": "^4",
     "typescript": "^5",
-    "vitest": "^5.0.2"
+    "vitest": "^5.0.3"
   },
   "overrides": {
     "baseline-browser-mapping": "^2.11.0"
