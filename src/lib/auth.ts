@@ -1,13 +1,14 @@
-import NextAuth from "next-auth";
+import NextAuth, { type DefaultSession } from "next-auth";
 import Google from "next-auth/providers/google";
+import { withRoles, type Roles } from "@/lib/access";
 
-export const ALLOWED_EMAILS = [
-  "nicholasyao.sg@gmail.com",
-  "hi@noahyao.me",
-];
+export { ALLOWED_EMAILS, isAllowedEmail } from "@/lib/access";
 
-export function isAllowedEmail(email: string | null | undefined): boolean {
-  return !!email && ALLOWED_EMAILS.includes(email);
+declare module "next-auth" {
+  /** The session the browser gets says what its address may do (`withRoles`). */
+  interface Session {
+    user?: DefaultSession["user"] & Partial<Roles>;
+  }
 }
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
@@ -19,5 +20,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   ],
   pages: {
     signIn: "/auth/signin",
+  },
+  callbacks: {
+    // The browser is told what the signed-in address may do, never who else may.
+    session: ({ session }) => withRoles(session),
   },
 });

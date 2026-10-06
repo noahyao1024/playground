@@ -13,7 +13,6 @@ import {
   FileText,
 } from "lucide-react";
 import { motion } from "framer-motion";
-import { isFinanceOwner } from "@/lib/access";
 
 const tools = [
   {
@@ -73,7 +72,7 @@ const overview = [
 
 export default function HomePage() {
   const { data: session } = useSession();
-  const visibleTools = isFinanceOwner(session?.user?.email) ? [...tools, ...owned] : tools;
+  const visibleTools = session?.user?.isOwner === true ? [...tools, ...owned] : tools;
 
   return (
     <div className="space-y-12">

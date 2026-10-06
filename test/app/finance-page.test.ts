@@ -35,4 +35,16 @@ describe("/finance", () => {
     expect(page.type).toBe(FinanceApp);
     expect(await generateMetadata()).toEqual({ title: "Finance | Playground", robots: { index: false, follow: false } });
   });
+
+  it("is open to an address in ADMIN_EMAILS too, and only while it is there", async () => {
+    session.current = { user: { email: "Partner@Example.com" } };
+    expect(await missing(FinancePage)).toBe(true);
+    vi.stubEnv("ADMIN_EMAILS", "other@example.com, partner@example.com");
+    try {
+      expect(((await FinancePage()) as { type: unknown }).type).toBe(FinanceApp);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(await missing(FinancePage)).toBe(true);
+  });
 });
