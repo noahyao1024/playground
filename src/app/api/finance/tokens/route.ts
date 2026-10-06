@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
   const token = newFinanceToken();
   const { data, error } = await db.from("finance_api_tokens")
     .insert({ name, scope, token_sha256: sha256Hex(token) }).select("id,name,created_at,scope").single();
-  if (missingTokenScope(error)) return json({ error: "Token permissions are being upgraded. Try again after the migration." }, 503);
+  if (missingTokenScope(error)) return json({ error: "Token permissions are being upgraded. Please try again shortly." }, 503);
   if (error) return json({ error: reason(error) }, 500);
   return json({ ...shown(data as Row), token }, 201);
 }
