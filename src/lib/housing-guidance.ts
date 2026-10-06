@@ -14,7 +14,6 @@ export type HousingGuidance = {
   tenure: "unknown" | "freehold" | "leasehold";
   lease_start: number | null;
   lease_term: number;
-  build_year: number | null;
   cpf_mode: "manual" | "salary" | "none";
   salary: number | null;
   age: number | null;
@@ -25,7 +24,7 @@ export type HousingGuidance = {
 };
 export function newGuidance(asOf: string): HousingGuidance {
   return { version: 1, cpf_rules: "2026-2027-v1", as_of: asOf, annual_value_auto: true, confirmed: false, tenure: "unknown", lease_start: null, lease_term: 99,
-    build_year: null, cpf_mode: "none", salary: null, age: null, retirement_age: 65,
+    cpf_mode: "none", salary: null, age: null, retirement_age: 65,
     cpf_eligible: false, cpf_limit: null };
 }
 export function parseGuidance(raw: unknown): HousingGuidance {
@@ -46,7 +45,9 @@ export function parseGuidance(raw: unknown): HousingGuidance {
       out[key] = given[key];
     }
   }
-  const bounds = { lease_start: [1800, 2200], lease_term: [1, 999], build_year: [1800, 2200],
+  // A key not named here -- build_year, kept by comparisons saved before it was
+  // dropped -- is passed over.
+  const bounds = { lease_start: [1800, 2200], lease_term: [1, 999],
     salary: [0, 1_000_000], age: [16, 100], retirement_age: [16, 100], cpf_limit: [0, 100_000_000] } as const;
   for (const [key, [min,max]] of Object.entries(bounds)) {
     const v = given[key];

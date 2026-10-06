@@ -247,7 +247,9 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   the arithmetic it was saved with. With it, a comparison is shown and saved only once
   `comparisonReady` (the route refuses one that is not): the buyer confirmed, a lease that has
   not run out, and for CPF from a salary an eligible buyer of known age. A lease runs from
-  1 January of its first year, counted at the `as_of` date kept with the scenario; the home's
+  1 January of its first year (the lease's, never the TOP year's: the form no longer asks that,
+  which counted for nothing, and `parseGuidance` passes over a `build_year` saved before),
+  counted at the `as_of` date kept with the scenario; the home's
   value carries a 3% discounted right-to-occupy factor, nothing at expiry, after which the
   buyer pays rent. CPF from a salary is the Ordinary Account's share at CPF's 2026 rates and
   its announced 2027 ones, ordinary wages to S$8,000; later years keep 2027's. When CPF
@@ -269,7 +271,10 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   one running and the five before it read (`RENT_QUARTERS`), as URA publishes a month two weeks
   after it ends and the page sums up the twelve months to the latest contract. Only followed
   developments are kept. A development's sales are replaced whole
-  on each read, as URA gives a sale no id. The arithmetic — P50 and average by URA's rental size
+  on each read, as URA gives a sale no id. Its `tenure` is kept as its sales give it
+  ("99 yrs lease commencing from 2012", "Freehold"; '' where they give none), `leaseOf` reads it,
+  and comparing one of its sizes fills the comparison's lease from it. One read before the column
+  was there is read again once to fill it; before its migration none is written. The arithmetic — P50 and average by URA's rental size
   bands and by quarter, the yields — is `src/lib/housing-projects.ts`. The daily job's log never
   names a development: which ones the owner follows is the owner's business.
 - Chart colours are `--series-1` to `--series-3` in `globals.css`, a palette checked for

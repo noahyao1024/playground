@@ -37,6 +37,19 @@ export type ProjectRent = {
   bedrooms: number | null;
 };
 
+/** A tenure as URA writes it, as the comparison's lease: freehold, or a lease
+ *  of so many years from a year. Null where it says neither. */
+export type Lease = { tenure: "freehold" | "leasehold"; lease_start: number | null; lease_term: number };
+export function leaseOf(tenure: string | null | undefined): Lease | null {
+  if (!tenure) return null;
+  if (/freehold/i.test(tenure)) return { tenure: "freehold", lease_start: null, lease_term: 99 };
+  const m = /(\d{1,3})\s*(?:yrs?|years?)\b.*?\b(\d{4})\b/i.exec(tenure);
+  if (!m) return null;
+  const term = Number(m[1]), start = Number(m[2]);
+  if (term < 1 || term > 999 || start < 1800 || start > 2200) return null;
+  return { tenure: "leasehold", lease_start: start, lease_term: term };
+}
+
 export type Project = {
   name: string;
   street: string | null;
@@ -47,6 +60,9 @@ export type Project = {
   read_at: string | null;
   /** Whether URA had anything under its name; null until it has been read. */
   found: boolean | null;
+  /** Its tenure as URA's sales give it -- "Freehold", "99 yrs lease commencing
+   *  from 2012" -- null until read, "" when they gave none. */
+  tenure: string | null;
   sales: ProjectSale[];
   rents: ProjectRent[];
 };

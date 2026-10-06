@@ -125,8 +125,8 @@ export function bandOf(raw: unknown): { low: number | null; high: number | null 
 const SALE_TYPES: Record<string, SaleType> = { "1": "new", "2": "sub", "3": "resale" };
 const SEGMENTS = new Set(["CCR", "RCR", "OCR"]);
 
-/** Where URA puts a development. */
-export type Place = { street: string | null; district: string | null; segment: Segment | null };
+/** Where URA puts a development, and its tenure as its sales give it. */
+export type Place = { street: string | null; district: string | null; segment: Segment | null; tenure: string | null };
 
 type UraProject = { project?: unknown; street?: unknown; marketSegment?: unknown; transaction?: unknown; rental?: unknown };
 
@@ -135,13 +135,17 @@ function projectsIn(result: unknown): UraProject[] {
   return result.filter((p): p is UraProject => typeof p === "object" && p !== null);
 }
 
-function placeOf(p: UraProject, district: unknown): Place {
+/** A sale's tenure as URA writes it, or null. */
+const tenureOf = (raw: unknown) => (typeof raw === "string" && raw.trim() ? raw.trim().slice(0, 80) : null);
+
+function placeOf(p: UraProject, district: unknown, tenure?: unknown): Place {
   const segment = String(p.marketSegment ?? "").trim().toUpperCase();
   const d = String(district ?? "").trim();
   return {
     street: typeof p.street === "string" && p.street.trim() ? p.street.trim() : null,
     district: /^\d{1,2}$/.test(d) ? d.padStart(2, "0") : null,
     segment: SEGMENTS.has(segment) ? (segment as Segment) : null,
+    tenure: tenureOf(tenure),
   };
 }
 
@@ -166,7 +170,9 @@ export function salesIn(result: unknown, followed: ReadonlySet<string>): { sales
         property_type: typeof t.propertyType === "string" && t.propertyType.trim() ? t.propertyType.trim() : null,
         units: Math.max(1, Math.round(positive(t.noOfUnits) ?? 1)),
       });
-      if (!places.has(name)) places.set(name, placeOf(p, t.district));
+      const place = places.get(name);
+      if (!place) places.set(name, placeOf(p, t.district, t.tenure));
+      else place.tenure ??= tenureOf(t.tenure);
     }
     sales.set(name, list);
   }
@@ -231,16 +237,20 @@ export async function refreshProjects(db: SupabaseClient, {
   spacing,
 }: { key?: string; now?: Date; only?: string; fetcher?: typeof fetch; spacing?: number } = {}): Promise<ProjectsRefresh> {
   const out: ProjectsRefresh = { state: "read", followed: 0, read: 0, sales: 0, rents: 0, failures: [] };
-  const { data, error } = await db.from("housing_projects").select("name, district, read_at").order("name");
+  const { data, error } = await db.from("housing_projects").select("*").order("name");
   if (error) {
     if (MISSING_TABLE.has(error.code)) return { ...out, state: "unavailable" };
     throw error;
   }
-  const projects = (data ?? []) as Array<{ name: string; district: string | null; read_at: string | null }>;
+  const projects = (data ?? []) as Array<{ name: string; district: string | null; read_at: string | null; tenure?: string | null }>;
   out.followed = projects.length;
   if (!projects.length) return { ...out, state: "none followed" };
   if (!key) return { ...out, state: "no key" };
-  const due = projects.filter((p) => (only !== undefined ? p.name === only : !p.read_at || now.getTime() - Date.parse(p.read_at) >= WEEK_MS));
+  // Before its migration there is no tenure column, and none is written.
+  const keepsTenure = projects.some((p) => "tenure" in p);
+  // Due: never read, read a week ago, or read before its tenure was kept.
+  const due = projects.filter((p) => (only !== undefined ? p.name === only
+    : !p.read_at || now.getTime() - Date.parse(p.read_at) >= WEEK_MS || (keepsTenure && p.tenure === null)));
   if (!due.length) return { ...out, state: "not due" };
 
   const ura = uraClient({ key, fetcher, spacing });
@@ -249,7 +259,10 @@ export async function refreshProjects(db: SupabaseClient, {
   const keepPlaces = (found: Map<string, Place>) => {
     for (const [name, place] of found) {
       const had = places.get(name);
-      places.set(name, { street: had?.street ?? place.street, district: had?.district ?? place.district, segment: had?.segment ?? place.segment });
+      places.set(name, {
+        street: had?.street ?? place.street, district: had?.district ?? place.district,
+        segment: had?.segment ?? place.segment, tenure: had?.tenure ?? place.tenure,
+      });
     }
   };
 
@@ -321,6 +334,8 @@ export async function refreshProjects(db: SupabaseClient, {
       if (place?.street) update.street = place.street;
       if (place?.district) update.district = place.district;
       if (place?.segment) update.segment = place.segment;
+      // A tenure once its sales are read: "" where they gave none, so it is not read again for it.
+      if (keepsTenure && (place?.tenure || allSales)) update.tenure = place?.tenure ?? "";
       if (mine.length + leases > 0) update.found = true;
       else if (complete) update.found = false;
       if (complete) update.read_at = now.toISOString();
@@ -341,7 +356,8 @@ type ProjectRow = Omit<Project, "sales" | "rents">;
 /** Every development followed, with its records, as the page reads them. None
  *  before the tables' migration is applied. */
 export async function readProjects(db: SupabaseClient): Promise<Project[]> {
-  const { data, error } = await db.from("housing_projects").select("name, street, district, segment, added_at, read_at, found").order("added_at").order("name");
+  // Every column: before its migration there is no tenure, and the page reads it as unknown.
+  const { data, error } = await db.from("housing_projects").select("*").order("added_at").order("name");
   if (error) {
     if (MISSING_TABLE.has(error.code)) return [];
     throw error;
@@ -356,7 +372,8 @@ export async function readProjects(db: SupabaseClient): Promise<Project[]> {
   ]);
   // Numeric columns may come as text; each record as the page takes it.
   return projects.map((p) => ({
-    ...p,
+    name: p.name, street: p.street, district: p.district, segment: p.segment, added_at: p.added_at, read_at: p.read_at, found: p.found,
+    tenure: typeof p.tenure === "string" ? p.tenure : null,
     sales: sales.filter((s) => s.project === p.name).map((s) => ({
       month: s.month, price: Number(s.price), area_sqm: Number(s.area_sqm), floor_range: s.floor_range,
       sale_type: s.sale_type, property_type: s.property_type, units: Number(s.units),

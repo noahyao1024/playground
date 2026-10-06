@@ -215,7 +215,8 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
   after. The page shows the middle (P50) and the average of the latest year's
   prices, prices a square foot and rents, by size as URA bands its rental
   contracts, the gross yield, and the price a square foot quarter by quarter;
-  a size's middle price and rent fill Rent or buy.
+  a size's middle price and rent fill Rent or buy, with the lease URA records
+  for the development, so its decline is counted without anything typed.
 - **Across 500 futures**: each replays the quarters since 2006 two years at a
   time from random places, every series from the same quarter, so prices,
   rents, costs, shares and SORA move together as they did — rents up while

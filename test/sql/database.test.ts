@@ -703,6 +703,12 @@ describe.skipIf(!SERVER)("database", () => {
         expect((await failure(c, sql)).code, sql).toBe("23514");
       }
       expect((await failure(c, `insert into housing_project_sales (project, month, price, area_sqm) values ('NOWHERE', '2026-08-01', 1, 1)`)).code).toBe("23503");
+      // Its tenure as URA writes it, kept to a sensible length, and as private as the rest.
+      await c.query(`update housing_projects set tenure = '99 yrs lease commencing from 2012' where name = 'WATERTOWN'`);
+      expect((await failure(c, `update housing_projects set tenure = repeat('x', 81) where name = 'WATERTOWN'`)).code).toBe("23514");
+      await c.query(`set local role anon`);
+      expect((await failure(c, `update housing_projects set tenure = 'Freehold'`)).code).toBe("42501");
+      await c.query(`reset role`);
       await c.query(`delete from housing_projects where name = 'WATERTOWN'`);
       expect((await c.query(`select (select count(*) from housing_project_sales) + (select count(*) from housing_project_rents) as n`)).rows[0].n).toBe("0");
     });
