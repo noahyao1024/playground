@@ -209,6 +209,25 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   `/api/housing/chart` exports those and every saved market series as passive SVG, under
   the same permission check and private/no-store headers. POST never saves a what-if;
   its chart URL is null, so send the same body to POST chart. Never put a token in a URL.
+  Optional `inputs.property` is parsed by `housing-property.ts`: explicit development,
+  area/unit, bedrooms/bathrooms, separate PropertyGuru buy/rent URLs and adopted
+  adopted-quote snapshots. Keep it in `readInputs`' field-level legacy recovery.
+  Links are references, never scraped, and URL search boundaries are not exact quotes.
+  Linking applies region/lease only on the page's explicit selection and invalidates
+  confirmation, retaining actual prices, verified AV and manual growth. API analysis
+  never silently changes those inputs from property metadata or a scenario name.
+  Comparable sales exclude bulk deals and match area; rentals also match known rooms.
+  URA has no sale room count or bathroom data: say which dimensions are unverified.
+  `property_context` shares this logic with the page. Quote amount/context mismatches
+  must be reported, and refreshes retain adopted snapshots.
+  `rentOrBuy` records nominal cumulative payment funding, principal, actual costs,
+  investment deposits/gains and OA contributions/interest on each annual row.
+  `housing-breakdown.ts` reconciles the PK asset and additive gap tables with those
+  rows, including cent rounding, and differences annual flows from cumulative ones.
+  Principal/funding are not extra expenses; sale costs are hypothetical once per row,
+  not accumulated across hypothetical sales. CPF refunds are asset transfers, not
+  another cost; housing accrued interest is distinct from actual OA interest.
+  Keep page drilldowns, `comparison.breakdown`, and `cumulative-costs` SVG/JSON equal.
   `finance-access.ts` defines `housing:read`, `finance:read` (both resources), and
   `finance:write`. New tokens default to read-only; existing tokens retain write
   access via `20261006_finance_token_scopes.sql`. Require write permission before

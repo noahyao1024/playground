@@ -31,6 +31,9 @@ import { FanChart } from "./fan-chart";
 import { LinesChart, yearTicks } from "./line-chart";
 import { Card, Stat, share } from "./market-view";
 import { useSimulation } from "./use-simulation";
+import { PropertyInputs } from "./property-inputs";
+import { PkDetails } from "./pk-details";
+import type { Project } from "@/lib/housing-projects";
 
 /** What is being worked on: a kept scenario, by id, or a new one. */
 export type Draft = { id: string | null; name: string; inputs: ScenarioInputs };
@@ -104,7 +107,7 @@ const rateText = (n: number) => {
 /** SORA and what is paid over it, to a hundredth of a point. */
 const points = (n: number) => `${n.toFixed(2)}%`;
 
-export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDeleted, onConfirm }: {
+export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDeleted, onConfirm, projects = [], onRefreshProject }: {
   draft: Draft;
   setDraft: (update: (d: Draft) => Draft) => void;
   market: MarketData;
@@ -112,6 +115,8 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
   onSaved: (scenario: Scenario) => void;
   onDeleted: (id: string) => void;
   onConfirm: (confirmation: Confirmation) => void;
+  projects?: Project[];
+  onRefreshProject?: (name: string) => Promise<void>;
 }) {
   const [saving, setSaving] = useState(false);
   const [stress, setStress] = useState<Stress>("none");
@@ -131,6 +136,12 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
 
   const set = (next: Partial<ScenarioInputs>) => setDraft((d) => {
     const merged = { ...d.inputs, ...next };
+    if (merged.property) {
+      const property = { ...merged.property };
+      if (next.price !== undefined && next.price !== d.inputs.price && property.price_source?.amount !== next.price) property.price_source = null;
+      if (next.rent !== undefined && next.rent !== d.inputs.rent && property.rent_source?.amount !== next.rent) property.rent_source = null;
+      merged.property = property;
+    }
     if (merged.guidance && (["residency", "nth", "kind"] as const).some(k => next[k] !== undefined && next[k] !== d.inputs[k])) merged.guidance = { ...merged.guidance, confirmed: false };
     if (next.residency === "pr" && next.residency !== d.inputs.residency && merged.guidance?.cpf_mode === "salary") merged.guidance = { ...merged.guidance, cpf_rules:CPF_PR_RULES, cpf_scheme:"graduated" };
     // HDB lends for HDB flats only.
@@ -249,6 +260,7 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
           </div>
         </Card>
 
+        <PropertyInputs inputs={inputs} projects={projects} onChange={set} onRefresh={onRefreshProject} />
         <GuidedInputs inputs={inputs} onChange={set} />
         <Button type="button" variant="outline" className="w-full" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>{advanced ? "收起高级设置" : "高级设置：贷款、费用和增长假设"}</Button>
         {advanced && <div className="space-y-4">
@@ -670,6 +682,7 @@ function Verdict({ inputs, result, simulation, className }: { inputs: ScenarioIn
         {` · 今天的钱 ${compactMoney(Math.abs(inTodaysMoney(difference, inputs.cost_growth, inputs.years)), "sgd", { digits: 1 })}`}
         {chance !== undefined && ` · 买房领先的历史情景占比 ${share(chance, 0)}`}
       </span>
+      <a href="#housing-pk" className="ml-2 whitespace-nowrap underline">查看累计明细</a>
     </p>
   );
 }
@@ -706,6 +719,14 @@ function Results({ typed, inputs, result, estimates, model, market, simulation, 
   const terms = inputs.loan_type !== "bank" ? "" : inputs.lock_years > 0 ? `, fixed ${yearsText(inputs.lock_years)}, then SORA + ${rateText(inputs.spread)}` : `, SORA + ${rateText(inputs.spread)}`;
 
   const worth = wealthRows(result);
+  const [chosenPkYear, setChosenPkYear] = useState<number | null>(null);
+  const pkYear = Math.min(inputs.years, Math.max(0, chosenPkYear ?? inputs.years));
+  function openPkYear(year: number) {
+    setChosenPkYear(year);
+    const details = document.getElementById("housing-pk-details");
+    if (details instanceof HTMLDetailsElement) details.open = true;
+    document.getElementById("housing-pk")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
   return (
     <div className="min-w-0 space-y-4">
@@ -747,6 +768,8 @@ function Results({ typed, inputs, result, estimates, model, market, simulation, 
           sub={`折合今天的钱 ${compactMoney(Math.abs(inTodaysMoney(difference, inputs.cost_growth, inputs.years)), "sgd", { digits: 2 })} · 通胀 ${rateText(inputs.cost_growth)}/年${inputs.guidance ? ` · 基准 ${inputs.guidance.as_of}` : " · 基准为比较起点"}`}
         />
       </div>
+
+      <PkDetails inputs={inputs} result={result} year={pkYear} onYearChange={setChosenPkYear} />
 
       <Card title="What each leaves you with" sub="In the future expected, everything at each year's end, the home as though sold then: its price less the loan and the costs of selling, plus investments and CPF">
         <LinesChart
@@ -790,7 +813,7 @@ function Results({ typed, inputs, result, estimates, model, market, simulation, 
                 const d = y.buy_net_worth - y.rent_net_worth;
                 return (
                   <tr key={y.year} className={cn("border-b last:border-0", y.year === result.break_even && "bg-muted")}>
-                    <td className="py-2 pr-2">{yearLabel(y.year)}</td>
+                    <td className="py-2 pr-2"><button type="button" className="whitespace-nowrap underline underline-offset-4" aria-label={`查看第 ${y.year} 年累计明细`} onClick={() => openPkYear(y.year)}>{yearLabel(y.year)}</button></td>
                     <td className="py-2 pr-2 text-right tabular-nums">{compactMoney(y.home_value, "sgd", { digits: 2 })}</td>
                     <td className="hidden py-2 pr-2 text-right tabular-nums sm:table-cell">{compactMoney(y.loan_balance, "sgd", { digits: 2 })}</td>
                     <td className="hidden py-2 pr-2 text-right tabular-nums sm:table-cell">{y.loan_rate === null ? "–" : rateText(y.loan_rate)}</td>

@@ -71,6 +71,23 @@ settings. AV defaults to rent × 12 as a clearly labeled rough proxy (capped at
 S$10 million); a verified IRAS annual value overrides it. Renovation has explicit
 zero/simple/more templates, each editable. These are cost comparisons, not mortgage approval or affordability checks.
 
+Rent or buy can explicitly link a followed development, record a floor area in sqft
+or sqm, bedrooms / bathrooms, and separate PropertyGuru purchase and comparable
+rental source links. Selecting a development applies its region and identifiable
+lease, then asks for confirmation; quotes, verified AV and manual growth assumptions
+are retained. Links are stored, not scraped. Search URL boundaries are shown as
+filters, never substituted for an exact property price or area. A single-listing
+quote can be manually marked as its source. URA P50 / mean buttons explicitly adopt
+a comparable quote and keep its amount, dimensions and read date as a snapshot.
+Refreshing URA reference data does not replace the saved quotes or lease assumptions.
+
+The final PK expands into each year's assets, cumulative or annual nominal expenses,
+cash / CPF funding, investment deposits and gains, and an additive explanation of
+the net-worth gap. Principal is an asset transfer and excluded from costs; funding
+is not counted again. Hypothetical sale costs are deducted once in the assets / gap
+tables. CPF refund moves assets back to OA, and housing accrued interest is not an
+OA investment gain. The year table opens the same drilldown for any year.
+
 The holding period supports 1–99 years independently of the mortgage. Optional
 lease start year and original term calculate remaining tenure at a saved assessment
 date; the lease start is separate from the building's TOP year. Expiry assumes 1 January of
@@ -320,6 +337,15 @@ analysis uses the same calculations and chart rows as the housing page. Project
 statistics include P25, P50, P75, means and sample counts. Sales and rents each
 use their own latest twelve-month window, whose dates are returned; quarter
 charts combine sizes, so use `by_band` to compare a particular size of home.
+
+Optional `inputs.property` persists the selected development, dimensions, source
+links and adopted quote snapshots. `comparison.property_context` reports applied
+quote provenance and current comparable records: sales match area and exclude bulk
+deals; rentals match area bands and known bedrooms. URA lacks sale bedroom counts
+and all bathroom counts, so neither the page nor agents claim those matches.
+`comparison.breakdown` exposes the same annual / cumulative PK tables and additive
+gap components as the page; `projection.years[].cumulative` is the underlying nominal
+ledger. `cumulative-costs` exports its cost curve as JSON rows or authenticated SVG.
 
 An agent can start with `GET /api/housing`, choose a saved scenario id, then read
 `/api/housing/analysis?scenario_id=<id>&years=15&project=<URA name>`. Inspect

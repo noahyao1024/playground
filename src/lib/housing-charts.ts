@@ -18,6 +18,7 @@ const yearTitle = (year: number) => year === 0 ? "Now" : `After ${year} year${ye
 
 export const wealthRows = (projection: Projection): ChartRow[] => projection.years.map(y => ({ x:y.year,title:yearTitle(y.year),buy:y.buy_net_worth,rent:y.rent_net_worth }));
 export const costRows = (months: OwningMonth[]): ChartRow[] => months.map(y => ({ x:y.year,title:`Year ${y.year}, a month`,own:y.net,rent:y.rent,paid:y.paid,principal:y.principal }));
+export const cumulativeCostRows = (projection: Projection): ChartRow[] => projection.years.map(y => ({ x:y.year,title:yearTitle(y.year),buy:y.own_spent,rent:y.rent_spent }));
 export function futureRows(projection: Projection, simulation: Simulation): ChartBandRow[] {
   const gaps = projection.years.map(y => y.buy_net_worth - y.rent_net_worth);
   return [{ x:0,title:"Now",low:gaps[0],high:gaps[0],middle:gaps[0],expected:gaps[0] }, ...simulation.years.map(y => ({ x:y.year,title:yearTitle(y.year),low:y.low,high:y.high,middle:y.middle,expected:gaps[y.year] ?? null }))];
@@ -39,6 +40,7 @@ export function comparisonCharts(projection: Projection, simulation: Simulation 
     { id:"wealth",title:"Buying and renting: net worth",x_label:"Years from baseline",unit:"SGD",rows:wealthRows(projection),lines:[{key:"buy",label:"Buying",color:BUY},{key:"rent",label:"Renting",color:RENT}],note:"Nominal net worth after selling, including investments and OA. Cash differences are reinvested." },
     { id:"gap",title:"Buying minus renting",x_label:"Years from baseline",unit:"SGD",rows:projection.years.map(y => ({x:y.year,title:yearTitle(y.year),gap:y.buy_net_worth-y.rent_net_worth})),lines:[{key:"gap",label:"Nominal gap",color:BUY}],note:"Positive means buying leaves more net worth; negative means renting does." },
     { id:"costs",title:"Monthly cost breakdown",x_label:"Year",unit:"SGD/month",rows:costRows(projection.monthly),lines:[{key:"own",label:"Owning cost",color:BUY},{key:"rent",label:"Renting cost",color:RENT}],note:"Average month of each year; excludes principal and includes opportunity cost. This accounting breakdown does not compound." },
+    { id:"cumulative-costs",title:"Cumulative housing costs paid",x_label:"Years from baseline",unit:"SGD",rows:cumulativeCostRows(projection),lines:[{key:"buy",label:"Buying costs",color:BUY},{key:"rent",label:"Renting costs",color:RENT}],note:"Actual nominal costs paid since baseline, excluding down payment, repaid principal, investments and hypothetical sale costs. These are already reflected in net worth; do not deduct again." },
   ];
   if (simulation) charts.push(
     { id:"futures",title:"Buying minus renting across futures",x_label:"Years from baseline",unit:"SGD",rows:futureRows(projection,simulation),lines:[{key:"middle",label:"P50 future",color:BUY},{key:"expected",label:"Central projection",color:THIRD,dashed:true}],band:{low:"low",high:"high",label:"P10–P90",color:BUY},note:"500 seeded joint-history replays, not guaranteed outcomes. The central projection differs from the median future." },

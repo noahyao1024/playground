@@ -7,6 +7,8 @@ import { housingOpenApi } from "@/lib/housing-openapi";
 import { SNAPSHOT_VERSION } from "@/lib/housing-data";
 import { inTodaysMoney } from "@/lib/housing";
 import { resolveComparison } from "@/lib/housing-comparison";
+import { EMPTY_PROPERTY, propertyContext } from "@/lib/housing-property";
+import { breakdownAtYear } from "@/lib/housing-breakdown";
 import { PATHS, simulate, summarize } from "@/lib/housing-model";
 import { housingInputs, housingMarket, housingProject } from "../helpers/housing-fixtures";
 import { startPostgrest, type StandIn } from "../helpers/postgrest";
@@ -104,6 +106,25 @@ describe("housing analysis API",()=>{
     const raw=await (await RAW.GET(req("/api/housing"))).json();
     expect(raw.projects[0].sales).toHaveLength(3);
     expect(raw.projects[0].rents).toHaveLength(3);
+  });
+  it("saves property links and dimensions and exposes the same comparable and PK drilldowns without refreshing",async()=>{
+    const inputs={...housingInputs(),property:{...EMPTY_PROPERTY,project:"EXAMPLE CONDO",area:550,bedrooms:1,bathrooms:1,buy_url:"https://www.propertyguru.com.sg/listing/for-sale-example-condo-123"}};
+    const saved=await RAW.POST(req("/api/housing",{action:"saveScenario",id:ID,name:"Linked fixture",inputs}));
+    expect(saved.status).toBe(200);
+    expect((await saved.json()).scenario.inputs.property).toEqual(inputs.property);
+    db.requests.length=0;
+    const body=await (await get(`?scenario_id=${ID}&simulation=false`)).json();
+    const c=resolveComparison(inputs,housingMarket());
+    expect(body.comparison.property_context).toEqual(propertyContext(c.resolved,[housingProject()]));
+    expect(body.comparison.property_context.comparables.prices).toMatchObject({count:2,p50:760000});
+    expect(body.comparison.breakdown).toEqual(c.projection.years.map(row=>breakdownAtYear(c.projection,row.year)));
+    expect(body.charts.find((chart:{id:string})=>chart.id === "cumulative-costs").rows.at(-1)).toMatchObject({buy:c.projection.years.at(-1)!.own_spent,rent:c.projection.years.at(-1)!.rent_spent});
+    expect(db.requests.every(r=>r.method === "GET")).toBe(true);
+    const read=await (await RAW.GET(req("/api/housing"))).json();
+    expect(read.scenarios[0].inputs.property).toEqual(inputs.property);
+    const svg=await CHART.GET(req(`/api/housing/chart?scenario_id=${ID}&chart=cumulative-costs`));
+    expect(svg.status).toBe(200);
+    expect(await svg.text()).toContain("Cumulative housing costs paid");
   });
 
   it("compares saved and unsaved what-ifs without any write or token in chart URLs",async()=>{
