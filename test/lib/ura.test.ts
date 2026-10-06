@@ -141,15 +141,19 @@ describe("refreshProjects and readProjects", () => {
   });
   afterEach(async () => { await db.close(); });
 
-  it("reads a development never read in every file of sales and the last four quarters of leases, and keeps where it is", async () => {
+  it("reads a development never read in every file of sales and the quarters of leases holding a year to the latest, and keeps where it is", async () => {
     const ura = fakeUra();
     const r = await refreshProjects(client(), quick(ura));
     expect(r).toEqual({ state: "read", followed: 1, read: 1, sales: 2, rents: 2 * RENT_QUARTERS, failures: [] });
-    // A token, its district not yet known so all four files of sales, and four quarters.
+    // A token, its district not yet known so all four files of sales, and six
+    // quarters: in October URA has yet to publish the quarter running, and the
+    // year to its latest contract, August's, reaches back to 2025's third.
     expect(ura.asked.map((a) => new URL(a.url).searchParams.get("batch") ?? new URL(a.url).searchParams.get("refPeriod") ?? "token"))
-      .toEqual(["token", "1", "2", "3", "4", "26q4", "26q3", "26q2", "26q1"]);
+      .toEqual(["token", "1", "2", "3", "4", "26q4", "26q3", "26q2", "26q1", "25q4", "25q3"]);
     expect(db.tables.housing_project_sales.map((s) => [s.project, s.month, s.price])).toEqual([["WATERTOWN", "2026-08-01", 1550000], ["WATERTOWN", "2026-05-01", 1100000]]);
-    expect(db.tables.housing_project_rents.map((s) => s.quarter)).toEqual(["2026-10-01", "2026-10-01", "2026-07-01", "2026-07-01", "2026-04-01", "2026-04-01", "2026-01-01", "2026-01-01"]);
+    expect(db.tables.housing_project_rents.map((s) => s.quarter)).toEqual([
+      "2026-10-01", "2026-10-01", "2026-07-01", "2026-07-01", "2026-04-01", "2026-04-01", "2026-01-01", "2026-01-01", "2025-10-01", "2025-10-01", "2025-07-01", "2025-07-01",
+    ]);
     expect(db.tables.housing_projects[0]).toMatchObject({ street: "PUNGGOL CENTRAL", district: "19", segment: "OCR", found: true, read_at: NOW.toISOString() });
   });
 
@@ -163,11 +167,11 @@ describe("refreshProjects and readProjects", () => {
     ura.state.batches[3] = [watertownSales("1600000"), otherSales];
     ura.state.rent = 4_800;
     const later = new Date(NOW.getTime() + 7 * DAY);
-    expect(await refreshProjects(client(), quick(ura, later))).toMatchObject({ state: "read", read: 1, sales: 2, rents: 8 });
+    expect(await refreshProjects(client(), quick(ura, later))).toMatchObject({ state: "read", read: 1, sales: 2, rents: 12 });
     expect(ura.asked.map((a) => new URL(a.url).searchParams.get("batch")).filter(Boolean)).toEqual(["3"]);
     expect(db.tables.housing_project_sales.map((s) => s.price)).toEqual([1600000, 1100000]);
-    expect(db.tables.housing_project_rents.filter((r) => r.bedrooms === 3).map((r) => r.rent)).toEqual([4800, 4800, 4800, 4800]);
-    expect(db.tables.housing_project_rents).toHaveLength(8);
+    expect(db.tables.housing_project_rents.filter((r) => r.bedrooms === 3).map((r) => r.rent)).toEqual([4800, 4800, 4800, 4800, 4800, 4800]);
+    expect(db.tables.housing_project_rents).toHaveLength(12);
   });
 
   it("reads one development now when asked, whenever it was last read", async () => {
@@ -200,7 +204,7 @@ describe("refreshProjects and readProjects", () => {
     const ura = fakeUra();
     ura.state.brokenQuarter = "26q2";
     const r = await refreshProjects(client(), quick(ura));
-    expect(r).toMatchObject({ read: 0, sales: 2, rents: 6, failures: [{ source: "rents, Q2 2026", reason: "HTTP 502" }] });
+    expect(r).toMatchObject({ read: 0, sales: 2, rents: 10, failures: [{ source: "rents, Q2 2026", reason: "HTTP 502" }] });
     expect(db.tables.housing_projects[0]).toMatchObject({ found: true, read_at: null, district: "19" });
   });
 
@@ -224,7 +228,7 @@ describe("refreshProjects and readProjects", () => {
     expect(p).toMatchObject({ name: "WATERTOWN", street: "PUNGGOL CENTRAL", district: "19", segment: "OCR", found: true });
     expect(p.sales[0]).toEqual({ month: "2026-05-01", price: 1100000, area_sqm: 70, floor_range: "11-15", sale_type: "sub", property_type: "Condominium", units: 1 });
     expect(p.sales[1].price).toBe(1550000);
-    expect(p.rents).toHaveLength(8);
+    expect(p.rents).toHaveLength(12);
     expect(p.rents.every((r) => typeof r.rent === "number")).toBe(true);
   });
 });

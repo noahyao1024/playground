@@ -228,10 +228,10 @@ describe("developments followed", () => {
     vi.stubEnv("URA_ACCESS_KEY", "secret-ura-key");
     const { status, body } = await post({ action: "followProject", name: " watertown " });
     expect(status).toBe(200);
-    expect(body.refresh).toMatchObject({ state: "read", followed: 1, read: 1, sales: 1, rents: 4, failures: [] });
+    expect(body.refresh).toMatchObject({ state: "read", followed: 1, read: 1, sales: 1, rents: 6, failures: [] });
     expect(body.project).toMatchObject({ name: "WATERTOWN", street: "PUNGGOL CENTRAL", district: "19", segment: "OCR", found: true });
     expect(body.project.sales).toHaveLength(1);
-    expect(body.project.rents).toHaveLength(4);
+    expect(body.project.rents).toHaveLength(6);
     // Following it again reads it again, and keeps one of it.
     expect((await post({ action: "followProject", name: "WATERTOWN" })).body.refresh).toMatchObject({ read: 1 });
     expect(db.tables.housing_projects).toHaveLength(1);
@@ -270,7 +270,7 @@ describe("developments followed", () => {
     const res = await PROJECTS_CRON(new NextRequest("http://localhost/api/cron/projects", { headers: { authorization: "Bearer cron-secret" } }));
     const text = await res.text();
     expect(res.status).toBe(200);
-    expect(JSON.parse(text)).toEqual({ state: "read", followed: 1, read: 1, sales: 1, rents: 4, failed: 0, failures: [] });
+    expect(JSON.parse(text)).toEqual({ state: "read", followed: 1, read: 1, sales: 1, rents: 6, failed: 0, failures: [] });
     expect(text).not.toContain("WATERTOWN");
     // Read today: not due again tomorrow.
     const again = await (await PROJECTS_CRON(new NextRequest("http://localhost/api/cron/projects", { headers: { authorization: "Bearer cron-secret" } }))).json();
