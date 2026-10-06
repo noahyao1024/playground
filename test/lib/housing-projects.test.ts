@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  SQFT_PER_SQM, bandLabel, byBand, byBedrooms, byQuarter, lastYear, projectName, psfOf, summarize,
+  SQFT_PER_SQM, bandLabel, byBand, byBedrooms, byQuarter, lastYear, leaseOf, projectName, psfOf, summarize,
   type ProjectRent, type ProjectSale,
 } from "@/lib/housing-projects";
 
@@ -19,6 +19,17 @@ describe("projectName", () => {
     expect(projectName("  watertown ")).toBe("WATERTOWN");
     expect(projectName("the   Tapestry")).toBe("THE TAPESTRY");
     for (const bad of ["", "   ", 42, null, "x".repeat(81)]) expect(projectName(bad)).toBeNull();
+  });
+});
+
+describe("leaseOf", () => {
+  it("reads a tenure as URA writes it, and nothing it cannot", () => {
+    expect(leaseOf("99 yrs lease commencing from 2012")).toEqual({ tenure: "leasehold", lease_start: 2012, lease_term: 99 });
+    expect(leaseOf("999 yrs lease commencing from 1885")).toEqual({ tenure: "leasehold", lease_start: 1885, lease_term: 999 });
+    expect(leaseOf("Freehold")).toEqual({ tenure: "freehold", lease_start: null, lease_term: 99 });
+    for (const none of [null, undefined, "", "NA", "lease commencing from 2012", "99 yrs", "0 yrs lease commencing from 2012"]) {
+      expect(leaseOf(none), String(none)).toBeNull();
+    }
   });
 });
 

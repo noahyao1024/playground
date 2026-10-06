@@ -82,11 +82,11 @@ describe("reading URA's formats", () => {
       { month: "2026-08-01", price: 1550000, area_sqm: 98, floor_range: "06-10", sale_type: "resale", property_type: "Condominium", units: 1 },
       { month: "2026-05-01", price: 1100000, area_sqm: 70, floor_range: "11-15", sale_type: "sub", property_type: "Condominium", units: 1 },
     ]);
-    expect(places.get("WATERTOWN")).toEqual({ street: "PUNGGOL CENTRAL", district: "19", segment: "OCR" });
+    expect(places.get("WATERTOWN")).toEqual({ street: "PUNGGOL CENTRAL", district: "19", segment: "OCR", tenure: "99 yrs lease commencing from 2013" });
     // A landed home's floor range is a dash: none.
     const landed = salesIn([{ project: "Some Terraces", marketSegment: "ocr", transaction: [{ area: "200", floorRange: "-", contractDate: "0126", price: "3000000", typeOfSale: "1", district: "5" }] }], new Set(["SOME TERRACES"]));
     expect(landed.sales.get("SOME TERRACES")![0]).toMatchObject({ floor_range: null, sale_type: "new" });
-    expect(landed.places.get("SOME TERRACES")).toEqual({ street: null, district: "05", segment: "OCR" });
+    expect(landed.places.get("SOME TERRACES")).toEqual({ street: null, district: "05", segment: "OCR", tenure: null });
     expect(() => salesIn({ error: "no" }, new Set())).toThrow(UraError);
   });
 
@@ -155,6 +155,30 @@ describe("refreshProjects and readProjects", () => {
       "2026-10-01", "2026-10-01", "2026-07-01", "2026-07-01", "2026-04-01", "2026-04-01", "2026-01-01", "2026-01-01", "2025-10-01", "2025-10-01", "2025-07-01", "2025-07-01",
     ]);
     expect(db.tables.housing_projects[0]).toMatchObject({ street: "PUNGGOL CENTRAL", district: "19", segment: "OCR", found: true, read_at: NOW.toISOString() });
+  });
+
+  it("keeps a development's tenure from its sales, once there is a column for it", async () => {
+    db.tables.housing_projects[0].tenure = null;
+    expect(await refreshProjects(client(), quick(fakeUra()))).toMatchObject({ state: "read", read: 1 });
+    expect(db.tables.housing_projects[0].tenure).toBe("99 yrs lease commencing from 2013");
+    expect((await readProjects(client()))[0].tenure).toBe("99 yrs lease commencing from 2013");
+  });
+
+  it("reads one again that was read before its tenure was kept, but not again where URA's sales give none", async () => {
+    db.tables.housing_projects[0] = { ...db.tables.housing_projects[0], district: "19", read_at: new Date(NOW.getTime() - DAY).toISOString(), tenure: null };
+    const ura = fakeUra();
+    ura.state.batches[3] = [{ ...watertownSales(), transaction: watertownSales().transaction.map((t) => ({ ...t, tenure: undefined })) }];
+    expect(await refreshProjects(client(), quick(ura))).toMatchObject({ state: "read", read: 1 });
+    expect(db.tables.housing_projects[0].tenure).toBe("");
+    ura.asked.length = 0;
+    expect(await refreshProjects(client(), quick(ura, new Date(NOW.getTime() + DAY)))).toMatchObject({ state: "not due" });
+    expect(ura.asked).toHaveLength(0);
+  });
+
+  it("writes no tenure before its migration, and the page reads it as unknown", async () => {
+    expect(await refreshProjects(client(), quick(fakeUra()))).toMatchObject({ state: "read", read: 1 });
+    expect("tenure" in db.tables.housing_projects[0]).toBe(false);
+    expect((await readProjects(client()))[0].tenure).toBeNull();
   });
 
   it("asks URA nothing again within the week, then reads only its district's file, replacing what it had", async () => {

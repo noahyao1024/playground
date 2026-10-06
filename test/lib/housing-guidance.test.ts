@@ -65,13 +65,14 @@ describe("required facts and saved metadata", () => {
     expect(rough.years[1].own_monthly).toBeGreaterThan(verified.years[1].own_monthly);
     expect(rough.years[1].own_monthly).toBe(rentOrBuy({ ...i, annual_value:72000, guidance:{ ...guide, annual_value_auto:false } }).years[1].own_monthly);
   });
-  it("keeps dates reproducible and separates building age from lease age", () => {
-    const g = { ...newGuidance("2026-10-05"), tenure: "leasehold" as const, lease_start: 2000, build_year: 2017 };
+  it("keeps dates reproducible, and reads a comparison saved with a TOP year without it", () => {
+    const g = { ...newGuidance("2026-10-05"), tenure: "leasehold" as const, lease_start: 2000 };
     const inputs = parseInputs({ guidance:g });
     expect(inputs.guidance).toEqual(g);
     expect(readInputs({ ...inputs, price: NaN }).guidance).toEqual(g);
+    // The TOP year was asked once and counted for nothing: kept from then, it is passed over.
+    expect(parseInputs({ guidance: { ...g, build_year: 2017 } }).guidance).toEqual(g);
     expect(remainingLease(g, "2027-10-05")).toBeLessThan(remainingLease(g)!);
-    expect(remainingLease({ ...g, build_year: 2020 })).toBe(remainingLease(g));
     expect(leaseFactor(g, 0)).toBe(1);
     expect(leaseFactor(g, 100 * 12)).toBe(0);
     expect(leaseFactor({ ...g, tenure:"freehold" }, 99*12)).toBe(1);

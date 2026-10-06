@@ -130,7 +130,9 @@ export function HousingApp() {
         ...filled,
         ...(filled.kind === "private" && draft.inputs.loan_type === "hdb" ? { loan_type: "bank" } : {}),
         auto: [...draft.inputs.auto, "growth", "rent_growth"],
-        ...(draft.inputs.guidance ? { guidance: { ...draft.inputs.guidance, confirmed: false, tenure: "unknown", lease_start: null, build_year: null } } : {}),
+        // A development brings its lease as URA records it; anything else, none until given.
+        ...(draft.inputs.guidance ? { guidance: { ...draft.inputs.guidance, confirmed: false,
+          ...(choice.kind === "project" && choice.lease ? choice.lease : { tenure: "unknown", lease_start: null }) } } : {}),
       });
     } catch (err) {
       toast.error(`The market's figures could not be used: ${messageOf(err)}`);

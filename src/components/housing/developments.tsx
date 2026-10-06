@@ -6,12 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { compactMoney, dayLabel, money } from "@/lib/finance-format";
 import { quarterYear, townLabel, type PrivateMarket } from "@/lib/housing";
-import { MAX_PROJECTS, byBand, byBedrooms, byQuarter, lastYear, projectName, summarize, psfOf, type BandRow, type Project } from "@/lib/housing-projects";
+import { MAX_PROJECTS, byBand, byBedrooms, byQuarter, lastYear, leaseOf, projectName, summarize, psfOf, type BandRow, type Lease, type Project } from "@/lib/housing-projects";
 import { dayInSG } from "@/lib/dates";
 import { LinesChart, yearTicks, type LineRow } from "./line-chart";
 
-/** What a development's size fills a comparison with. */
-export type ProjectChoice = { kind: "project"; name: string; label: string; market: PrivateMarket; price: number; rent: number };
+/** What a development's size fills a comparison with: its lease too, as URA records it. */
+export type ProjectChoice = { kind: "project"; name: string; label: string; market: PrivateMarket; price: number; rent: number; lease: Lease | null };
+
+/** A lease as the page writes it: "Freehold", "99-year lease from 2012". */
+const leaseText = (l: Lease) => (l.tenure === "freehold" ? "Freehold" : `${l.lease_term}-year lease from ${l.lease_start}`);
 
 const PRICE = "var(--series-1)", AVERAGE = "var(--series-3)";
 const LANDED = /terrace|semi-d|detached|bungalow|cluster/i;
@@ -100,7 +103,8 @@ function Development({ project: p, ura, onUnfollow, onCompare }: {
   onCompare: (choice: ProjectChoice) => void;
 }) {
   const label = townLabel(p.name);
-  const where = [p.street && townLabel(p.street), p.district && `D${p.district}`, p.segment].filter(Boolean).join(" · ");
+  const lease = leaseOf(p.tenure);
+  const where = [p.street && townLabel(p.street), p.district && `D${p.district}`, p.segment, lease && leaseText(lease)].filter(Boolean).join(" · ");
   const header = (
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0">
@@ -143,7 +147,7 @@ function Development({ project: p, ura, onUnfollow, onCompare }: {
   const quarters = byQuarter(p).filter((q) => q.psf);
   const trend: LineRow[] = quarters.map((q) => ({ x: quarterYear(q.quarter), title: `${q.label}, ${q.psf!.count} sale${q.psf!.count === 1 ? "" : "s"}`, p50: q.psf!.p50, mean: q.psf!.mean }));
   const market = marketOf(p);
-  const compare = (row: BandRow) => onCompare({ kind: "project", name: p.name, label: `${label}, ${row.label}`, market, price: Math.round(row.prices!.p50), rent: Math.round(row.rents!.p50) });
+  const compare = (row: BandRow) => onCompare({ kind: "project", name: p.name, label: `${label}, ${row.label}`, market, price: Math.round(row.prices!.p50), rent: Math.round(row.rents!.p50), lease });
 
   return (
     <div className="space-y-4 border-t pt-4 first:border-0 first:pt-0">

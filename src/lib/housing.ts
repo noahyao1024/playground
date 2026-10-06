@@ -417,7 +417,6 @@ export function comparisonReady(i: ScenarioInputs): boolean {
   if (!g) return true; // already saved legacy scenarios
   if (!g.confirmed || (i.years > 35 && g.tenure === "unknown")) return false;
   if (g.tenure === "leasehold" && (g.lease_start === null || (remainingLease(g) ?? 0) <= 0)) return false;
-  if (g.build_year !== null && g.build_year > Number(g.as_of.slice(0,4))) return false;
   if (g.cpf_mode === "salary" && (!g.cpf_eligible || i.residency === "foreigner" || g.salary === null || g.age === null || g.retirement_age < g.age)) return false;
   return true;
 }

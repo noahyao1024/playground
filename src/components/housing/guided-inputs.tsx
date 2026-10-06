@@ -12,7 +12,7 @@ export function GuidedInputs({ inputs, onChange: changeInputs }: { inputs: Scena
   const g = inputs.guidance ?? { ...newGuidance(dayInSG(new Date())), annual_value_auto: false };
   const onChange = (v: Partial<ScenarioInputs>) => changeInputs({ guidance: g, ...v });
   const update = (v: Partial<HousingGuidance>) => onChange({ guidance: { ...g, ...v } });
-  const numeric = (key: "salary" | "age" | "lease_start" | "lease_term" | "build_year" | "retirement_age" | "cpf_limit", label: string, help?: string) => <div className="space-y-1.5" key={key}>
+  const numeric = (key: "salary" | "age" | "lease_start" | "lease_term" | "retirement_age" | "cpf_limit", label: string, help?: string) => <div className="space-y-1.5" key={key}>
     <Label htmlFor={`guide-${key}`} className="text-xs">{label}</Label>
     <NumberInput id={`guide-${key}`} value={g[key] ?? NaN} emptyValue={NaN} onValueChange={v => update({ [key]: Number.isFinite(v) ? v : null })} step={key === "salary" || key === "cpf_limit" ? 100 : 1} className="h-9" />
     {help && <p className="text-xs text-muted-foreground">{help}</p>}
@@ -47,14 +47,12 @@ export function GuidedInputs({ inputs, onChange: changeInputs }: { inputs: Scena
       <div className="mt-3 space-y-3">
         <Label htmlFor="quick-years" className="text-xs">持有期（必填，1–99 年；默认 15 年）</Label>
         <NumberInput id="quick-years" value={inputs.years} step={1} min={1} max={99} emptyValue={NaN} onValueChange={v=>onChange({years:v})}/>
-        {select("quick-tenure", "地契类型（未知时不估算衰减）",g.tenure,[["unknown","暂不清楚"],["freehold","永久地契"],["leasehold","有期限地契"]],v=>update({tenure:v as HousingGuidance["tenure"]}))}
+        {select("quick-tenure", "地契类型（未知时不估算衰减；从关注的楼盘比较时按 URA 记录自动填写）",g.tenure,[["unknown","暂不清楚"],["freehold","永久地契"],["leasehold","有期限地契"]],v=>update({tenure:v as HousingGuidance["tenure"]}))}
         {g.tenure === "leasehold" && <div className="grid grid-cols-2 gap-3">{numeric("lease_start","地契起始年份 *","从地契 / 项目资料查找，不是 TOP 年。")}{numeric("lease_term","原始地契（年） *","通常为 99 或 999 年。")}</div>}
-        {numeric("build_year","建成 / TOP 年份（选填）","仅计算楼龄，不用来推断地契。")}
         <Label htmlFor="quick-asof" className="text-xs">计算基准日期（保存后保留，用于复现比较）</Label>
         <Input id="quick-asof" type="date" value={g.as_of} onChange={e=>update({as_of:e.target.value})}/>
         <Button type="button" size="sm" variant="outline" onClick={()=>update({as_of:dayInSG(new Date())})}>更新为今天</Button>
         {left !== null && <p className="text-sm">剩余地契约 {left.toFixed(1)} 年（按起始年 1 月 1 日估算）。<Button type="button" variant="link" size="sm" onClick={()=>onChange({years:Math.max(1,Math.min(99,Math.ceil(left)))})}>比较到地契到期</Button></p>}
-        {g.build_year !== null && <p className="text-xs text-muted-foreground">基准年份楼龄约 {Math.max(0,Number(g.as_of.slice(0,4))-g.build_year)} 年。</p>}
         {g.tenure === "leasehold" && <p className="text-xs text-muted-foreground">长期价值采用 3% 折现的居住权衰减假设；到期价值为零，之后改计租房费用。不假设续期、集体出售或政府补偿。</p>}
         {inputs.years > 35 && <p className="text-xs text-muted-foreground">超过 35 年仅探索长期假设，不提供未来胜率预测。</p>}
       </div>
