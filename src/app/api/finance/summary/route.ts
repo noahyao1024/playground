@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { summarize } from "@/lib/finance";
-import { financeDatabase, financeJson as json, isFinanceRequest, readFinance, reason } from "@/lib/finance-server";
+import { financeDatabase, financeJson as json, financeAccessResponse, readFinance, reason } from "@/lib/finance-server";
 
 /** Where things stand, worked out: the latest recorded day's totals, the change
  *  since the record before, every account's newest balance and the history.
@@ -15,7 +15,8 @@ export const dynamic = "force-dynamic";
 const flag = (value: string | null) => value === "1" || value === "true";
 
 export async function GET(req: NextRequest) {
-  if (!(await isFinanceRequest(req))) return json({ error: "Unauthorized" }, 401);
+  const denied = await financeAccessResponse(req, "finance");
+  if (denied) return denied;
   const db = financeDatabase();
   if (!db) return json({ error: "Supabase not configured" }, 500);
   try {

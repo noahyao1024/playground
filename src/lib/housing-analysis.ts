@@ -4,17 +4,22 @@ import { CALCULATION_RULES, resolveComparison, type Comparison } from "./housing
 import { comparisonCharts, marketChartId, projectCharts, type Chart } from "./housing-charts";
 import { SIMULATED_YEARS, simulate, summarize as summarizeFutures, type Stress } from "./housing-model";
 import { byBand, byBedrooms, byQuarter, lastYear, leaseOf, marketForProject, psfOf, summarize, type Project } from "./housing-projects";
+import { bankFinancing } from "./housing-financing";
 
-export const ANALYSIS_VERSION = "1";
+export const ANALYSIS_VERSION = "2";
 export type AnalysisCheck = { code: string; fields: string[]; message: string };
 
 function checks(comparison: Comparison, project?: Project): AnalysisCheck[] {
   const i=comparison.resolved, g=i.guidance, out: AnalysisCheck[]=[];
   const add=(code: string, fields: string[], message: string) => out.push({code,fields,message});
   if (i.years > SIMULATED_YEARS) add("long_horizon",["years"],`只提供中央情景；超过 ${SIMULATED_YEARS} 年不估计未来分布。长期固定增长率会放大假设的影响，建议同时比较 10、15、20、30 年。`);
-  if (i.loan_type === "bank" && i.loan_share > 55 && (i.loan_years > 30 || (g?.age !== null && g?.age !== undefined && g.age+i.loan_years > 65))) add("check_ltv",["loan_share","loan_years","guidance.age"],"若是个人首套银行贷款，期限超过 30 年或还款到超过 65 岁，一般最高 LTV 降为 55%。联名买方年龄、现有房贷和银行评估需另核实；此模型不代表贷款获批。参考 https://www.moneysense.gov.sg/buying-a-property-how-much-can-you-afford/");
-  if (g && g.tenure === "leasehold") add("lease_valuation",["growth","guidance.lease_start","guidance.lease_term"],"房价增长之外还应用了示意性的租约折损；0% 增长仍可能意味着房屋贬值。租约到期归零，之后买方也付租金。租约从起始年 1 月 1 日算，精确日期应查产权文件。");
-  if (i.cpf_balance > 0 || i.cpf_monthly > 0 || g?.cpf_mode === "salary") add("cpf_interest_approximation",["cpf_rate"],"模型采用等效月利率近似 OA 及住房应计利息；CPF 实际按月计算、按年入账并复利。模型未计每月最低余额、实际存取日期和额外 CPF 利息。参考 https://www.cpf.gov.sg/member/infohub/reports-and-statistics/cpf-statistics/interest-statistics");
+  if (i.loan_type === "bank" && i.loan_share > 0) {
+    const f = bankFinancing(i);
+    if (!f.within_limits) add("check_ltv",["loan_share","loan_years","financing"],`当前贷款条件估算 LTV 上限 ${f.max_ltv}%，最长 ${f.term_limit} 年；输入超出范围。计算仍按输入展示成本，需银行核实融资方案。参考 ${f.source}`);
+    if (f.age_assumption !== "bank_assessed" || !i.financing) add("financing_assumptions",["financing.borrower_age","financing.outstanding_loans"],`最低现金首付按 ${f.minimum_cash_percent}% 计算；现有房贷默认零笔，不能从房产套数推断。${f.borrower_age === null ? "借款年龄未知，采用较保守档。" : "借款年龄暂按 CPF 年龄为单一借款人估算；联名买方请填银行评估年龄。"}`);
+  }
+  if (g && g.tenure === "leasehold") add("lease_valuation",["growth","guidance.lease_start","guidance.lease_term","guidance.lease_discount_rate"],`房价增长之外还应用了示意性的租约折损（${g.lease_discount_rate ?? 3}% 年折现，可调整；0% 为线性折损）；0% 房价增长仍可能贬值。这不是官方估值。到期归零，之后买方也付租金。起始日期按年份的 1 月 1 日估算，应查产权文件。`);
+  if (i.cpf_balance > 0 || i.cpf_monthly > 0 || g?.cpf_mode === "salary") add("cpf_interest_model",["cpf_rate","guidance.as_of"],"CPF 按模拟月度余额累计利息、年底入账后复利；当月缴款下月计息、当月提款不计息。待入账利息属于净资产但不能提前还贷。未导入基准日前待入账利息、实际交易日及额外 CPF 利息；不是 CPF 账单。参考 https://www.cpf.gov.sg/member/infohub/reports-and-statistics/cpf-statistics/interest-statistics");
   if (g?.cpf_mode === "salary") add("salary_cpf",["cpf_monthly","guidance.salary","guidance.cpf_scheme"],"工资模式用年龄、工资上限、PR 日期及所选缴费制度估算 OA，忽略手填 cpf_monthly；不含奖金。full 表示已批准的全额缴费，请以实际工资单为准。");
   const left=g ? remainingLease(g) : null;
   if (i.sell_costs === 0 && (left === null || i.years < left)) add("selling_costs",["sell_costs"],"比较假设期末出售但出售费用为零；若需要中介、法律及 GST 等费用，应填入实际费率并比较敏感性。");
@@ -57,6 +62,8 @@ export function analyseHousing(market: MarketData, projects: Project[], inputs: 
       inputs,effective_inputs:c.resolved,stress,estimates:c.estimates,projection:c.projection,
       summary:{years:c.resolved.years,baseline:c.resolved.guidance?.as_of ?? null,nominal_gap:last.buy_net_worth-last.rent_net_worth,todays_money_gap:inTodaysMoney(last.buy_net_worth-last.rent_net_worth,c.resolved.cost_growth,c.resolved.years),inflation:c.resolved.cost_growth,winner:last.buy_net_worth >= last.rent_net_worth ? "buy" : "rent",first_month_oa:firstOa,break_even:c.projection.break_even},
       simulation,simulation_unavailable:unavailable,simulation_seed:1,
+      financing:c.resolved.loan_type === "bank" && c.resolved.loan_share > 0 ? bankFinancing(c.resolved) : null,
+      simulation_method:{kind:"historical_block_bootstrap",block_quarters:8,seed:1,interpretation:"Shares of historical replay scenarios, not calibrated probabilities of future outcomes."},
       history:{from:c.model.history[0]?.quarter ?? null,to:c.model.history.at(-1)?.quarter ?? null,quarters:c.model.history.length},
       checks:checks(c,selectedProject),calculation_rules:CALCULATION_RULES,
     } : null,

@@ -11,7 +11,7 @@ import {
   isRsuPlan, parseRsuRules, parseTranches, RSU_PLANS, rsuWindow, windowCutoffs, type RsuGrant, type RsuRules,
 } from "@/lib/rsu";
 import {
-  financeDatabase, financeJson as json, isFinanceRequest, isUuid, readAccount, readAccounts, readAccountEvents, reason, streamFinance, withAccountEvents,
+  financeDatabase, financeJson as json, financeAccessResponse, isUuid, readAccount, readAccounts, readAccountEvents, reason, streamFinance, withAccountEvents,
 } from "@/lib/finance-server";
 import { quotesFor, type NoQuote, type Quote } from "@/lib/quotes";
 import { normalizeSymbol, type PositionInput } from "@/lib/stocks";
@@ -37,7 +37,8 @@ function optionalText(value: unknown, field: string, max = 200): string | null |
 }
 
 export async function GET(req: NextRequest) {
-  if (!(await isFinanceRequest(req))) return json({ error: "Unauthorized" }, 401);
+  const denied = await financeAccessResponse(req, "finance");
+  if (denied) return denied;
   const db = financeDatabase();
   if (!db) return json({ error: "Supabase not configured" }, 500);
   try {
@@ -48,7 +49,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await isFinanceRequest(req))) return json({ error: "Unauthorized" }, 401);
+  const denied = await financeAccessResponse(req, "finance", true);
+  if (denied) return denied;
   const db = financeDatabase();
   if (!db) return json({ error: "Supabase not configured" }, 500);
 

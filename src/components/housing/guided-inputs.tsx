@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { dayInSG } from "@/lib/dates";
 import { CPF_PR_RULES, newGuidance, prContributionYear, remainingLease, salaryOa, type HousingGuidance } from "@/lib/housing-guidance";
 import type { ScenarioInputs } from "@/lib/housing";
+import { bankFinancing, DEFAULT_FINANCING } from "@/lib/housing-financing";
 import { Card } from "./market-view";
 
 export function GuidedInputs({ inputs, onChange: changeInputs }: { inputs: ScenarioInputs; onChange: (v: Partial<ScenarioInputs>) => void }) {
@@ -25,12 +26,14 @@ export function GuidedInputs({ inputs, onChange: changeInputs }: { inputs: Scena
     {help && <p className="text-xs text-muted-foreground">{help}</p>}
   </div>;
   const left = remainingLease(g);
+  const financing = inputs.financing ?? DEFAULT_FINANCING;
+  const bank = bankFinancing(inputs);
   const select = (id: string, label: string, value: string, options: [string,string][], change: (v:string)=>void) => <div className="space-y-1.5">
     <Label htmlFor={id} className="text-xs">{label}</Label>
     <select id={id} value={value} onChange={e=>change(e.target.value)} className="h-9 w-full rounded-md border bg-background px-2 text-sm">{options.map(([v,l])=><option key={v} value={v}>{l}</option>)}</select>
   </div>;
   return <>
-    {!inputs.guidance && <p className="text-xs text-muted-foreground">旧方案保留原计算。修改简化输入后将启用地契与 CPF 额度核对；请重新确认身份。</p>}
+    {!inputs.guidance && <p className="text-xs text-muted-foreground">旧方案保留输入；银行首付和 CPF 按修正后的规则重算。启用简化输入后需重新确认身份和地契。</p>}
     <Card title="先填两项金额" sub="必填：目标房屋价格、相似整套房的月租。金额均为新币；报价不是成交价。">
       <div className="grid grid-cols-2 gap-3">
         {(["price", "rent"] as const).map(key=><div key={key} className="space-y-1.5">
@@ -49,6 +52,14 @@ export function GuidedInputs({ inputs, onChange: changeInputs }: { inputs: Scena
       <Label className="mt-3 flex items-start gap-2 text-xs font-normal"><input type="checkbox" checked={g.confirmed} onChange={e=>update({confirmed:e.target.checked})}/>我已确认以上身份、房产数及类型（用于税费估算；联名购房或减免请另核实）。</Label>
       <p className="mt-3 text-xs text-muted-foreground">默认估算：贷款 {inputs.loan_share}% / {inputs.loan_years} 年，装修 S${inputs.renovation.toLocaleString()}，维护 S${inputs.maintenance}/月，法律等费用 S${inputs.buy_costs.toLocaleString()}。均可在高级设置修改。房产税使用 AV {g.annual_value_auto ? (Number.isFinite(inputs.rent) ? `粗估 S$${(Math.min(10000000, inputs.rent * 12)).toLocaleString()}/年（整套月租 × 12，上限一千万）` : "粗估待填写月租") : `手动 S$${inputs.annual_value.toLocaleString()}/年`}：请在 IRAS 核实，挂牌月租 × 12 仅为粗略替代值。</p>
     </Card>
+    {inputs.loan_type === "bank" && inputs.loan_share > 0 && <Card title="银行融资核对" sub="已有房贷笔数和借款年龄会影响现金首付；与 ABSD 的房产套数分开。">
+      <div className="grid grid-cols-2 gap-3">
+        {select("bank-outstanding", "现有未还清的房贷（默认 0 笔）", String(financing.outstanding_loans), [["0","0 笔"],["1","1 笔"],["2","2 笔及以上"]], v=>changeInputs({financing:{...financing,outstanding_loans:Number(v) as 0|1|2}}))}
+        <div className="space-y-1.5"><Label htmlFor="bank-age" className="text-xs">银行评估借款年龄（选填）</Label><NumberInput id="bank-age" value={financing.borrower_age ?? NaN} emptyValue={NaN} min={18} max={100} step={0.1} onValueChange={v=>changeInputs({financing:{...financing,borrower_age:Number.isFinite(v) ? v : null}})}/></div>
+      </div>
+      <p className="mt-3 text-xs text-muted-foreground">{bank.age_assumption === "bank_assessed" ? `采用银行评估年龄 ${bank.borrower_age} 岁。` : bank.borrower_age !== null ? `暂按 CPF 年龄 ${bank.borrower_age} 岁为单一借款人估算；联名购房应填银行评估的年龄。` : "年龄未知，暂采用较保守贷款档位；可填写借款年龄进一步核对。"} 当前估算 LTV 上限 {bank.max_ltv}%，最低现金首付 {bank.minimum_cash_percent}%，最长贷款期 {bank.term_limit} 年。实际仍需银行核实估值及 TDSR / MSR。<a href={bank.source} target="_blank" rel="noreferrer" className="underline">贷款规则</a></p>
+      {!bank.within_limits && <p role="status" className="mt-2 text-sm text-destructive">输入的贷款比例或期限超出当前估算档位；请核实后在高级设置修改。结果继续按输入展示成本。</p>}
+    </Card>}
     <Card title="比较多久？房子的地契还剩多久？" sub="持有期、贷款期和地契期是三个不同的年限。99 年是原始地契，不一定是今天的剩余年限。">
       <div className="flex flex-wrap gap-2">{[5,10,15,20,30,99].map(v=><Button type="button" size="sm" variant={inputs.years===v ? "default":"outline"} key={v} onClick={()=>onChange({years:v})}>{v} 年</Button>)}</div>
       <div className="mt-3 space-y-3">
@@ -60,8 +71,12 @@ export function GuidedInputs({ inputs, onChange: changeInputs }: { inputs: Scena
         <Input id="quick-asof" type="date" value={g.as_of} onChange={e=>update({as_of:e.target.value})}/>
         <Button type="button" size="sm" variant="outline" onClick={()=>update({as_of:dayInSG(new Date())})}>更新为今天</Button>
         {left !== null && <p className="text-sm">剩余地契约 {left.toFixed(1)} 年（按起始年 1 月 1 日估算）。<Button type="button" variant="link" size="sm" onClick={()=>onChange({years:Math.max(1,Math.min(99,Math.ceil(left)))})}>比较到地契到期</Button></p>}
-        {g.tenure === "leasehold" && <p className="text-xs text-muted-foreground">长期价值采用 3% 折现的居住权衰减假设；到期价值为零，之后改计租房费用。不假设续期、集体出售或政府补偿。</p>}
-        {inputs.years > 35 && <p className="text-xs text-muted-foreground">超过 35 年仅探索长期假设，不提供未来胜率预测。</p>}
+        {g.tenure === "leasehold" && <>
+          <Label htmlFor="lease-discount" className="text-xs">租约折损的年折现率（假设，默认 3%）</Label>
+          <NumberInput id="lease-discount" value={g.lease_discount_rate ?? 3} min={0} max={20} step={0.5} onValueChange={v=>update({lease_discount_rate:v})}/>
+          <p className="text-xs text-muted-foreground">这是居住权折损假设，供敏感性比较，不是官方估值或市场预测；0% 表示线性折损。到期价值归零并改计租金，不假设续期、集体出售或政府补偿。</p>
+        </>}
+        {inputs.years > 35 && <p className="text-xs text-muted-foreground">超过 35 年仅探索长期假设，不提供历史重放情景分布。</p>}
       </div>
     </Card>
     <Card title="CPF：工资辅助估算（选填）" sub="月薪不能单独决定 OA；还需年龄及缴款资格。现有 OA 余额另填，高级设置可手动填月缴款。">

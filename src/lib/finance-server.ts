@@ -7,6 +7,7 @@ import { MISSING_TABLE, fetchAllRows, pagesOf } from "@/lib/paginate";
 import type { FinanceAccount, FinanceBalance, LoanPrepayment, LoanRateChange } from "@/lib/finance";
 import type { RsuGrant, RsuSale } from "@/lib/rsu";
 import type { StockPosition } from "@/lib/stocks";
+import { isTokenScope, permits, type TokenScope } from "./finance-access";
 
 /** The server side of /api/finance/*: who may ask, and where the answers come
  *  from. Server-only -- it reads the service-role key and node:crypto. */
@@ -201,15 +202,29 @@ export const newFinanceToken = () => `pgf_${randomBytes(32).toString("base64url"
  *  stored, so the one given is hashed and looked up. A lookup that fails -- the
  *  table not there yet, the database down -- lets nobody in by it. */
 export async function hasStoredFinanceToken(req: Request): Promise<boolean> {
+  return (await storedTokenScope(req)) !== null;
+}
+
+/** During deployment, only a specifically missing scope column permits the
+ * legacy lookup. Database failures and unknown scopes always fail closed. */
+export function missingTokenScope(error: { code?: string; message?: string } | null) {
+  return !!error && ["42703", "PGRST204"].includes(error.code ?? "") && /\bscope\b/.test(error.message ?? "");
+}
+
+async function storedTokenScope(req: Request): Promise<TokenScope | null> {
   const given = bearerOf(req);
-  if (!given || given.length < MIN_TOKEN_LENGTH) return false;
+  if (!given || given.length < MIN_TOKEN_LENGTH) return null;
   const db = financeDatabase();
-  if (!db) return false;
+  if (!db) return null;
   try {
-    const { data, error } = await db.from("finance_api_tokens").select("id").eq("token_sha256", sha256Hex(given)).limit(1);
-    return !error && (data?.length ?? 0) > 0;
+    const { data, error } = await db.from("finance_api_tokens").select("id,scope").eq("token_sha256", sha256Hex(given)).limit(1);
+    if (missingTokenScope(error)) {
+      const old = await db.from("finance_api_tokens").select("id").eq("token_sha256", sha256Hex(given)).limit(1);
+      return !old.error && old.data?.length ? "finance:write" : null;
+    }
+    return !error && data?.length && isTokenScope(data[0].scope) ? data[0].scope : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -223,8 +238,22 @@ export async function isFinanceOwnerSession(): Promise<boolean> {
 
 /** Whether a request speaks for the owner: FINANCE_API_TOKEN, a token made on
  *  the /finance page, or their signed-in session. */
+export async function financeRequestScope(req: Request): Promise<TokenScope | null> {
+  if (hasFinanceToken(req)) return "finance:write";
+  // An explicitly offered bearer must stand on its own. A revoked or limited
+  // token must not gain authority through an unrelated browser cookie.
+  if (req.headers.has("authorization")) return storedTokenScope(req);
+  return await isFinanceOwnerSession() ? "finance:write" : null;
+}
+
+export async function financeAccessResponse(req: Request, resource: "finance" | "housing", write = false): Promise<Response | null> {
+  const scope = await financeRequestScope(req);
+  if (!scope) return financeJson({ error: "Unauthorized" }, 401);
+  if (!permits(scope, resource, write)) return financeJson({ error: "This token does not allow that operation" }, 403);
+  return null;
+}
+
 export async function isFinanceRequest(req: Request): Promise<boolean> {
-  if (hasFinanceToken(req)) return true;
-  if (await hasStoredFinanceToken(req)) return true;
-  return isFinanceOwnerSession();
+  const resource = new URL(req.url).pathname.startsWith("/api/housing") ? "housing" : "finance";
+  return (await financeAccessResponse(req, resource, req.method !== "GET")) === null;
 }

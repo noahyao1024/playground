@@ -362,6 +362,17 @@ describe.skipIf(!SERVER)("database", () => {
       }
     });
 
+    it("preserves legacy token authority and accepts only the three explicit scopes", async () => {
+      const result = await c.query(`insert into finance_api_tokens (name,token_sha256) values ('Legacy',repeat('a',64)) returning scope`);
+      expect(result.rows[0].scope).toBe("finance:write");
+      for (const [k,scope] of ["housing:read","finance:read","finance:write"].entries()) {
+        const row = await c.query(`insert into finance_api_tokens (name,token_sha256,scope) values ('Scoped',$1,$2) returning scope`, [String(k+1).repeat(64),scope]);
+        expect(row.rows[0].scope).toBe(scope);
+      }
+      expect((await failure(c,`insert into finance_api_tokens (name,token_sha256,scope) values ('Bad',repeat('b',64),'all')`)).code).toBe("23514");
+      expect((await failure(c,`update finance_api_tokens set scope=null`)).code).toBe("23502");
+    });
+
     const ACCOUNT = "00000000-0000-0000-0000-0000000000f1";
     const account = (currency = "SGD") => c.query(
       `insert into finance_accounts (id, name, region, currency, kind, category) values ($1, 'DBS', 'SG', $2, 'asset', 'cash')`,

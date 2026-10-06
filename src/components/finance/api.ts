@@ -37,17 +37,17 @@ export function messageOf(err: unknown): string {
 
 /** A token for the owner's own agents, as the page may see it: never the token
  *  itself, except in the answer that makes it. */
-export type ApiToken = { id: string; name: string; created_at?: string };
+export type ApiToken = { id: string; name: string; created_at?: string; scope: import("@/lib/finance-access").TokenScope };
 
 export async function listTokens(): Promise<ApiToken[]> {
   return (await parse<{ tokens: ApiToken[] }>(await fetch("/api/finance/tokens", { cache: "no-store" }))).tokens;
 }
 
-export async function makeToken(name: string): Promise<ApiToken & { token: string }> {
+export async function makeToken(name: string, scope: ApiToken["scope"]): Promise<ApiToken & { token: string }> {
   return parse(await fetch("/api/finance/tokens", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, scope }),
   }));
 }
 

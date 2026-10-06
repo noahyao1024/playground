@@ -1,4 +1,4 @@
-/** Optional metadata: legacy saved comparisons retain their arithmetic.
+/** Optional metadata: legacy saved comparisons retain their contribution rules.
  * CPF tables for 2026 and announced 2027; later years hold 2027 rules.
  * Sources: https://www.cpf.gov.sg/content/dam/web/employer/employer-obligations/documents/CPFcontributionratesfrom1Jan2026.pdf
  * https://www.cpf.gov.sg/service/sfc/servlet.shepherd/document/download/069IW00000DZMxZYAX
@@ -11,7 +11,7 @@ import type { Residency } from "@/lib/housing";
 export const CPF_PR_RULES = "2026-2027-pr-v2";
 export const CPF_RULES = ["2026-2027-v1", CPF_PR_RULES] as const;
 export const GUIDANCE_LIMITS = { lease_start: [1800, 2200], lease_term: [1, 999],
-  salary: [0, 1_000_000], age: [16, 100], retirement_age: [16, 100], cpf_limit: [0, 100_000_000] } as const;
+  salary: [0, 1_000_000], age: [16, 100], retirement_age: [16, 100], cpf_limit: [0, 100_000_000], lease_discount_rate: [0, 20] } as const;
 const validDay = (value: unknown): value is string => {
   try { return isRealDay(value); } catch { return false; }
 };
@@ -27,6 +27,8 @@ export type HousingGuidance = {
   tenure: "unknown" | "freehold" | "leasehold";
   lease_start: number | null;
   lease_term: number;
+  /** Illustrative annual effective discount rate; 0 gives linear decay. */
+  lease_discount_rate: number;
   cpf_mode: "manual" | "salary" | "none";
   salary: number | null;
   age: number | null;
@@ -38,7 +40,7 @@ export type HousingGuidance = {
 export function newGuidance(asOf: string): HousingGuidance {
   return { version: 1, cpf_rules: CPF_PR_RULES, pr_since: null, cpf_scheme: "graduated", as_of: asOf, annual_value_auto: true, confirmed: false, tenure: "unknown", lease_start: null, lease_term: 99,
     cpf_mode: "none", salary: null, age: null, retirement_age: 65,
-    cpf_eligible: false, cpf_limit: null };
+    cpf_eligible: false, cpf_limit: null, lease_discount_rate: 3 };
 }
 export function parseGuidance(raw: unknown): HousingGuidance {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("guidance must be an object");
@@ -70,8 +72,8 @@ export function parseGuidance(raw: unknown): HousingGuidance {
   for (const [key, [min,max]] of Object.entries(GUIDANCE_LIMITS)) {
     const v = given[key];
     if (v === undefined) continue;
-    if (v === null && !["lease_term", "retirement_age"].includes(key)) { Object.assign(out, { [key]: null }); continue; }
-    if (typeof v !== "number" || !Number.isFinite(v) || v < min || v > max || (!["salary", "cpf_limit"].includes(key) && !Number.isInteger(v))) throw new Error(`Invalid ${key}`);
+    if (v === null && !["lease_term", "retirement_age", "lease_discount_rate"].includes(key)) { Object.assign(out, { [key]: null }); continue; }
+    if (typeof v !== "number" || !Number.isFinite(v) || v < min || v > max || (!["salary", "cpf_limit", "lease_discount_rate"].includes(key) && !Number.isInteger(v))) throw new Error(`Invalid ${key}`);
     Object.assign(out, { [key]: v });
   }
   return out;
@@ -87,9 +89,10 @@ export function leaseFactor(g: HousingGuidance | undefined, month: number): numb
   if (left === null) return 1;
   if (left <= 0) return 0;
   const remaining = Math.max(0, left - month / 12);
-  // Discounted right-to-occupy at a fixed 3%, normalized to today's price.
-  // An illustrative assumption, not an official valuation or Bala table.
-  return -Math.expm1(-0.03 * remaining) / -Math.expm1(-0.03 * left);
+  // Annual effective discounting, normalized to today's price. This is an
+  // editable assumption, not an official valuation or Bala table.
+  const rate = Math.log1p((g?.lease_discount_rate ?? 3) / 100);
+  return rate === 0 ? remaining / left : -Math.expm1(-rate * remaining) / -Math.expm1(-rate * left);
 }
 export function estimatedOa(salary: number, age: number, year = 2026, prYear: 1 | 2 | 3 = 3): number {
   const wages = Math.min(8000, Math.max(0, salary));

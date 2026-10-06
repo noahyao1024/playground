@@ -197,7 +197,7 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   token, and a test holds it to the route. `/finance` is a 404 to anyone but the owner, even
   signed out; the owner comes in by `/auth/signin?callbackUrl=/finance`.
 - `/housing` and `/api/housing` — Singapore's housing market and the owner's rent-or-buy
-  comparisons, behind the same check as `/finance` (`isFinanceOwner`, `isFinanceRequest`: the
+  comparisons, behind the same check as `/finance` (`isFinanceOwner`, `financeAccessResponse`: the
   owner's session or a finance token).
   `/api/housing/openapi` serves the housing-only contract from `src/lib/housing-openapi.ts`;
   the finance contract composes its paths and schemas. Both use the same token/session,
@@ -209,6 +209,25 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   `/api/housing/chart` exports those and every saved market series as passive SVG, under
   the same permission check and private/no-store headers. POST never saves a what-if;
   its chart URL is null, so send the same body to POST chart. Never put a token in a URL.
+  `finance-access.ts` defines `housing:read`, `finance:read` (both resources), and
+  `finance:write`. New tokens default to read-only; existing tokens retain write
+  access via `20261006_finance_token_scopes.sql`. Require write permission before
+  parsing any finance/housing mutation; analysis and chart POSTs remain reads.
+  A supplied bearer never gains permission through a browser cookie. Only a
+  specifically missing scope column enables the legacy lookup during deployment;
+  other failures and unknown scopes fail closed. Minting fails 503 before the
+  migration rather than turning a read-only token into a legacy write token.
+  Token management still requires the owner session, never a bearer alone.
+  OpenAPI is filtered by scope; `?read_only=true` downloads a compact read-only
+  contract for schema importers that cannot authenticate their fetch. The Housing
+  header opens token management, client configuration and a copyable Chinese prompt.
+  `/api/housing/mcp` uses the standard SDK's stateless Streamable HTTP transport,
+  bearer auth on every request, same-origin validation, no-store, and three read-only
+  tools. It calls the existing raw/analysis/SVG handlers; keep it equivalent to REST
+  and the page. Each tool schema is self-contained. SVG is an embedded resource;
+  clients unable to render it can plot the JSON rows. No OAuth is implemented;
+  don't promise compatibility with clients that require it or ordinary chats with
+  no tool connection. No refresh, token management or write tool is exposed.
   `housing-comparison.ts` and `housing-charts.ts` are shared by the page and API: use them
   when changing calculations or chart rows. `simulate` caps the last browser batch at
   PATHS so a partial batch cannot diverge from the API's draws. A 200 refresh can carry
@@ -259,14 +278,16 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   quarters are bridged rather than breaking a series.
   The guided comparison (`src/components/housing/guided-inputs.tsx`) keeps what it asks in a
   scenario's optional `guidance` (`src/lib/housing-guidance.ts`); a scenario without it keeps
-  the arithmetic it was saved with. With it, a comparison is shown and saved only once
+  manual contribution assumptions. Corrected cash and interest rules apply when recalculating
+  all scenarios; saved inputs are never changed by a read. With guidance, a comparison is shown and saved only once
   `comparisonReady` (the route refuses one that is not): the buyer confirmed, a lease that has
   not run out, and for CPF from a salary an eligible buyer of known age; PRs on the new rules
   also need a grant date on or before `as_of`. A lease runs from
   1 January of its first year (the lease's, never the TOP year's: the form no longer asks that,
   which counted for nothing, and `parseGuidance` passes over a `build_year` saved before),
   counted at the `as_of` date kept with the scenario; the home's
-  value carries a 3% discounted right-to-occupy factor, nothing at expiry, after which the
+  value carries an editable annual-effective discounted right-to-occupy factor
+  (`lease_discount_rate`, default 3%; 0% gives linear decay), nothing at expiry, after which the
   buyer pays rent. CPF from a salary is the Ordinary Account's share at CPF's 2026 rates and
   its announced 2027 ones, ordinary wages to S$8,000; later years keep 2027's. When CPF
   publishes new rates, add them to `estimatedOa` and its test's figures with them.
@@ -287,10 +308,20 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   holding period. That assumption comes from CPI unless overridden; show its rate and the
   scenario's baseline date, and keep the nominal chart and winner unchanged.
   Growth and investment returns use annual effective compound rates. CPF OA savings
-  and housing accrued interest use the equivalent monthly-rate approximation; CPF
-  actually computes monthly and credits/compounds yearly. Lowest monthly balances,
-  transaction dates and extra CPF interest are outside this model. Describe that
-  approximation explicitly; don't present this projection as a CPF statement.
+  and housing accrued interest accrue monthly at annual rate / 12 and compound only
+  after the December year-end credit (`housing-cpf.ts`). Deposits earn next month;
+  withdrawals reduce the current month's interest base. Pending OA interest is an
+  asset in net worth but cannot pay the mortgage before credit. Annual rows expose
+  credited balances, pending interest and housing principal/interest. Baseline-month
+  transactions are modelled as a whole month; pre-baseline pending interest, actual
+  transaction dates and extra CPF interest are excluded. Never call it a CPF statement.
+  Bank minimum cash uses `housing-financing.ts`, not a flat 5% or the voluntarily
+  selected loan share. `financing.outstanding_loans` is independent of ABSD's `nth`;
+  `borrower_age` is the bank-assessed age, falling back to guidance age as a single
+  borrower. Unknown ages use the lower band conservatively. HDB/private bank term
+  thresholds differ. Exceeding the estimated LTV/term is flagged, not refused or
+  silently rewritten. Test every band, cash requirement and borrower-age fallback.
+  Historical replay proportions are scenario shares, never calibrated probabilities.
   Private developments the owner follows are read from URA's Data Service (`src/lib/ura.ts`)
   with `URA_ACCESS_KEY`, set on Vercel only. They live in `housing_projects`, with
   `housing_project_sales` and `housing_project_rents`, private like the rest. A key gets a token

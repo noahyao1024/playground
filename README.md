@@ -75,7 +75,8 @@ The holding period supports 1–99 years independently of the mortgage. Optional
 lease start year and original term calculate remaining tenure at a saved assessment
 date; the lease start is separate from the building's TOP year. Expiry assumes 1 January of
 start year + term. Leasehold value multiplies market growth by a normalized
-3% discounted occupancy factor, not an official valuation. At expiry the home is
+discounted occupancy factor (editable `lease_discount_rate`, default 3% annual
+effective; 0% is linear decay), not an official valuation. At expiry the home is
 worth zero and the buyer pays replacement rent while still servicing any debt.
 Scenarios beyond 35 years show assumptions only, without simulated win probabilities.
 
@@ -265,19 +266,20 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
 
 ## Finance and housing APIs, for agents
 
-An agent or a script can work on the finance data as the owner — read it and
-record balances — with a bearer token. The same token opens `/api/finance/*`
-and `/api/housing`; the split bill keeps its separate access rules.
+An agent or a script can use a bearer token with the selected permissions.
+`housing:read` reads housing only; `finance:read` reads finance and housing;
+`finance:write` also allows writes. New tokens default to read-only. Existing
+tokens retain their previous read/write access. The split bill keeps its separate rules.
 
-Make one on the page: **/finance → API access → Generate token**, signed in as
+Make one on the page: **/housing → AI 分析 / Prompt**, or **/finance → API access**, signed in as
 the owner, on any device. The token is shown once; only its SHA-256 is kept
 (`finance_api_tokens`, as private as the other finance tables). Give it to the
 agent in its own environment — never in this repo, which is public — and revoke
 it on the same page if it is ever lost. Tokens can only be made and revoked
 from a signed-in session, never with a token.
 
-`FINANCE_API_TOKEN`, set in Vercel, is the other way to give one: it works the
-same, but is changed by redeploying rather than on the page.
+`FINANCE_API_TOKEN`, set in Vercel, is the legacy full read/write alternative,
+changed by redeploying rather than on the page. Prefer scoped, revocable tokens.
 
 ```bash
 curl -s https://playground.noahyao.me/api/finance/summary \
@@ -294,6 +296,7 @@ curl -s https://playground.noahyao.me/api/finance/summary \
 | `POST /api/housing/analysis` | Read-only what-if: `{"inputs": …, "years": 15, "simulation": false}` or `{"scenario_id": …, "years": 15}`. Saves nothing. |
 | `GET /api/housing/chart` | Authenticated SVG image from an analysis `svg_url`; comparison, project price / rent, or any saved market series. |
 | `POST /api/housing/chart?chart=wealth` | SVG of the same unsaved what-if body sent to analysis. |
+| `POST /api/housing/mcp` | Native stateless MCP Streamable HTTP; bearer authentication; `get_housing_data`, `analyse_housing`, `get_housing_chart`. Every tool is read-only. |
 | `GET /api/finance/summary` | Where things stand, worked out: totals, change since the last record, each account's newest balance, loan schedule and RSU position, history. Takes the page's filters: `?exclude_long_term=1&liquid_only=1&owner=Daisy`. |
 | `GET /api/finance` | Every account and balance, as stored; each account with its loan's `rate_changes` and `prepayments`, and its `rsu_grants` and `rsu_sales`. |
 | `GET /api/finance/loan-schedule?id=…` | One loan's every repayment to the cent — date, payment, principal, interest, balance — and the totals. |
@@ -327,19 +330,46 @@ with the same Authorization header. Images are self-contained SVGs; raw chart
 rows support interactive plotting too. `market_charts` lists export URLs for
 every source series; its raw observations are in `GET /api/housing`.
 POST what-ifs have null image URLs: send the same body to the chart route so
-private inputs stay out of query strings. A token grants the owner's existing
-finance and housing rights; it is not a housing-only or read-only credential.
+private inputs stay out of query strings. Read-only tokens can use both analysis
+and chart POSTs, but cannot save, delete, follow/unfollow or refresh; forbidden
+operations return 403 before reading business data. Revocation closes every route,
+including MCP. Token management always requires the owner's browser session.
+
+The page includes a copyable Chinese analysis prompt, Codex and Claude Code MCP
+configuration, and a **download read-only OpenAPI** button. Import the downloaded
+JSON into GPT Actions and configure API Key / Bearer separately. The description
+also requires authentication, so downloading solves schema importers that cannot
+send that header. `?read_only=true` omits mutations and unused schemas even for the
+owner; token-authenticated descriptions always omit forbidden operations.
+MCP returns the same raw data and calculations as REST, plus SVG as an embedded
+resource. A client without SVG display can plot the analysis's JSON chart rows.
+Use a client supporting Streamable HTTP and bearer headers. The MCP endpoint does
+not provide OAuth; clients requiring OAuth need a compatible bearer client or GPT
+Actions. Pasting a link or prompt into an ordinary chat does not connect tools.
 
 Investment returns, home/rent/cost growth and inflation discounting use annual
 effective compound rates. Monthly accounting costs do not compound; compare
-the net-worth gap, which reinvests cash differences. CPF uses an equivalent
-monthly-rate approximation: CPF actually computes monthly and credits/compounds
-yearly; lowest monthly balances, actual transaction dates and extra interest
-need a CPF statement rather than this projection. The lease discount is an
+the net-worth gap, which reinvests cash differences. CPF now accrues monthly at
+the annual rate / 12 on modelled opening balances less withdrawals, and credits
+at the December year end before compounding. Deposits earn from the next month.
+Pending interest counts toward net worth but cannot fund repayments. The annual
+rows expose credited balances, pending interest and housing principal/accrued
+interest. Pre-baseline pending interest, actual transaction dates and extra CPF
+interest need a CPF statement rather than this projection. The lease discount is an
 illustrative assumption. Compare 10/15/20/30-year horizons and alternative
 growth/return inputs; horizons over 35 years have a central projection only.
 The 500 seeded historical replays match the page and are not guaranteed or
 calibrated future probabilities. No saved scenario is changed by analysis.
+
+Bank minimum cash depends on eligibility, not a voluntarily lower loan share:
+first loan 5% (75% LTV band) or 10% (55% band); existing housing loans require
+25%. `financing.outstanding_loans` is separate from the ABSD property count.
+`financing.borrower_age` is the bank-assessed age for single/joint borrowing;
+without it, guidance age assumes a single borrower, and unknown age uses the
+lower band conservatively. Private-bank terms over 30 years, HDB-bank terms
+over 25 years, or maturity after age 65 use the lower band. The model flags
+requested loans outside those bands; it does not certify approval or overwrite
+saved loan terms. See [MoneySense's loan rules](https://www.moneysense.gov.sg/buying-a-property-how-much-can-you-afford/).
 
 To revoke it, replace the value and redeploy; the old one stops working with
 that deployment.

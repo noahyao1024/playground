@@ -216,7 +216,7 @@ describe("clampInputs", () => {
 });
 
 describe("rentOrBuy", () => {
-  const base: ScenarioInputs = { ...DEFAULT_INPUTS, residency: "pr", kind: "private", loan_type: "bank", price: 1_000_000, renovation: 0, buy_costs: 0 };
+  const base: ScenarioInputs = { ...DEFAULT_INPUTS, residency: "pr", kind: "private", loan_type: "bank", price: 1_000_000, renovation: 0, buy_costs: 0, financing: { outstanding_loans: 0, borrower_age: 30 } };
 
   it("works out the money up front, CPF paying what it may: the down payment past a bank's 5% in cash, and BSD", () => {
     const bank = rentOrBuy({ ...base, cpf_balance: 300_000, buy_costs: 5_000, renovation: 30_000 }).upfront;
@@ -263,7 +263,7 @@ describe("rentOrBuy", () => {
     const year = p.years[1];
     // The renter: the cash the buyer put in, untouched, and CPF a year on --
     // 100,000 at 2.5% and 4,000 a month.
-    const months = Array.from({ length: 12 }, (_, k) => 4_000 * 1.025 ** ((11 - k) / 12)).reduce((a, b) => a + b, 0);
+    const months = 4_000 * 12 + 4_000 * .025 / 12 * 66; // deposits earn next month; no intra-year compounding
     expect(year.rent_net_worth).toBeCloseTo(p.upfront.from_cash + 100_000 * 1.025 + months, 0);
     // The buyer: every instalment from CPF, so the rent's 5,000 a month saved
     // whole, and what CPF paid owed back to it on a sale, with the interest it
@@ -273,11 +273,9 @@ describe("rentOrBuy", () => {
     expect(year.cpf_refund).toBeLessThan(100_000 * 1.025 + 12 * p.instalment * 1.025);
     // Its cash: the 5,000 a month the renter spends, all of it saved. Its CPF:
     // each month's 4,000, less the instalment, left in the account to grow.
-    let cpf = 0;
-    for (let m = 0; m < 12; m++) {
-      cpf = cpf * 1.025 ** (1 / 12) + 4_000;
-      cpf -= Math.min(cpf, p.instalment);
-    }
+    const surplus = 4_000 - p.instalment;
+    const annualInterest = Array.from({length:12}, (_,m)=>Math.max(0, m*surplus - p.instalment)*.025/12).reduce((a,b)=>a+b,0);
+    const cpf = 12*surplus + Math.round(annualInterest*100)/100;
     expect(year.buy_net_worth).toBeCloseTo(i.price - year.loan_balance - year.sale_costs + 12 * 5_000 + cpf, 1);
   });
 
@@ -407,7 +405,7 @@ describe("a month of owning, taken apart", () => {
     const cash = rentOrBuy({ ...base, loan_share: 0, invest_return: 6 });
     expect(cash.monthly[0].opportunity).toBeCloseTo(cash.upfront.from_cash * g(6), 1);
     const cpf = rentOrBuy({ ...base, loan_share: 0, invest_return: 6, cpf_balance: 100_000, cpf_rate: 2.5 });
-    expect(cpf.monthly[0].opportunity).toBeCloseTo(cpf.upfront.from_cash * g(6) + 100_000 * g(2.5), 1);
+    expect(cpf.monthly[0].opportunity).toBeCloseTo(cpf.upfront.from_cash * g(6) + 100_000 * 2.5 / 1200, 1);
     // With a loan, each repayment's principal joins it; in cash here, none from CPF.
     const loaned = rentOrBuy({ ...base, invest_return: 6 });
     const periods = loanSchedule({ principal: 750_000, rate: base.loan_rate, start: "2026-01-01", months: base.loan_years * 12, method: "annuity" }).periods;

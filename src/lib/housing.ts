@@ -1,6 +1,8 @@
 import { CPF_PR_RULES, cpfHousingLimit, leaseFactor, parseGuidance, remainingLease, salaryOa, type HousingGuidance } from "@/lib/housing-guidance";
 import { addMonths } from "@/lib/dates";
 import { loanSchedule, type LoanRateChangeTerms } from "@/lib/finance";
+import { bankFinancing, parseFinancing, type HousingFinancing } from "./housing-financing";
+import { CpfHousingLedger, CpfOaLedger } from "./housing-cpf";
 
 /** /housing's arithmetic, shared by the page and the server: quarters, the
  *  market's figures as the page reads them, Singapore's stamp duties and
@@ -267,7 +269,7 @@ export type ScenarioInputs = {
    *  the estimates and the simulated futures follow its prices and rents. */
   market: PrivateMarket;
   price: number;
-  /** HDB's loan, which CPF may fund whole; or a bank's, which wants 5% of the price in cash. */
+  /** HDB's loan, or a bank loan with a minimum cash downpayment. */
   loan_type: LoanType;
   /** The share of the price borrowed, in percent. */
   loan_share: number;
@@ -309,6 +311,7 @@ export type ScenarioInputs = {
   /** The inputs left to the market's live estimates. */
   auto: Estimated[];
   guidance?: HousingGuidance;
+  financing?: HousingFinancing;
 };
 
 export const DEFAULT_INPUTS: ScenarioInputs = {
@@ -345,7 +348,7 @@ export const DEFAULT_INPUTS: ScenarioInputs = {
 };
 
 /** What each number may be, and whether it is whole. */
-export const INPUT_LIMITS: Record<Exclude<keyof ScenarioInputs, "residency" | "kind" | "loan_type" | "market" | "auto" | "guidance">, [number, number, boolean?]> = {
+export const INPUT_LIMITS: Record<Exclude<keyof ScenarioInputs, "residency" | "kind" | "loan_type" | "market" | "auto" | "guidance" | "financing">, [number, number, boolean?]> = {
   nth: [1, 3, true],
   price: [10_000, 100_000_000],
   loan_share: [0, 90],
@@ -407,6 +410,10 @@ export function parseInputs(raw: unknown): ScenarioInputs {
     try { out.guidance = parseGuidance(given.guidance); }
     catch (err) { throw new InputError(err instanceof Error ? err.message : "Invalid guidance"); }
   }
+  if (given.financing !== undefined) {
+    try { out.financing = parseFinancing(given.financing); }
+    catch (err) { throw new InputError(err instanceof Error ? err.message : "Invalid financing"); }
+  }
   return out;
 }
 
@@ -431,7 +438,7 @@ export function readInputs(raw: unknown): ScenarioInputs {
   } catch {
     const given = typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
     const out: ScenarioInputs = { ...DEFAULT_INPUTS };
-    for (const key of [...Object.keys(DEFAULT_INPUTS), "guidance"] as Array<keyof ScenarioInputs>) {
+    for (const key of [...Object.keys(DEFAULT_INPUTS), "guidance", "financing"] as Array<keyof ScenarioInputs>) {
       try {
         (out as Record<string, unknown>)[key] = parseInputs({ [key]: given[key] })[key];
       } catch { /* this one stays at its default */ }
@@ -485,6 +492,12 @@ export type ProjectionYear = {
   /** CPF used for the home, with the interest it would have earned: what a
    *  sale returns to the account before anything else. */
   cpf_refund: number;
+  cpf_buy_balance: number;
+  cpf_rent_balance: number;
+  cpf_buy_pending_interest: number;
+  cpf_rent_pending_interest: number;
+  cpf_housing_principal: number;
+  cpf_housing_interest: number;
 };
 
 /** A month of a year, on average, owning taken apart: what goes out, and what
@@ -626,9 +639,8 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
   const bsd = buyerStampDuty(i.price);
   const absd = additionalBuyerStampDuty(i.price, i.residency, i.nth);
 
-  // CPF pays what it may at the start: the down payment past a bank loan's 5%
-  // in cash, and BSD.
-  const cashDown = i.loan_type === "bank" && loan > 0 ? Math.min(downPayment, round(i.price * 0.05)) : 0;
+  // Eligibility, rather than the chosen loan share, sets the cash requirement.
+  const cashDown = i.loan_type === "bank" && loan > 0 ? Math.min(downPayment, round(i.price * bankFinancing(i).minimum_cash_percent / 100)) : 0;
   let cpfBuy = i.cpf_balance;
   const cpfLimit = i.guidance ? cpfHousingLimit(i.guidance, i.price) : Infinity;
   const fromCpf = Math.min(cpfBuy, downPayment - cashDown + bsd, cpfLimit);
@@ -646,9 +658,10 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
     }).periods
     : [];
 
-  const cpfGrow = monthly(i.cpf_rate);
-  let cashBuy = 0, cashRent = fromCash, cpfRent = i.cpf_balance;
-  let cpfUsed = fromCpf;
+  const buyerOa = new CpfOaLedger(cpfBuy), renterOa = new CpfOaLedger(i.cpf_balance);
+  const housingCpf = new CpfHousingLedger(fromCpf);
+  const startMonth = Number((i.guidance?.as_of ?? LOAN_START).slice(5, 7));
+  let cashBuy = 0, cashRent = fromCash;
   let ownSpent = bsd + absd + i.buy_costs + i.renovation, rentSpent = 0;
   let balance = loan;
   const years: ProjectionYear[] = [];
@@ -663,13 +676,16 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
       loan_balance: round(balance),
       loan_rate: rateThen ?? null,
       sale_costs: round(saleCosts),
-      buy_net_worth: round(value - balance - saleCosts + cashBuy + cpfBuy),
-      rent_net_worth: round(cashRent + cpfRent),
+      buy_net_worth: round(value - balance - saleCosts + cashBuy + buyerOa.total),
+      rent_net_worth: round(cashRent + renterOa.total),
       own_monthly: round(ownMonthly),
       rent_monthly: round(rentMonthly),
       own_spent: round(ownSpent),
       rent_spent: round(rentSpent),
-      cpf_refund: round(cpfUsed),
+      cpf_refund: round(housingCpf.refund),
+      cpf_buy_balance: round(buyerOa.balance), cpf_rent_balance: round(renterOa.balance),
+      cpf_buy_pending_interest: round(buyerOa.pending), cpf_rent_pending_interest: round(renterOa.pending),
+      cpf_housing_principal: round(housingCpf.principal), cpf_housing_interest: round(housingCpf.interest),
     });
   };
   const firstOwn = (schedule[0]?.payment ?? 0) + (i.maintenance + i.upkeep / 12) * e.costs[0] + ownerOccupierTax(i.annual_value * e.rent[0]) / 12;
@@ -700,20 +716,17 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
     const running = expired ? 0 : (i.maintenance + i.upkeep / 12) * e.costs[renewal];
     const grow = e.invest[m];
     // What the money already in the home would have earned this month.
-    sum.opportunity += inHomeCash * grow + inHomeCpf * cpfGrow;
+    sum.opportunity += inHomeCash * grow + inHomeCpf * i.cpf_rate / 1200;
 
     // The month's growth on what each holds, then the month's money.
     cashBuy *= 1 + grow;
     cashRent *= 1 + grow;
     const contribution = i.guidance?.cpf_mode === "none" ? 0 : i.guidance?.cpf_mode === "salary" ? salaryOa(i.guidance, m - 1, i.residency) : i.cpf_monthly;
-    cpfBuy = cpfBuy * (1 + cpfGrow) + contribution;
-    cpfRent = cpfRent * (1 + cpfGrow) + contribution;
-    cpfUsed *= 1 + cpfGrow;
-
-    const byCpf = expired ? 0 : Math.min(cpfBuy, instalment, Math.max(0, cpfLimit - cpfPrincipalUsed));
+    const calendarMonth = (startMonth + m - 2) % 12 + 1;
+    const byCpf = buyerOa.month(contribution, expired ? 0 : Math.min(instalment, Math.max(0, cpfLimit - cpfPrincipalUsed)), i.cpf_rate, calendarMonth);
+    renterOa.month(contribution, 0, i.cpf_rate, calendarMonth);
+    housingCpf.month(byCpf, i.cpf_rate, calendarMonth);
     cpfPrincipalUsed += byCpf;
-    cpfBuy -= byCpf;
-    cpfUsed += byCpf;
     ownMonthly = instalment + running + tax + (expired ? rent + i.rent_costs / 12 : 0);
     rentMonthly = rent + i.rent_costs / 12;
     const ownCash = ownMonthly - byCpf;
@@ -781,7 +794,13 @@ export function rentOrBuy(inputs: ScenarioInputs, economy?: Economy): Projection
 /** What the figures assume that the rules may not allow: said, never refused. */
 export function notesOn(i: ScenarioInputs): string[] {
   const notes: string[] = [];
-  if (i.guidance?.tenure === "leasehold") notes.push("地契按起始年份估算，价值采用 3% 折现的居住权衰减假设；到期价值为零，随后计入替代租金，不假设续期或集体出售。");
+  if (i.guidance?.tenure === "leasehold") notes.push(`地契按起始年份估算，价值采用 ${i.guidance.lease_discount_rate ?? 3}% 年折现的居住权衰减假设（可调整，不是官方估值）；到期价值为零，随后计入替代租金，不假设续期或集体出售。`);
+  if (i.loan_type === "bank" && i.loan_share > 0) {
+    const f = bankFinancing(i);
+    notes.push(`银行贷款按 ${f.outstanding_loans} 笔现有房贷估算：LTV 上限 ${f.max_ltv}%，最低现金首付 ${f.minimum_cash_percent}%。${f.age_assumption === "bank_assessed" ? "采用填入的银行评估年龄。" : f.borrower_age === null ? "年龄未知，暂按较保守档；填写借款年龄后核对。" : "暂按 CPF 年龄为单一借款人年龄，联名购房请填写银行评估年龄。"}`);
+    if (!f.within_limits) notes.push("输入的贷款比例或期限超出当前估算档位；结果只按输入展示成本，融资方案需要银行确认。");
+  }
+  if (i.cpf_balance > 0 || i.cpf_monthly > 0 || i.guidance?.cpf_mode === "salary") notes.push("CPF 按模拟月度余额累计利息、每年 12 月末入账后复利；当月缴款从下月计息、当月提款不计息。年内待入账利息计入净资产，不能提前支付房贷。未导入基准日前待入账利息、实际交易日或额外 CPF 利息；不是 CPF 账单。");
   if (i.years > 35) notes.push("超过 35 年的结果仅用于探索假设；历史样本不足以支持远期胜率预测。");
   if (i.guidance?.cpf_mode === "salary" && i.residency === "pr" && i.guidance.cpf_rules === "2026-2027-v1") notes.push("旧方案保留完整 CPF 费率假设；填写 PR 日期后启用分阶段估算。");
   if (i.guidance?.cpf_mode === "salary") notes.push("CPF 工资估算采用 2026 及已公布的 2027 年规则，之后沿用 2027 规则；月薪不变、每年增长一岁并在设定年龄停缴，不含奖金或退休账户溢出。");

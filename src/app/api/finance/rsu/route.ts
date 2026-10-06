@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { isRealDay, todayInSG } from "@/lib/dates";
 import { rsuTermsOf } from "@/lib/finance";
-import { financeDatabase, financeJson as json, isFinanceRequest, isUuid, readAccount, reason } from "@/lib/finance-server";
+import { financeDatabase, financeJson as json, financeAccessResponse, isUuid, readAccount, reason } from "@/lib/finance-server";
 import { nextWindow, priceOn, rsuOutlook, rsuPosition, rsuProceeds, rsuWindow, windowCutoffs } from "@/lib/rsu";
 
 /** One RSU account worked out for a window: which tranches count and at what
@@ -16,7 +16,8 @@ export const dynamic = "force-dynamic";
 const OUTLOOK = 8;
 
 export async function GET(req: NextRequest) {
-  if (!(await isFinanceRequest(req))) return json({ error: "Unauthorized" }, 401);
+  const denied = await financeAccessResponse(req, "finance");
+  if (denied) return denied;
   const params = req.nextUrl.searchParams;
   const id = params.get("id");
   if (!isUuid(id)) return json({ error: "id is required: the RSU account's" }, 400);

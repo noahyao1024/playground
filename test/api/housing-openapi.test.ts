@@ -49,7 +49,7 @@ describe("housing OpenAPI for agents", () => {
   });
 
   it("accepts a stored finance token for both documents and housing, and revocation closes all three", async () => {
-    db.tables.finance_api_tokens.push({id:"00000000-0000-0000-0000-000000000001",token_sha256:sha256Hex(TOKEN)});
+    db.tables.finance_api_tokens.push({id:"00000000-0000-0000-0000-000000000001",token_sha256:sha256Hex(TOKEN),scope:"finance:write"});
     session.current = null;
     for (const route of [GET,FINANCE_SPEC,HOUSING.GET]) expect((await route(request(undefined,TOKEN))).status).toBe(200);
     db.tables.finance_api_tokens.length = 0;

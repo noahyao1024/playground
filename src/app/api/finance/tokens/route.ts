@@ -1,7 +1,8 @@
 import { NextRequest } from "next/server";
 import {
-  financeDatabase, financeJson as json, isFinanceOwnerSession, isUuid, newFinanceToken, reason, sha256Hex,
+  financeDatabase, financeJson as json, isFinanceOwnerSession, isUuid, missingTokenScope, newFinanceToken, reason, sha256Hex,
 } from "@/lib/finance-server";
+import { DEFAULT_TOKEN_SCOPE, isTokenScope, type TokenScope } from "@/lib/finance-access";
 
 /** The tokens the owner's agents use on /api/finance/*: listed, made and revoked
  *  by the owner signed in on the /finance page, never with a token. A new token
@@ -10,8 +11,8 @@ export const dynamic = "force-dynamic";
 
 const NAME_MAX = 60;
 // What may be said about a token: never its hash, whatever the query asked for.
-type Row = { id: string; name: string; created_at?: string };
-const shown = ({ id, name, created_at }: Row) => ({ id, name, created_at });
+type Row = { id: string; name: string; created_at?: string; scope?: TokenScope };
+const shown = ({ id, name, created_at, scope }: Row) => ({ id, name, created_at, scope: scope ?? "finance:write" });
 
 export async function GET() {
   if (!(await isFinanceOwnerSession())) return json({ error: "Unauthorized" }, 401);
@@ -19,7 +20,13 @@ export async function GET() {
   if (!db) return json({ error: "Supabase not configured" }, 500);
   // A handful at most, made by hand; no paging needed.
   const { data, error } = await db.from("finance_api_tokens")
-    .select("id,name,created_at").order("created_at", { ascending: false }).order("id").limit(100);
+    .select("id,name,created_at,scope").order("created_at", { ascending: false }).order("id").limit(100);
+  if (missingTokenScope(error)) {
+    const legacy = await db.from("finance_api_tokens").select("id,name,created_at")
+      .order("created_at", { ascending: false }).order("id").limit(100);
+    if (legacy.error) return json({ error: reason(legacy.error) }, 500);
+    return json({ tokens: (legacy.data as Row[]).map(shown) });
+  }
   if (error) return json({ error: reason(error) }, 500);
   return json({ tokens: (data as Row[]).map(shown) });
 }
@@ -31,9 +38,12 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const name = typeof body?.name === "string" && body.name.trim() ? body.name.trim() : "Agent";
   if (name.length > NAME_MAX) return json({ error: `The name can be at most ${NAME_MAX} characters` }, 400);
+  const scope = body?.scope ?? DEFAULT_TOKEN_SCOPE;
+  if (!isTokenScope(scope)) return json({ error: "Unknown token scope" }, 400);
   const token = newFinanceToken();
   const { data, error } = await db.from("finance_api_tokens")
-    .insert({ name, token_sha256: sha256Hex(token) }).select("id,name,created_at").single();
+    .insert({ name, scope, token_sha256: sha256Hex(token) }).select("id,name,created_at,scope").single();
+  if (missingTokenScope(error)) return json({ error: "Token permissions are being upgraded. Please try again shortly." }, 503);
   if (error) return json({ error: reason(error) }, 500);
   return json({ ...shown(data as Row), token }, 201);
 }
