@@ -67,6 +67,13 @@ export type Project = {
   rents: ProjectRent[];
 };
 
+/** The same region / kind used when comparing a followed development. */
+export function marketForProject(project: Project): import("./housing").PrivateMarket {
+  const landed = project.sales.filter(s => s.property_type && /terrace|semi-d|detached|bungalow|cluster/i.test(s.property_type)).length;
+  if (landed > project.sales.length / 2) return "ALL:landed";
+  return project.segment ? `${project.segment}:non-landed` : "ALL:non-landed";
+}
+
 /** A development's name as URA writes it: in capitals, one space between
  *  words. Null for nothing, or for more than eighty characters. */
 export function projectName(raw: unknown): string | null {

@@ -1,7 +1,9 @@
 "use client";
 
 import { GuidedInputs } from "./guided-inputs";
-import { CPF_PR_RULES, newGuidance, parseGuidance } from "@/lib/housing-guidance";
+import { CPF_PR_RULES, newGuidance } from "@/lib/housing-guidance";
+import { comparisonInputs, resolveComparison } from "@/lib/housing-comparison";
+import { chanceRows, costRows, futureRows, soraRows, wealthRows } from "@/lib/housing-charts";
 import { dayInSG } from "@/lib/dates";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -15,18 +17,18 @@ import { Segmented } from "@/components/finance/segmented";
 import type { Confirmation } from "@/components/finance/confirm-dialog";
 import { compactMoney, money } from "@/lib/finance-format";
 import {
-  ABSD_RATES, DEFAULT_INPUTS, ESTIMATED, HOME_KINDS, LOAN_TYPES, PRIVATE_MARKETS, PRIVATE_SEGMENTS, RESIDENCIES, RESIDENCY_LABELS, comparisonReady, clampInputs, findSeries, inTodaysMoney,
-  pointsOf, quarterFromNumber, quarterLabel, quarterNumber, quarterYear, rentOrBuy, withinLimits,
+  ABSD_RATES, DEFAULT_INPUTS, ESTIMATED, HOME_KINDS, LOAN_TYPES, PRIVATE_MARKETS, PRIVATE_SEGMENTS, RESIDENCIES, RESIDENCY_LABELS, comparisonReady, inTodaysMoney,
+  quarterLabel, quarterYear, withinLimits,
   type Estimated, type HomeKind, type LoanType, type MarketData, type OwningMonth, type Projection, type Residency, type ScenarioInputs,
 } from "@/lib/housing";
 import {
-  SIMULATED_YEARS, STRESSES, estimatesFor, expectedEconomy, marketModel, stressed, withEstimates,
+  SIMULATED_YEARS, STRESSES, marketModel,
   type Estimates, type Model, type Simulation, type SoraOutlook, type Stress,
 } from "@/lib/housing-model";
 import { cn } from "@/lib/utils";
 import { housingAction, messageOf, type Scenario } from "./api";
-import { FanChart, type FanRow } from "./fan-chart";
-import { LinesChart, yearTicks, type LineRow } from "./line-chart";
+import { FanChart } from "./fan-chart";
+import { LinesChart, yearTicks } from "./line-chart";
 import { Card, Stat, share } from "./market-view";
 import { useSimulation } from "./use-simulation";
 
@@ -118,18 +120,11 @@ export function RentOrBuy({ draft, setDraft, market, scenarios, onSaved, onDelet
   const ready = comparisonReady(inputs);
   // A number half typed -- an emptied field, a year of 0 -- is worked out at
   // the nearest it may be, and its field marked; saving says what is wrong.
-  const typed = useMemo(() => {
-    const out = clampInputs(inputs);
-    try { if (out.guidance) out.guidance = parseGuidance(out.guidance); } catch { delete out.guidance; }
-    if (out.guidance?.annual_value_auto) out.annual_value = Math.min(10_000_000, out.rent * 12);
-    return out;
-  }, [inputs]);
+  const typed = useMemo(() => comparisonInputs(inputs), [inputs]);
   // What the market's history says, for this kind of home in its market; the
   // inputs left to it take its estimates, and the comparison runs on those.
   const model = useMemo(() => marketModel(market, { kind: typed.kind, market: typed.market }), [market, typed.kind, typed.market]);
-  const estimates = useMemo(() => estimatesFor(model, typed), [model, typed]);
-  const resolved = useMemo(() => withEstimates(typed, estimates), [typed, estimates]);
-  const result = useMemo(() => rentOrBuy(resolved, stressed(expectedEconomy(resolved, model), stress)), [resolved, model, stress]);
+  const { estimates, resolved, projection: result } = useMemo(() => resolveComparison(typed, market, stress, model), [typed, market, stress, model]);
   const { simulation, drawing } = useSimulation(resolved, model, stress, ready && inputs.years <= SIMULATED_YEARS);
   const kept = scenarios.find((s) => s.id === draft.id) ?? null;
   const changed = !kept || kept.name !== draft.name.trim() || JSON.stringify(kept.inputs) !== JSON.stringify(inputs);
@@ -401,7 +396,7 @@ function MonthTakenApart({ inputs, months, ticks, stress }: { inputs: ScenarioIn
     { label: "What owning costs", note: "all but the principal", value: m.net, strong: true },
     { label: "What renting costs", note: "the rent and its fees", value: m.rent, strong: true },
   ];
-  const chart: LineRow[] = months.map((x) => ({ x: x.year, title: `Year ${x.year}, a month`, own: x.net, rent: x.rent, paid: x.paid, principal: x.principal }));
+  const chart = costRows(months);
 
   return (
     <Card
@@ -495,17 +490,12 @@ function Futures({ result, simulation, drawing, model, ticks }: {
     );
   }
 
-  const central = result.years.map((y) => y.buy_net_worth - y.rent_net_worth);
   // The futures' own last year: while new ones are drawn for a longer or
   // shorter look ahead, the last drawn are shown, and say what they cover.
   const end = simulation.years[simulation.years.length - 1];
   const b = simulation.breakEven;
-  const after = (y: number) => `After ${yearsText(y)}`;
-  const rows: FanRow[] = [
-    { x: 0, title: "Now", low: central[0], high: central[0], middle: central[0], expected: central[0] },
-    ...simulation.years.map((y) => ({ x: y.year, title: after(y.year), low: y.low, high: y.high, middle: y.middle, expected: central[y.year] ?? null })),
-  ];
-  const chance: LineRow[] = simulation.years.map((y) => ({ x: y.year, title: after(y.year), ahead: y.ahead }));
+  const rows = futureRows(result, simulation);
+  const chance = chanceRows(simulation);
   const pulls = b.middle === null
     ? `In half of them it has not pulled ahead within ${yearsText(end.year)}.`
     : `It pulls ahead by year ${b.middle} in half of them${b.late !== null ? `, by year ${b.late} in three of four` : ""}${b.never > 0 ? `; in ${share(b.never, 0)} not within ${yearsText(end.year)}` : ""}.`;
@@ -618,6 +608,10 @@ function Assumptions({ typed, inputs, estimates, model, market, simulation, stre
           );
         })}
       </dl>
+      <p className="mt-4 text-xs text-muted-foreground">
+        投资收益、房价、租金及费用增长按年化复利计算；未来金额的购买力按通胀复利折现。房贷按剩余本金逐期计息。
+        OA 和住房应计利息采用等效月利率近似；CPF 实际按月计算、按年入账并复利，精确金额以 CPF 账单为准。
+      </p>
       {inputs.loan_type === "bank" && model.sora && (
         <SoraView inputs={inputs} outlook={model.sora} market={market} simulation={simulation} stress={stress} />
       )}
@@ -628,27 +622,8 @@ function Assumptions({ typed, inputs, estimates, model, market, simulation, stre
 /** SORA: where it has been, where the bond market expects it to go, and the
  *  spread of the futures drawn around that. */
 function SoraView({ inputs, outlook, market, simulation, stress }: { inputs: ScenarioInputs; outlook: SoraOutlook; market: MarketData; simulation: Simulation | null; stress: Stress }) {
-  const nowQuarter = quarterNumber(outlook.latest.quarter);
   const now = quarterYear(outlook.latest.quarter);
-  const shift = (y: number) => (stress === "rates" && y >= 1 ? 2 : 0);
-  const history = pointsOf(findSeries(market, "sora", "ALL", "3m")).filter((p) => quarterNumber(p.quarter) > nowQuarter - 40 && quarterNumber(p.quarter) <= nowQuarter);
-  const rows: FanRow[] = [
-    ...history.map((p) => {
-      const latest = p.quarter === outlook.latest.quarter;
-      return { x: quarterYear(p.quarter), title: quarterLabel(p.quarter), low: latest ? p.value : null, high: latest ? p.value : null, sora: p.value, expected: latest ? p.value : null };
-    }),
-    ...Array.from({ length: inputs.years }, (_, k) => k + 1).map((y) => {
-      const drawn = simulation?.years[y - 1]?.sora;
-      return {
-        x: now + y,
-        title: quarterLabel(quarterFromNumber(nowQuarter + 4 * y)),
-        low: drawn ? drawn[0] : null,
-        high: drawn ? drawn[2] : null,
-        sora: null,
-        expected: outlook.expected[Math.min(4 * y, outlook.expected.length - 1)] + shift(y),
-      };
-    }),
-  ];
+  const rows = soraRows(inputs.years, outlook, market, simulation, stress);
   const [f1, f2, f5, f10] = outlook.forwards.map((f) => points(f.rate));
   const halfLife = outlook.persistence > 0 ? Math.log(0.5) / Math.log(outlook.persistence) / 4 : 0;
   return (
@@ -729,7 +704,7 @@ function Results({ typed, inputs, result, estimates, model, market, simulation, 
   const ticks = yearTicks(0, inputs.years, 8);
   const terms = inputs.loan_type !== "bank" ? "" : inputs.lock_years > 0 ? `, fixed ${yearsText(inputs.lock_years)}, then SORA + ${rateText(inputs.spread)}` : `, SORA + ${rateText(inputs.spread)}`;
 
-  const worth: LineRow[] = years.map((y) => ({ x: y.year, title: y.year === 0 ? "Now" : `After ${yearsText(y.year)}`, buy: y.buy_net_worth, rent: y.rent_net_worth }));
+  const worth = wealthRows(result);
 
   return (
     <div className="min-w-0 space-y-4">

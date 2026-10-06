@@ -468,7 +468,9 @@ export type Outcome = { gap: number[]; sora: number[] };
 export function simulate(i: ScenarioInputs, model: Model, { first = 0, count = PATHS, seed = 1, stress = "none" }: { first?: number; count?: number; seed?: number; stress?: Stress } = {}): Outcome[] {
   const out: Outcome[] = [];
   if (model.history.length === 0) return out;
-  for (let k = first; k < first + count; k++) {
+  // Browser batches need not divide 500. The final one stops at the same draw
+  // as a full API request, so its percentiles and ahead share are identical.
+  for (let k = first; k < Math.min(first + count, PATHS); k++) {
     const economy = stressed(drawEconomy(i, model, randomStream(Math.imul(seed, 0x9e3779b1) ^ Math.imul(k + 1, 0x85ebca77))), stress);
     const p = rentOrBuy(i, economy);
     out.push({ gap: p.years.map((y) => y.buy_net_worth - y.rent_net_worth), sora: p.years.map((y) => economy.sora[y.year * 12]) });

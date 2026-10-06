@@ -290,6 +290,10 @@ curl -s https://playground.noahyao.me/api/finance/summary \
 | `GET /api/housing/openapi` | Housing-only OpenAPI 3.1 description, with the same token. |
 | `GET /api/housing` | Saved market series, up to 200 recent scenarios, followed developments with raw sales/rental records, and whether the server's URA key is configured. |
 | `POST /api/housing` | `{"action": …}`: `saveScenario`, `deleteScenario`, `followProject`, `unfollowProject`, `refresh`. |
+| `GET /api/housing/analysis` | Project P50 / means, lease and sample windows. Add `scenario_id`, optional `project`, `years` and `stress` for the page's effective inputs, full projection, today's-money gap, 500 seeded futures, checks and chart rows. |
+| `POST /api/housing/analysis` | Read-only what-if: `{"inputs": …, "years": 15, "simulation": false}` or `{"scenario_id": …, "years": 15}`. Saves nothing. |
+| `GET /api/housing/chart` | Authenticated SVG image from an analysis `svg_url`; comparison, project price / rent, or any saved market series. |
+| `POST /api/housing/chart?chart=wealth` | SVG of the same unsaved what-if body sent to analysis. |
 | `GET /api/finance/summary` | Where things stand, worked out: totals, change since the last record, each account's newest balance, loan schedule and RSU position, history. Takes the page's filters: `?exclude_long_term=1&liquid_only=1&owner=Daisy`. |
 | `GET /api/finance` | Every account and balance, as stored; each account with its loan's `rate_changes` and `prepayments`, and its `rsu_grants` and `rsu_sales`. |
 | `GET /api/finance/loan-schedule?id=…` | One loan's every repayment to the cent — date, payment, principal, interest, balance — and the totals. |
@@ -309,7 +313,33 @@ curl --fail --silent --show-error https://playground.noahyao.me/api/finance/open
 Housing refreshes may return HTTP 200 with `refresh.failures` or a state such as
 `no key`; inspect those fields before treating data as current. Follow a development
 once, then use GET to read it. The API stores scenario inputs and raw URA records;
-the housing page calculates comparisons, P50 and means from them.
+analysis uses the same calculations and chart rows as the housing page. Project
+statistics include P25, P50, P75, means and sample counts. Sales and rents each
+use their own latest twelve-month window, whose dates are returned; quarter
+charts combine sizes, so use `by_band` to compare a particular size of home.
+
+An agent can start with `GET /api/housing`, choose a saved scenario id, then read
+`/api/housing/analysis?scenario_id=<id>&years=15&project=<URA name>`. Inspect
+`effective_inputs` alongside `inputs`: market estimates replace fields named
+in `auto`. Read `summary`, `projection`, `checks`, `calculation_rules` and
+`simulation_unavailable` before stating a conclusion. Fetch each `svg_url`
+with the same Authorization header. Images are self-contained SVGs; raw chart
+rows support interactive plotting too. `market_charts` lists export URLs for
+every source series; its raw observations are in `GET /api/housing`.
+POST what-ifs have null image URLs: send the same body to the chart route so
+private inputs stay out of query strings. A token grants the owner's existing
+finance and housing rights; it is not a housing-only or read-only credential.
+
+Investment returns, home/rent/cost growth and inflation discounting use annual
+effective compound rates. Monthly accounting costs do not compound; compare
+the net-worth gap, which reinvests cash differences. CPF uses an equivalent
+monthly-rate approximation: CPF actually computes monthly and credits/compounds
+yearly; lowest monthly balances, actual transaction dates and extra interest
+need a CPF statement rather than this projection. The lease discount is an
+illustrative assumption. Compare 10/15/20/30-year horizons and alternative
+growth/return inputs; horizons over 35 years have a central projection only.
+The 500 seeded historical replays match the page and are not guaranteed or
+calibrated future probabilities. No saved scenario is changed by analysis.
 
 To revoke it, replace the value and redeploy; the old one stops working with
 that deployment.

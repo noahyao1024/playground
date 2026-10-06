@@ -94,6 +94,7 @@ function ApiAccess() {
         Finance + housing: <a href={spec} className="break-all font-mono underline">{spec}</a><br />
         Housing only: <a href={housingSpec} className="break-all font-mono underline">{housingSpec}</a><br />
         It sends <span className="font-mono">Authorization: Bearer &hellip;</span> with every request, the description&rsquo;s too.
+        <br />Housing includes saved inputs, calculated comparisons, project P50 and averages, and chart data / SVG images.
       </p>
 
       {made ? (

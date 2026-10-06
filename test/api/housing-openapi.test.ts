@@ -65,7 +65,7 @@ describe("housing OpenAPI for agents", () => {
     expect(body.servers).toEqual([{url:"https://preview.example.vercel.app"}]);
     expect(body.security).toEqual([{token:[]}]);
     expect(body.components.securitySchemes.token).toMatchObject({type:"http",scheme:"bearer"});
-    expect(Object.keys(body.paths).sort()).toEqual(["/api/housing","/api/housing/openapi"]);
+    expect(Object.keys(body.paths).sort()).toEqual(["/api/housing","/api/housing/analysis","/api/housing/chart","/api/housing/openapi"]);
     expect(body.paths["/api/housing"].get.operationId).toBe("getHousing");
     expect(body.paths["/api/housing"].post.operationId).toBe("actOnHousing");
     expect(JSON.stringify(body)).not.toContain(TOKEN);
@@ -85,7 +85,7 @@ describe("housing OpenAPI for agents", () => {
       expect(actionSchema.properties.action).toMatchObject({type:"string",const:action});
     }
     expect(body.paths["/api/housing"].post.responses[200].description).toContain("failures");
-    expect(body.info.description).toContain("not returned by this API");
+    expect(body.info.description).toContain("same projections and chart rows as the page");
   });
 
   it("has no broken references or duplicate operation IDs in either document", async () => {

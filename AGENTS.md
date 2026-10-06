@@ -203,8 +203,16 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   the finance contract composes its paths and schemas. Both use the same token/session,
   private/no-store headers and requested host. Contract tests check the actual POST action
   inventory, schema references, a saved example and stored-token revocation. New housing
-  actions and fields need matching documentation; the API returns inputs and raw records,
-  with calculations on the page. A 200 refresh can carry failures: document them.
+  actions and fields need matching documentation. `/api/housing/analysis` returns project
+  statistics and, for a selected scenario or read-only POST what-if, effective estimates,
+  the full projection, real-money gap, 500 seeded futures, assumption checks and chart rows.
+  `/api/housing/chart` exports those and every saved market series as passive SVG, under
+  the same permission check and private/no-store headers. POST never saves a what-if;
+  its chart URL is null, so send the same body to POST chart. Never put a token in a URL.
+  `housing-comparison.ts` and `housing-charts.ts` are shared by the page and API: use them
+  when changing calculations or chart rows. `simulate` caps the last browser batch at
+  PATHS so a partial batch cannot diverge from the API's draws. A 200 refresh can carry
+  failures: document them.
   Its tables — `housing_market`, `housing_sources`, `housing_scenarios` — are private like
   finance's though the figures are public data: the page
   is the owner's. The market is read from data.gov.sg, keyless, by `src/lib/housing-data.ts`,
@@ -278,6 +286,11 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   The final nominal gap also shows `inTodaysMoney`, deflated by `cost_growth` over the
   holding period. That assumption comes from CPI unless overridden; show its rate and the
   scenario's baseline date, and keep the nominal chart and winner unchanged.
+  Growth and investment returns use annual effective compound rates. CPF OA savings
+  and housing accrued interest use the equivalent monthly-rate approximation; CPF
+  actually computes monthly and credits/compounds yearly. Lowest monthly balances,
+  transaction dates and extra CPF interest are outside this model. Describe that
+  approximation explicitly; don't present this projection as a CPF statement.
   Private developments the owner follows are read from URA's Data Service (`src/lib/ura.ts`)
   with `URA_ACCESS_KEY`, set on Vercel only. They live in `housing_projects`, with
   `housing_project_sales` and `housing_project_rents`, private like the rest. A key gets a token

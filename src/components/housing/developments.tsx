@@ -5,10 +5,11 @@ import { ArrowRight, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { compactMoney, dayLabel, money } from "@/lib/finance-format";
-import { quarterYear, townLabel, type PrivateMarket } from "@/lib/housing";
-import { MAX_PROJECTS, byBand, byBedrooms, byQuarter, lastYear, leaseOf, projectName, summarize, psfOf, type BandRow, type Lease, type Project } from "@/lib/housing-projects";
+import { townLabel, type PrivateMarket } from "@/lib/housing";
+import { MAX_PROJECTS, byBand, byBedrooms, lastYear, leaseOf, marketForProject, projectName, summarize, psfOf, type BandRow, type Lease, type Project } from "@/lib/housing-projects";
+import { projectPriceRows } from "@/lib/housing-charts";
 import { dayInSG } from "@/lib/dates";
-import { LinesChart, yearTicks, type LineRow } from "./line-chart";
+import { LinesChart, yearTicks } from "./line-chart";
 
 /** What a development's size fills a comparison with: its lease too, as URA records it. */
 export type ProjectChoice = { kind: "project"; name: string; label: string; market: PrivateMarket; price: number; rent: number; lease: Lease | null };
@@ -17,14 +18,6 @@ export type ProjectChoice = { kind: "project"; name: string; label: string; mark
 const leaseText = (l: Lease) => (l.tenure === "freehold" ? "Freehold" : `${l.lease_term}-year lease from ${l.lease_start}`);
 
 const PRICE = "var(--series-1)", AVERAGE = "var(--series-3)";
-const LANDED = /terrace|semi-d|detached|bungalow|cluster/i;
-
-/** The market a development's prices move with: its region's condos, or landed homes island-wide. */
-function marketOf(p: Project): PrivateMarket {
-  const landed = p.sales.filter((s) => s.property_type && LANDED.test(s.property_type)).length;
-  if (landed > p.sales.length / 2) return "ALL:landed";
-  return p.segment ? `${p.segment}:non-landed` : "ALL:non-landed";
-}
 
 const monthText = (day: string) => new Date(`${day}T00:00:00Z`).toLocaleDateString("en-SG", { month: "short", year: "numeric", timeZone: "UTC" });
 const psfText = (n: number) => `${money(n, "sgd")} psf`;
@@ -144,9 +137,8 @@ function Development({ project: p, ura, onUnfollow, onCompare }: {
   const rents = summarize(year.rents.map((r) => r.rent));
   const bands = byBand(p);
   const bedrooms = byBedrooms(p);
-  const quarters = byQuarter(p).filter((q) => q.psf);
-  const trend: LineRow[] = quarters.map((q) => ({ x: quarterYear(q.quarter), title: `${q.label}, ${q.psf!.count} sale${q.psf!.count === 1 ? "" : "s"}`, p50: q.psf!.p50, mean: q.psf!.mean }));
-  const market = marketOf(p);
+  const trend = projectPriceRows(p);
+  const market = marketForProject(p);
   const compare = (row: BandRow) => onCompare({ kind: "project", name: p.name, label: `${label}, ${row.label}`, market, price: Math.round(row.prices!.p50), rent: Math.round(row.rents!.p50), lease });
 
   return (
