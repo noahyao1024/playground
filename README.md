@@ -206,7 +206,7 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
 - **Developments you follow** — a private condo by the name URA gives it,
   WATERTOWN say — are read from URA's Data Service with the owner's access key
   (`URA_ACCESS_KEY`, on Vercel): every sale caveated in the last five years and
-  the last four quarters of rental contracts, read when followed and weekly
+  the last six quarters of rental contracts, read when followed and weekly
   after. The page shows the middle (P50) and the average of the latest year's
   prices, prices a square foot and rents, by size as URA bands its rental
   contracts, the gross yield, and the price a square foot quarter by quarter;

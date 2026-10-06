@@ -255,7 +255,9 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   requests, and reads a development a week after it last did (`/api/cron/projects`, from the
   daily job), or at once when it is followed. Sales come in four files by postal district
   (01–07, 08–14, 15–21, 22–28), five years whole; rental contracts come one file a quarter, the
-  last four read. Only followed developments are kept. A development's sales are replaced whole
+  one running and the five before it read (`RENT_QUARTERS`), as URA publishes a month two weeks
+  after it ends and the page sums up the twelve months to the latest contract. Only followed
+  developments are kept. A development's sales are replaced whole
   on each read, as URA gives a sale no id. The arithmetic — P50 and average by URA's rental size
   bands and by quarter, the yields — is `src/lib/housing-projects.ts`. The daily job's log never
   names a development: which ones the owner follows is the owner's business.

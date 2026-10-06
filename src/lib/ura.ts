@@ -18,8 +18,12 @@ import {
  *  Server-side only. */
 
 const URA = "https://eservice.ura.gov.sg/uraDataService";
-/** Rental contracts are read for this many quarters, the one running included. */
-export const RENT_QUARTERS = 4;
+/** Rental contracts are read for this many quarters: the one running, which URA
+ *  fills a month at a time some two weeks after each, and the five before it.
+ *  The page sums up the twelve months to the latest contract, and early in a
+ *  quarter that latest is two months back, its year reaching into the sixth
+ *  quarter: with four, it held eight months while saying twelve. */
+export const RENT_QUARTERS = 6;
 /** A development is read again once it was last read this long ago. */
 const WEEK_MS = 7 * 24 * 3600 * 1000;
 const TIMEOUT_MS = 40_000;
