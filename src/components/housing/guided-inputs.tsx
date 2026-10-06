@@ -4,14 +4,21 @@ import { NumberInput } from "@/components/ui/number-input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { dayInSG } from "@/lib/dates";
-import { newGuidance, remainingLease, salaryOa, type HousingGuidance } from "@/lib/housing-guidance";
+import { CPF_PR_RULES, newGuidance, prContributionYear, remainingLease, salaryOa, type HousingGuidance } from "@/lib/housing-guidance";
 import type { ScenarioInputs } from "@/lib/housing";
 import { Card } from "./market-view";
 
 export function GuidedInputs({ inputs, onChange: changeInputs }: { inputs: ScenarioInputs; onChange: (v: Partial<ScenarioInputs>) => void }) {
   const g = inputs.guidance ?? { ...newGuidance(dayInSG(new Date())), annual_value_auto: false };
   const onChange = (v: Partial<ScenarioInputs>) => changeInputs({ guidance: g, ...v });
-  const update = (v: Partial<HousingGuidance>) => onChange({ guidance: { ...g, ...v } });
+  const update = (v: Partial<HousingGuidance>) => onChange({ guidance: {
+    ...g,
+    ...(v.cpf_mode === "salary" && g.cpf_mode !== "salary" ? { cpf_rules: CPF_PR_RULES, cpf_scheme: "graduated" as const } : {}),
+    ...v,
+  } });
+  const oldCpf = g.cpf_rules === "2026-2027-v1";
+  const prYear = inputs.residency === "pr" ? prContributionYear(g.pr_since, g.as_of) : 3;
+  const salaryReady = g.cpf_eligible && g.salary !== null && g.age !== null && inputs.residency !== "foreigner" && (inputs.residency !== "pr" || oldCpf || prYear > 0);
   const numeric = (key: "salary" | "age" | "lease_start" | "lease_term" | "retirement_age" | "cpf_limit", label: string, help?: string) => <div className="space-y-1.5" key={key}>
     <Label htmlFor={`guide-${key}`} className="text-xs">{label}</Label>
     <NumberInput id={`guide-${key}`} value={g[key] ?? NaN} emptyValue={NaN} onValueChange={v => update({ [key]: Number.isFinite(v) ? v : null })} step={key === "salary" || key === "cpf_limit" ? 100 : 1} className="h-9" />
@@ -62,8 +69,16 @@ export function GuidedInputs({ inputs, onChange: changeInputs }: { inputs: Scena
         {select("quick-cpf", "CPF 方式",g.cpf_mode,[["none","暂不使用 CPF（全按现金）"],["salary","由工资估算 OA"],["manual","手动输入 OA 月缴款"]],v=>update({cpf_mode:v as HousingGuidance["cpf_mode"]}))}
         {g.cpf_mode === "salary" && <>
           <div className="grid grid-cols-2 gap-3">{numeric("salary","税前月薪（S$） *","不含奖金及额外工资。")}{numeric("age","当前年龄 *")}{numeric("retirement_age","停止缴款年龄（默认 65）")}</div>
-          <Label className="flex items-start gap-2 text-xs font-normal"><input type="checkbox" checked={g.cpf_eligible} onChange={e=>update({cpf_eligible:e.target.checked})}/>我是受雇公民或 PR 第三年起，适用完整 CPF 缴款率。PR 前两年、自雇或特殊分配请手动输入。</Label>
-          <p className="text-sm">当前 OA 估算：S${salaryOa(g).toLocaleString()}/月</p>
+          {inputs.residency === "pr" && <div className="space-y-2">
+            {oldCpf && <p className="text-xs text-muted-foreground">旧方案保留完整费率假设；填写 PR 日期后启用分阶段估算。</p>}
+            <Label htmlFor="quick-pr-since" className="text-xs">拿到 PR 的日期 {oldCpf ? "（填写后启用新估算）" : "*"}</Label>
+            <Input id="quick-pr-since" type="date" value={g.pr_since ?? ""} max={g.as_of} required={!oldCpf} onChange={e=>update({pr_since:e.target.value || null,cpf_rules:CPF_PR_RULES,...(oldCpf ? {cpf_scheme:"graduated" as const}: {})})}/>
+            {!oldCpf && select("quick-cpf-scheme", "PR 缴款方式",g.cpf_scheme,[["graduated","标准分阶段（G/G）"],["full","已获批双方按完整费率（F/F）"]],v=>update({cpf_scheme:v as HousingGuidance["cpf_scheme"]}))}
+            {!oldCpf && prYear > 0 && <p className="text-xs text-muted-foreground">当前 PR 费率阶段：{prYear === 3 ? "第三年起" : `第 ${prYear} 年`}。阶段从周年后的下个月切换；55 岁及以下、月薪超过 S$750 时，标准总缴款率为 9% / 24% / 37%，OA 只占其中一部分。</p>}
+            <p className="text-xs text-muted-foreground">拿到 PR 当月按自然日粗估应缴工资，之后按整月；工资单的实际分摊、F/G、奖金、自雇或特殊账户分配请手动输入 OA。<a className="underline" href="https://www.cpf.gov.sg/service/article/how-do-i-determine-the-year-of-my-singapore-permanent-resident-status-for-the-purpose-of-cpf-contributions" target="_blank" rel="noreferrer">CPF 阶段规则</a></p>
+          </div>}
+          <Label className="flex items-start gap-2 text-xs font-normal"><input type="checkbox" checked={g.cpf_eligible} onChange={e=>update({cpf_eligible:e.target.checked})}/>我是受雇公民或 PR，适用标准 CPF 雇员缴款规则。自雇、特殊费率或账户分配请手动输入。</Label>
+          <p className="text-sm">当前 OA 估算：{salaryReady ? `S$${salaryOa(g, 0, inputs.residency).toLocaleString()}/月` : `待填写工资、年龄${inputs.residency === "pr" && !oldCpf ? "、PR 日期" : ""}及缴款资格`}</p>
           <p className="text-xs text-muted-foreground">采用 <a className="underline" href="https://www.cpf.gov.sg/employer/infohub/news/cpf-related-announcements/new-contribution-rates" target="_blank" rel="noreferrer">2026 / 2027 CPF 规则</a>，普通工资上限 S$8,000；只计算 OA，每年调整年龄并在设定年龄停缴。2027 年起采用已公布的新规则，之后沿用该规则；不含奖金或退休账户溢出。</p>
         </>}
         {g.cpf_mode !== "none" && <>

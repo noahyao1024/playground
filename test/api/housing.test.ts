@@ -21,6 +21,7 @@ const { GET: CRON } = await import("@/app/api/cron/housing/route");
 const { GET: PROJECTS_CRON } = await import("@/app/api/cron/projects/route");
 const { DATASETS } = await import("@/lib/housing-data");
 const { DEFAULT_INPUTS } = await import("@/lib/housing");
+const { CPF_PR_RULES, newGuidance } = await import("@/lib/housing-guidance");
 
 const OWNER = { user: { email: "hi@noahyao.me" } };
 const KEPT = "00000000-0000-0000-0000-0000000000a1";
@@ -152,6 +153,24 @@ describe("saving and deleting a scenario", () => {
     const loaded = await (await GET(get())).json();
     expect(loaded.scenarios.find((s: Row)=>s.id === res.body.scenario.id).inputs.guidance).toEqual(res.body.scenario.inputs.guidance);
     expect((await post({ action:"saveScenario", name:"Unconfirmed", inputs:{ guidance:{ ...guidance, confirmed:false } } })).status).toBe(400);
+  });
+  it("saves and reopens PR dates and contribution schemes under the new CPF rules", async () => {
+    const guidance = { ...newGuidance("2026-10-06"), confirmed:true, cpf_mode:"salary", cpf_eligible:true, salary:6000, age:30, pr_since:"2025-01-15" };
+    const saved = await post({ action:"saveScenario", name:"PR salary example", inputs:{ residency:"pr", guidance } });
+    expect(saved.status).toBe(200);
+    expect(saved.body.scenario.inputs.guidance).toEqual(guidance);
+    const loaded = await (await GET(get())).json();
+    expect(loaded.scenarios.find((s: Row)=>s.id === saved.body.scenario.id).inputs.guidance).toEqual(guidance);
+    const full = await post({ action:"saveScenario", id:saved.body.scenario.id, name:"Full-rate agreement", inputs:{ residency:"pr", guidance:{...guidance,cpf_scheme:"full"} } });
+    expect(full.status).toBe(200);
+    expect(full.body.scenario.inputs.guidance).toMatchObject({ cpf_rules:CPF_PR_RULES, pr_since:"2025-01-15", cpf_scheme:"full" });
+  });
+  it("refuses missing, impossible or future PR dates for new salary-based PR scenarios", async () => {
+    const guidance = { ...newGuidance("2026-10-06"), confirmed:true, cpf_mode:"salary", cpf_eligible:true, salary:6000, age:30 };
+    for (const pr_since of [null,"2026-02-30","2026-10-07"]) {
+      expect((await post({ action:"saveScenario", name:"Invalid PR date", inputs:{residency:"pr",guidance:{...guidance,pr_since}} })).status).toBe(400);
+    }
+    expect(db.tables.housing_scenarios).toHaveLength(2);
   });
   it("keeps a new one under its name, with every input, defaults and all", async () => {
     const { status, body } = await post({ action: "saveScenario", name: "  Condo in Bishan ", inputs: { kind: "private", loan_type: "bank", price: 1_500_000 } });

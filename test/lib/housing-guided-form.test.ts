@@ -59,3 +59,22 @@ describe("guided housing form", () => {
     expect(near).not.toContain("Futures are drawn for up to");
   });
 });
+
+describe("PR salary form and purchasing power", () => {
+  it("asks the PR date and shows OA rather than the total CPF contribution", () => {
+    const html = renderToStaticMarkup(createElement(GuidedInputs, { inputs:{ ...DEFAULT_INPUTS, guidance:{ ...newGuidance("2026-01-15"), cpf_mode:"salary", cpf_eligible:true, salary:6000, age:30, pr_since:"2025-01-15" } }, onChange:()=>{} }));
+    expect(html).toContain("quick-pr-since");
+    expect(html).toContain("S$335.72/月");
+    expect(html).toContain("第 1 年");
+    expect(html).not.toContain("PR 前两年、自雇");
+    const citizen = renderToStaticMarkup(createElement(GuidedInputs,{ inputs:{ ...DEFAULT_INPUTS, residency:"citizen", guidance:{ ...newGuidance("2026-01-15"),cpf_mode:"salary" } }, onChange:()=>{} }));
+    expect(citizen).not.toContain("quick-pr-since");
+  });
+  it("puts today's purchasing power beside the future gap on desktop and mobile", () => {
+    const html = renderToStaticMarkup(createElement(RentOrBuy, { draft:{ id:null, name:"", inputs:{ ...DEFAULT_INPUTS, cost_growth:2, guidance:{ ...newGuidance("2026-10-06"),confirmed:true } } }, setDraft:()=>{}, market:{series:[],refreshed_at:null}, scenarios:[], onSaved:()=>{}, onDeleted:()=>{}, onConfirm:()=>{} }));
+    expect(html).toContain("折合今天的钱");
+    expect(html.match(/今天的钱/g)).toHaveLength(2);
+    expect(html).toContain("通胀 2.0%");
+    expect(html).toContain("2026-10-06");
+  });
+});

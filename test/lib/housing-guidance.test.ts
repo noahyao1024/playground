@@ -35,7 +35,7 @@ describe("CPF salary estimates and usage", () => {
     expect(salaryOa(g, 120)).toBe(0);
     expect(salaryOa({ ...g, age:57 }, 3)).toBe(estimatedOa(6000, 57, 2027));
     expect(salaryOa({ ...g, cpf_eligible: false })).toBe(0);
-    const inputs = { ...DEFAULT_INPUTS, cpf_balance: 100000, cpf_monthly: 9999, guidance: { ...g, tenure: "freehold" as const } };
+    const inputs = { ...DEFAULT_INPUTS, residency: "citizen" as const, cpf_balance: 100000, cpf_monthly: 9999, guidance: { ...g, tenure: "freehold" as const } };
     const result = rentOrBuy(inputs);
     const manual = rentOrBuy({ ...inputs, guidance: { ...inputs.guidance, cpf_mode: "manual" }, cpf_monthly: 0 });
     expect(result.years[1].rent_net_worth).toBeGreaterThan(manual.years[1].rent_net_worth);
