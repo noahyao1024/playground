@@ -55,7 +55,7 @@ describe("housing analysis API",()=>{
 
   it("revokes stored-token access to both JSON and images immediately",async()=>{
     session.current=null;
-    db.tables.finance_api_tokens.push({id:ID,token_sha256:sha256Hex(TOKEN)});
+    db.tables.finance_api_tokens.push({id:ID,token_sha256:sha256Hex(TOKEN),scope:"finance:write"});
     const routes=[{call:ANALYSIS.GET,path:"/api/housing/analysis"},{call:CHART.GET,path:"/api/housing/chart?chart=market:ura_ppi:OCR:non-landed"}];
     for (const route of routes) expect((await route.call(req(route.path,undefined,TOKEN))).status).toBe(200);
     db.tables.finance_api_tokens.length=0;

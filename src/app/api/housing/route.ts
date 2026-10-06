@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { financeDatabase, financeJson as json, isFinanceRequest, isUuid, reason } from "@/lib/finance-server";
+import { financeDatabase, financeJson as json, financeAccessResponse, isUuid, reason } from "@/lib/finance-server";
 import { InputError, comparisonReady, parseInputs, readInputs, type ScenarioInputs } from "@/lib/housing";
 import { marketOf, refreshMarket } from "@/lib/housing-data";
 import { MAX_PROJECTS, projectName } from "@/lib/housing-projects";
@@ -34,7 +34,8 @@ async function readScenarios(db: SupabaseClient): Promise<Scenario[]> {
 }
 
 export async function GET(req: NextRequest) {
-  if (!(await isFinanceRequest(req))) return json({ error: "Unauthorized" }, 401);
+  const denied = await financeAccessResponse(req, "housing");
+  if (denied) return denied;
   const db = financeDatabase();
   if (!db) return json({ error: "Supabase not configured" }, 500);
   try {
@@ -48,7 +49,8 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
-  if (!(await isFinanceRequest(req))) return json({ error: "Unauthorized" }, 401);
+  const denied = await financeAccessResponse(req, "housing", true);
+  if (denied) return denied;
   const db = financeDatabase();
   if (!db) return json({ error: "Supabase not configured" }, 500);
 

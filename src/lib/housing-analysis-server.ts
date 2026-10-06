@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { financeDatabase, financeJson, isFinanceRequest, isUuid, reason } from "./finance-server";
+import { financeDatabase, financeJson, financeAccessResponse, isUuid, reason } from "./finance-server";
 import { InputError, comparisonReady, parseInputs, readInputs, type ScenarioInputs } from "./housing";
 import { marketOf } from "./housing-data";
 import { projectName } from "./housing-projects";
@@ -16,7 +16,8 @@ const FIELDS = ["scenario_id","inputs","years","stress","project","simulation","
 /** Both image and JSON requests check permission before parsing or reading
  * private records. POST is a read-only what-if, never a scenario write. */
 export async function housingAnalysisResponse(req: NextRequest, format: "json" | "svg") {
-  if (!(await isFinanceRequest(req))) return financeJson({error:"Unauthorized"},401);
+  const denied = await financeAccessResponse(req, "housing");
+  if (denied) return denied;
   const db=financeDatabase();
   if (!db) return financeJson({error:"Supabase not configured"},500);
   try {

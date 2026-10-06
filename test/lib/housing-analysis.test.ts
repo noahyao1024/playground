@@ -29,13 +29,13 @@ describe("housing analysis and images",()=>{
     expect(simulate(c.resolved,c.model,{first:PATHS,count:18})).toEqual([]);
   });
 
-  it("labels CPF approximations and checks lease, market, fees and loan age without mutating inputs",()=>{
+  it("labels CPF monthly accrual assumptions and checks lease, market, fees and loan age without mutating inputs",()=>{
     const i={...housingInputs(),years:15,market:"ALL:non-landed" as const,sell_costs:0};
     const before=structuredClone(i);
     const result=analyseHousing(housingMarket(),[housingProject()],i,"none",false,{...housingProject(),tenure:"99 yrs lease commencing from 2009"});
     expect(i).toEqual(before);
-    expect(result.comparison?.checks.map(c=>c.code)).toEqual(expect.arrayContaining(["cpf_interest_approximation","salary_cpf","lease_valuation","check_ltv","selling_costs","project_lease_mismatch","project_market"]));
-    expect(result.comparison?.calculation_rules.find(r=>r.key === "cpf")?.method).toBe("compound_approximation");
+    expect(result.comparison?.checks.map(c=>c.code)).toEqual(expect.arrayContaining(["cpf_interest_model","salary_cpf","lease_valuation","check_ltv","selling_costs","project_lease_mismatch","project_market"]));
+    expect(result.comparison?.calculation_rules.find(r=>r.key === "cpf")?.method).toBe("monthly_accrual_annual_compounding");
     expect(result.comparison?.calculation_rules.find(r=>r.key === "monthly_cost_breakdown")?.method).toBe("non_compounding");
     expect(result.comparison?.effective_inputs.guidance?.cpf_scheme).toBe(i.guidance?.cpf_scheme);
   });

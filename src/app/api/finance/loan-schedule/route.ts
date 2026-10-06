@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { loanSchedule, loanTermsOf } from "@/lib/finance";
-import { financeDatabase, financeJson as json, isFinanceRequest, isUuid, readAccount, reason } from "@/lib/finance-server";
+import { financeDatabase, financeJson as json, financeAccessResponse, isUuid, readAccount, reason } from "@/lib/finance-server";
 
 /** A loan's every repayment, to the cent, with the totals: the lines of the
  *  bank's repayment plan (还款计划), to set beside it one by one. `id` is the
@@ -8,7 +8,8 @@ import { financeDatabase, financeJson as json, isFinanceRequest, isUuid, readAcc
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  if (!(await isFinanceRequest(req))) return json({ error: "Unauthorized" }, 401);
+  const denied = await financeAccessResponse(req, "finance");
+  if (denied) return denied;
   const id = req.nextUrl.searchParams.get("id");
   if (!isUuid(id)) return json({ error: "Which loan? Give its account's id as ?id=" }, 400);
   const db = financeDatabase();

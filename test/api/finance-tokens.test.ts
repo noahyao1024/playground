@@ -69,7 +69,7 @@ describe("making a token", () => {
     const made = (await make({ name: "Laptop agent" })).body;
     const { status, body } = await list();
     expect(status).toBe(200);
-    expect(body.tokens).toEqual([{ id: made.id, name: "Laptop agent" }]);
+    expect(body.tokens).toEqual([{ id: made.id, name: "Laptop agent", scope: "finance:read" }]);
     expect(JSON.stringify(body)).not.toMatch(/pgf_|token_sha256|[0-9a-f]{64}/);
   });
 
@@ -83,7 +83,7 @@ describe("making a token", () => {
 
 describe("a token made here", () => {
   it("lets an agent read and write as the owner, with no session", async () => {
-    const { token } = (await make()).body;
+    const { token } = (await make({scope:"finance:write"})).body;
     expect(await asAgent(token)).toEqual([200, 200, 200]);
     expect(db.tables.finance_accounts).toHaveLength(1);
   });
@@ -92,7 +92,7 @@ describe("a token made here", () => {
     const kept = (await make({ name: "kept" })).body, gone = (await make({ name: "gone" })).body;
     expect(await revoke(gone.id)).toEqual({ status: 200, body: { revoked: gone.id } });
     expect(await asAgent(gone.token)).toEqual([401, 401, 401]);
-    expect(await asAgent(kept.token)).toEqual([200, 200, 200]);
+    expect(await asAgent(kept.token)).toEqual([200, 200, 403]);
     expect((await revoke(gone.id)).status).toBe(404);
     expect((await revoke("not-an-id")).status).toBe(400);
   });

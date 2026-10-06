@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { RotateCw } from "lucide-react";
+import { Bot, RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog, type Confirmation } from "@/components/finance/confirm-dialog";
 import { Segmented } from "@/components/finance/segmented";
@@ -16,6 +16,7 @@ import { housingAction, loadHousing, messageOf, type HousingData, type ProjectsR
 import type { Project } from "@/lib/housing-projects";
 import { MarketView, type MarketChoice } from "./market-view";
 import { NEW_DRAFT, RentOrBuy, type Draft } from "./rent-or-buy";
+import { ApiAccessDialog } from "@/components/finance/api-access-dialog";
 
 const TAB_KEY = "housing.tab";
 const DRAFT_KEY = "housing.draft";
@@ -71,6 +72,7 @@ export function HousingApp() {
   const [draft, setDraftState] = useState<Draft>(storedDraft);
   const [refreshing, setRefreshing] = useState(false);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const [apiAccess, setApiAccess] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -203,6 +205,7 @@ export function HousingApp() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <Button variant="outline" onClick={()=>setApiAccess(true)}><Bot/>AI 分析 / Prompt</Button>
           {newest !== null && (
             <span className="text-xs text-muted-foreground">
               Figures to {quarterLabel(quarterFromNumber(newest))}{updated && `, read ${dayLabel(dayInSG(updated))}`}
@@ -215,6 +218,7 @@ export function HousingApp() {
       </div>
 
       <Segmented label="View" value={tab} onChange={setTab} options={TABS} />
+      <ApiAccessDialog open={apiAccess} onClose={()=>setApiAccess(false)} defaultScope="housing:read" context={{scenarioId:draft.id,projects:(data.projects ?? []).map(p=>p.name)}} />
 
       {tab === "market" ? (
         empty ? (

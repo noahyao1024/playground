@@ -501,11 +501,12 @@ function Futures({ result, simulation, drawing, model, ticks }: {
     : `It pulls ahead by year ${b.middle} in half of them${b.late !== null ? `, by year ${b.late} in three of four` : ""}${b.never > 0 ? `; in ${share(b.never, 0)} not within ${yearsText(end.year)}` : ""}.`;
 
   return (
-    <Card title={`Across ${simulation.paths} futures`} sub={sub}>
+    <Card title={`${simulation.paths} 个历史重放情景`} sub={sub}>
       <div className={cn("space-y-6 transition-opacity", drawing && "opacity-50")} aria-busy={drawing || undefined}>
         <p className="text-sm">
           After {yearsText(end.year)} buying is ahead in <span className="font-medium">{share(end.ahead, 0)}</span> of them. {pulls}
         </p>
+        <p className="text-xs text-muted-foreground">占比仅描述这些历史重放情景；不是未来买房胜率或经过校准的概率。P10–P90 是情景区间，不是预测置信区间。</p>
         <div>
           <p className="mb-2 text-xs font-medium">How far buying is ahead of renting, or behind</p>
           <FanChart
@@ -520,7 +521,7 @@ function Futures({ result, simulation, drawing, model, ticks }: {
           />
         </div>
         <div>
-          <p className="mb-2 text-xs font-medium">The chance buying is ahead, selling then</p>
+          <p className="mb-2 text-xs font-medium">买房净资产领先的历史重放情景占比（假设当年出售）</p>
           <LinesChart
             rows={chance}
             series={[{ key: "ahead", label: "Buying ahead", color: BUY }]}
@@ -610,7 +611,7 @@ function Assumptions({ typed, inputs, estimates, model, market, simulation, stre
       </dl>
       <p className="mt-4 text-xs text-muted-foreground">
         投资收益、房价、租金及费用增长按年化复利计算；未来金额的购买力按通胀复利折现。房贷按剩余本金逐期计息。
-        OA 和住房应计利息采用等效月利率近似；CPF 实际按月计算、按年入账并复利，精确金额以 CPF 账单为准。
+        CPF 按模拟月度余额累计利息、每年 12 月末入账后复利。当月缴款下月计息，当月提款不计息；待入账利息计入净资产但不能提前支付房贷。未计基准日前待入账利息及额外利息，精确金额以 CPF 账单为准。
       </p>
       {inputs.loan_type === "bank" && model.sora && (
         <SoraView inputs={inputs} outlook={model.sora} market={market} simulation={simulation} stress={stress} />
@@ -667,7 +668,7 @@ function Verdict({ inputs, result, simulation, className }: { inputs: ScenarioIn
       <span className="text-muted-foreground">
         {` · ${lead === subject ? "" : `${lead} `}${amount} ahead at year ${inputs.years}`}
         {` · 今天的钱 ${compactMoney(Math.abs(inTodaysMoney(difference, inputs.cost_growth, inputs.years)), "sgd", { digits: 1 })}`}
-        {chance !== undefined && ` · buying ahead in ${share(chance, 0)} of futures`}
+        {chance !== undefined && ` · 买房领先的历史情景占比 ${share(chance, 0)}`}
       </span>
     </p>
   );

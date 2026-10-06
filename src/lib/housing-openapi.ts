@@ -48,6 +48,7 @@ const guidanceDefaults = newGuidance("2026-10-06");
 const guidanceDescriptions = {
   lease_start: "Lease's starting year, not TOP; expiry is January 1 of lease_start + lease_term.",
   lease_term: "Original lease term, years; usually 99 or 999.",
+  lease_discount_rate: "Illustrative annual effective discount rate for lease decay, percent; default 3, 0 means linear decay. Not an official valuation.",
   salary: "Gross ordinary monthly wages, S$, excluding bonuses; CPF wage cap S$8,000.",
   age: "Buyer's age at as_of; also used to check lease-to-age-95 CPF housing eligibility.",
   retirement_age: "Age at which projected salary CPF contributions stop.",
@@ -62,12 +63,13 @@ export function housingOpenApi(origin: string) {
     openapi: "3.1.0",
     info: {
       title: "Playground Housing",
-      version: "2",
+      version: "3",
       description: [
         "Singapore housing market data, followed private developments and saved rent-or-buy scenario inputs.",
-        "Use Authorization: Bearer <token>, with the same token made in /finance → API access (or FINANCE_API_TOKEN). The owner's signed-in session also works. The description requires this authentication too. All responses are private, no-store.",
+        "Use Authorization: Bearer <token>, generated in /housing → AI access or /finance → API access (or FINANCE_API_TOKEN). The owner's signed-in session also works. housing:read permits housing reads; finance:read permits finance and housing reads; finance:write permits both reads and writes. New tokens default to read-only; older tokens retain read/write permission. The contract omits operations outside the token's scope; ?read_only=true returns a compact read-only contract for GPT Actions even with an owner session. All responses are private, no-store. The description requires authentication too: download it from the page for import if your agent cannot authenticate its schema fetch.",
         "Money is S$, rates are percent unless stated otherwise. GET /api/housing reads saved data without contacting URA. A project's sales cover up to five years; rental records cover six quarters. Size is sqm for sales and sqft bands for rentals. GET /api/housing/analysis returns project P50 / means and, with scenario_id, the same projections and chart rows as the page. GET /api/housing/chart renders an authenticated SVG image. POST analysis / chart support read-only what-ifs, without saving inputs.",
-        "Agent workflow: GET /api/housing for the complete raw data and scenario ids; GET /api/housing/analysis?scenario_id=<id>&project=<optional URA name>&years=15 for calculations, checks, assumptions, 500 seeded futures and chart export URLs; fetch svg_url with the same Authorization header. Compare 10 / 15 / 20 / 30 years or POST unsaved input variants for sensitivity. Over 35 years, simulation is unavailable and the central projection still works. CPF interest uses an equivalent monthly-rate approximation, not a payroll / CPF statement calculation. Historical replays are not guaranteed future outcomes.",
+        "Agent workflow: GET /api/housing for the complete raw data and scenario ids; GET /api/housing/analysis?scenario_id=<id>&project=<optional URA name>&years=15 for calculations, checks, assumptions, 500 seeded historical replay scenarios and chart export URLs; fetch svg_url with the same Authorization header. Compare 10 / 15 / 20 / 30 years or POST unsaved input variants for sensitivity. Over 35 years, simulation is unavailable and the central projection still works. CPF uses monthly accrual and annual compounding on modelled transactions, not a CPF statement. Replay shares are not calibrated future probabilities. Native read-only MCP: POST /api/housing/mcp using Streamable HTTP and the same bearer header. The page includes client setup and a copyable Chinese analysis prompt.",
+        "For bank loans, financing.outstanding_loans is independent of the ABSD property count. financing.borrower_age is the bank-assessed borrower age; absent this, guidance.age is assumed to describe a single borrower, or the lower LTV band is used conservatively when age is unknown. Eligibility sets minimum cash downpayment (5/10/25%), not the voluntarily chosen loan_share. Inputs exceeding estimated LTV / term limits are flagged, never certified as approved or silently overwritten.",
         "Save scenario inputs with the buyer's actual residency, property count and home / loan kind. Omitted inputs take the documented defaults. With guidance, confirm required buyer, lease and CPF facts before setting confirmed=true; salary CPF for a PR on the new rules also requires pr_since on or before as_of.",
         "Following a development persists its name before reading URA. A 200 can still report refresh.failures or state=no key: inspect the refresh result, found and read_at before treating data as current. Market refresh likewise reports partial source failures in refresh.failures. The shared finance document is /api/finance/openapi.",
       ].join("\n\n"),
@@ -81,7 +83,7 @@ export function housingOpenApi(origin: string) {
           operationId: "getHousing",
           summary: "Read saved housing market data, scenarios and followed developments",
           description: "Scenarios are ordered by most recently updated, limited to 200. Projects include stored raw URA sales and rental contracts; ura only reports whether the server has its URA key configured. No external refresh occurs.",
-          responses: { 200: ok("Saved housing data", ref("HousingData")), 401: error("Not the owner"), 500: error("Database unavailable or not configured") },
+          responses: { 200: ok("Saved housing data", ref("HousingData")), 401: error("Not the owner"), 403:error("Token scope excludes this operation"), 500: error("Database unavailable or not configured") },
         },
         post: {
           operationId: "actOnHousing",
@@ -104,6 +106,7 @@ export function housingOpenApi(origin: string) {
             }),
             400: error("Invalid action / inputs, unconfirmed guided facts, or project limit reached"),
             401: error("Not the owner"),
+            403: error("Read-only token cannot save, delete, follow or refresh"),
             404: error("Scenario id not found, or development not followed"),
             500: error("Database unavailable or an unhandled source error; following may already have persisted the name"),
           },
@@ -131,12 +134,13 @@ export function housingOpenApi(origin: string) {
             market:{type:"string",enum:[...PRIVATE_MARKETS],default:DEFAULT_INPUTS.market},
             auto:{type:"array",items:{type:"string",enum:[...ESTIMATED]},default:[],description:"Inputs that the page resolves from live market estimates; the saved numeric values are fallbacks."},
             guidance:ref("HousingGuidance"),
+            financing:ref("HousingFinancing"),
           }, []),
-          description:"Optional input fields default as documented. Without guidance a scenario keeps legacy arithmetic and manual OA assumptions. This endpoint saves inputs only.",
+          description:"Optional input fields default as documented. Existing saved values are preserved; bank cash requirements and CPF are recalculated under the corrected rules. Without guidance CPF contributions are manual, and the monthly model starts in January 2026. This endpoint saves inputs only.",
         },
         HousingGuidance: object({
           ...Object.fromEntries(Object.entries(GUIDANCE_LIMITS).map(([key,[minimum,maximum]]) => [key,{
-            type:[...(["salary","cpf_limit"].includes(key) ? ["number"] : ["integer"]),...(["lease_term","retirement_age"].includes(key) ? [] : ["null"])],minimum,maximum,
+            type:[...(["salary","cpf_limit","lease_discount_rate"].includes(key) ? ["number"] : ["integer"]),...(["lease_term","retirement_age","lease_discount_rate"].includes(key) ? [] : ["null"])],minimum,maximum,
             default:guidanceDefaults[key as keyof typeof GUIDANCE_LIMITS],description:guidanceDescriptions[key as keyof typeof GUIDANCE_LIMITS],
           }])),
           version:{type:"integer",const:1,default:1},
@@ -150,6 +154,10 @@ export function housingOpenApi(origin: string) {
           pr_since:nullable("string",{format:"date",default:null,description:"PR grant date, required for salary-mode PRs on v2; must be on or before as_of. Stages change after the anniversary month; grant-month wages are prorated by calendar day as an estimate."}),
           cpf_scheme:{type:"string",enum:["graduated","full"],description:"v2 defaults to graduated G/G; full selects an approved F/F arrangement. v1 preserves full rates. F/G, bonuses and special allocation need manual OA."},
         }, ["as_of"]),
+        HousingFinancing:object({
+          outstanding_loans:{type:"integer",enum:[0,1,2],default:0,description:"Outstanding housing loans: 0, 1 or 2+; do not infer from nth (ABSD property count)."},
+          borrower_age:nullable("number",{minimum:18,maximum:100,default:null,description:"Bank-assessed borrower age, including joint-borrower assessment. Fallback: guidance.age as a single borrower; if unknown, use the lower LTV band conservatively."}),
+        },[]),
         HousingProject: object({
           name:projectName,street:nullable("string"),district:nullable("string"),segment:nullable("string",{enum:["CCR","RCR","OCR",null]}),
           added_at:timestamp,read_at:nullable("string",{format:"date-time"}),found:nullable("boolean"),tenure:nullable("string",{description:"URA tenure text; null until read, empty when omitted by URA."}),

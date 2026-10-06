@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { financeOpenApi } from "@/lib/finance-openapi";
-import { financeJson as json, isFinanceRequest } from "@/lib/finance-server";
+import { financeJson as json, financeRequestScope } from "@/lib/finance-server";
+import { agentOpenApi } from "@/lib/agent-openapi";
 
 /** What finance and housing take and return, for an agent to read before calling,
  *  with the same token as every other call: to anyone else it would only say
@@ -9,6 +10,7 @@ import { financeJson as json, isFinanceRequest } from "@/lib/finance-server";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
-  if (!(await isFinanceRequest(req))) return json({ error: "Unauthorized" }, 401);
-  return json(financeOpenApi(new URL(req.url).origin));
+  const scope = await financeRequestScope(req);
+  if (!scope) return json({ error: "Unauthorized" }, 401);
+  return json(agentOpenApi(financeOpenApi(req.nextUrl.origin), scope, req.nextUrl.searchParams.get("read_only") === "true"));
 }
