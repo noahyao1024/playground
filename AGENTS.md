@@ -226,9 +226,13 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   names — change `readMarket`'s answer and bump it. Without the table, before its migration,
   the page reads every figure as before. The estimates are live, each with its reason: the home's price growth
   and the investments' at the lower quartile of their ten-year spans (conservative, and the
-  same rule for both), rents and CPI at the middle span, SORA expected from the yields less
-  each one's average premium over SORA, and a bank loan's fixed rate as SORA's expected average
-  over its lock-in plus the spread. A scenario's `auto` lists the inputs that take them
+  same rule for both), the investments' less `INVEST_COSTS` (0.3% a year: the US tax withheld
+  on the dividends the index reinvests whole, and a fund's fees), rents and CPI at the middle
+  span, SORA expected from the yields less each one's average premium over SORA, and a bank
+  loan's fixed rate as SORA's expected average over its lock-in plus `FIXED_MARGIN` (0.3, as
+  banks priced two-year packages in September 2026 -- when their pricing moves, move it and its
+  test with it). The spread is what the loan pays over SORA after the lock-in, 0.7 by default
+  as banks' spreads settle; it does not price the fixed rate. A scenario's `auto` lists the inputs that take them
   (`withEstimates`). A missing `auto` means none, so a scenario kept before keeps its numbers;
   the page's new comparison leaves all five to the market. Futures replay the joint quarterly
   history in two-year blocks, wrapping at its end. Each series' change has its mean taken out

@@ -197,11 +197,15 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
   and each estimate says why. The home's price growth and the investments' are
   taken at the lower quartile of their ten-year spans — three spans in four did
   better — conservative, and the same rule for both so neither side is
-  flattered; rents and consumer prices at the middle span. SORA is expected to
-  follow what government bond yields say, each yield less the premium it has
-  paid over SORA on average since 2005. A bank loan's fixed rate is SORA's
-  expected average over the lock-in plus the spread; after it, the loan pays
-  3-month SORA plus the spread, reset every three months. An input left to the
+  flattered; rents and consumer prices at the middle span. The investments'
+  are less 0.3% a year for holding them: the index reinvests dividends whole,
+  but the US withholds tax on them from a Singapore investor's fund, and the
+  fund charges fees. SORA is expected to follow what government bond yields
+  say, each yield less the premium it has paid over SORA on average since 2005.
+  A bank loan's fixed rate is SORA's expected average over the lock-in plus the
+  0.3% banks ask over it — two-year packages were 1.65% in September 2026;
+  after it, the loan pays 3-month SORA plus the spread, 0.7% unless set, as
+  banks' spreads settle after a lock-in, reset every three months. An input left to the
   market follows its estimate as the figures move; typing a number makes it
   yours, and emptying the field hands it back.
 - **Developments you follow** — a private condo by the name URA gives it,

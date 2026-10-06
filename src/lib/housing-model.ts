@@ -33,6 +33,16 @@ const MAX_GAP = 2;
 const MIN_MEDIANS = 5;
 /** Futures drawn. */
 export const PATHS = 500;
+/** What a Singapore investor gives up a year of the index's return, in
+ *  percentage points: the index reinvests dividends whole, but the US withholds
+ *  15% of them (about 1.3% a year) from an Irish-domiciled index fund, and the
+ *  fund's fees are some 0.07%. */
+export const INVEST_COSTS = 0.3;
+/** What banks ask over the SORA expected while a rate is fixed, in percentage
+ *  points: two-year fixed packages were 1.65% in September 2026, when SORA was
+ *  expected to average about 1.35% over them. When their pricing moves, move
+ *  this and its test's figures with it. */
+export const FIXED_MARGIN = 0.3;
 /** The longest look ahead futures are drawn for. Past it the history they
  *  replay is too short to say how often buying comes out ahead, and a
  *  comparison shows its central projection and assumptions only. */
@@ -162,8 +172,8 @@ function growthEstimates(sources: Record<"price" | "rent" | "costs" | "invest", 
   const invest = spans(sources.invest);
   if (invest) {
     out.invest_return = {
-      value: percent(invest.low),
-      reason: `${sources.invest.name} earned more than ${pct(invest.low)} a year in three of every four ten-year spans since ${invest.since}, ${pct(invest.middle)} in the middle one. The lower figure is taken, to be conservative: the years ahead need not be as kind.`,
+      value: Math.round((percent(invest.low) - INVEST_COSTS) * 10) / 10,
+      reason: `${sources.invest.name} earned more than ${pct(invest.low)} a year in three of every four ten-year spans since ${invest.since}, ${pct(invest.middle)} in the middle one. The lower figure is taken, to be conservative: the years ahead need not be as kind. Less ${INVEST_COSTS.toFixed(1)}% a year for holding it: the US tax withheld on its dividends and an index fund's fees.`,
     };
   }
   const price = spans(sources.price);
@@ -320,8 +330,9 @@ export function marketModel(data: MarketData, follow: Pick<ScenarioInputs, "kind
 }
 
 /** A comparison's estimates: the model's, and its loan's rate -- HDB's, or for
- *  a bank's, what SORA is expected to average while the rate is fixed, and
- *  the spread. */
+ *  a bank's fixed rate, what SORA is expected to average while it is fixed and
+ *  what banks ask over that (FIXED_MARGIN); floating from the start, SORA now
+ *  and the spread. The spread is what is charged after a lock-in. */
 export function estimatesFor(model: Model | null, i: ScenarioInputs): Estimates {
   const out: Estimates = { ...model?.estimates };
   if (i.loan_type === "hdb") {
@@ -333,12 +344,12 @@ export function estimatesFor(model: Model | null, i: ScenarioInputs): Estimates 
     const expected = quarters === 0
       ? s.latest.value
       : mean(Array.from({ length: quarters }, (_, j) => (s.expected[j] + s.expected[j + 1]) / 2));
-    const value = Math.round((expected + i.spread) * 100) / 100;
+    const value = Math.round((expected + (quarters === 0 ? i.spread : FIXED_MARGIN)) * 100) / 100;
     out.loan_rate = {
       value,
       reason: quarters === 0
         ? `Floating from the start: SORA, ${points(s.latest.value)} in ${quarterLabel(s.latest.quarter)}, and the ${points(i.spread)} spread.`
-        : `Fixed for ${i.lock_years} year${i.lock_years === 1 ? "" : "s"}, priced near what floating would cost over them: SORA is expected to average ${points(expected)}, and the spread is ${points(i.spread)}.`,
+        : `Fixed for ${i.lock_years} year${i.lock_years === 1 ? "" : "s"}, priced as banks price it: SORA is expected to average ${points(expected)} over them, and banks ask ${points(FIXED_MARGIN)} over that. After, SORA and the ${points(i.spread)} spread.`,
     };
   }
   return out;
