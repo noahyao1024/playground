@@ -68,6 +68,13 @@ describe("the OpenAPI description", () => {
     }
   });
 
+  it("lets an agent discover housing from the existing finance document", async () => {
+    const { body } = await spec();
+    expect(body.paths["/api/housing"]?.get).toBeDefined();
+    expect(body.paths["/api/housing"]?.post).toBeDefined();
+    expect(body.paths["/api/housing/openapi"]?.get).toBeDefined();
+  });
+
   it("offers exactly the actions the route takes, each by its own schema", async () => {
     const { body } = await spec();
     const post = body.paths["/api/finance"].post as unknown as {

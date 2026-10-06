@@ -263,11 +263,11 @@ Every response also carries `frame-ancestors 'none'` and its old-browser twin,
   owner-occupier property tax on the annual value, from 2025. The comparison
   never refuses a buyer: what the rules may not allow, it says.
 
-## Finance API, for agents
+## Finance and housing APIs, for agents
 
 An agent or a script can work on the finance data as the owner — read it and
-record balances — with a bearer token. It opens `/api/finance/*` and nothing
-else: the split bill does not know it.
+record balances — with a bearer token. The same token opens `/api/finance/*`
+and `/api/housing`; the split bill keeps its separate access rules.
 
 Make one on the page: **/finance → API access → Generate token**, signed in as
 the owner, on any device. The token is shown once; only its SHA-256 is kept
@@ -286,12 +286,30 @@ curl -s https://playground.noahyao.me/api/finance/summary \
 
 | | |
 |---|---|
-| `GET /api/finance/openapi` | OpenAPI 3.1 description of all of this, with the same token. |
+| `GET /api/finance/openapi` | Combined OpenAPI 3.1 description of finance and housing, with the same token. |
+| `GET /api/housing/openapi` | Housing-only OpenAPI 3.1 description, with the same token. |
+| `GET /api/housing` | Saved market series, up to 200 recent scenarios, followed developments with raw sales/rental records, and whether the server's URA key is configured. |
+| `POST /api/housing` | `{"action": …}`: `saveScenario`, `deleteScenario`, `followProject`, `unfollowProject`, `refresh`. |
 | `GET /api/finance/summary` | Where things stand, worked out: totals, change since the last record, each account's newest balance, loan schedule and RSU position, history. Takes the page's filters: `?exclude_long_term=1&liquid_only=1&owner=Daisy`. |
 | `GET /api/finance` | Every account and balance, as stored; each account with its loan's `rate_changes` and `prepayments`, and its `rsu_grants` and `rsu_sales`. |
 | `GET /api/finance/loan-schedule?id=…` | One loan's every repayment to the cent — date, payment, principal, interest, balance — and the totals. |
 | `GET /api/finance/rsu?id=…&window=…&price=…&tax_rate=…` | One RSU account in a window, tranche by tranche: what it may buy, what that comes to at the price, and the windows ahead. |
 | `POST /api/finance` | `{"action": …}`: `createAccount`, `updateAccount`, `deleteAccount`, `recordBalances`, `deleteBalance`, `addLoanRateChange`, `deleteLoanRateChange`, `addLoanPrepayment`, `deleteLoanPrepayment`, `addRsuGrant`, `updateRsuGrant`, `deleteRsuGrant`, `addRsuSale`, `deleteRsuSale`, `importStockPositions`, `addStockPosition`, `updateStockPosition`, `deleteStockPosition`, `revalueStocks`. |
+
+Give an agent the combined description URL, or the smaller housing-only one for
+housing work, and configure bearer authentication with the existing token. The
+description itself needs authentication. If a client's URL importer cannot send
+that header, fetch the JSON first and import the file:
+
+```bash
+curl --fail --silent --show-error https://playground.noahyao.me/api/finance/openapi \
+  -H "Authorization: Bearer $FINANCE_TOKEN" > playground-openapi.json
+```
+
+Housing refreshes may return HTTP 200 with `refresh.failures` or a state such as
+`no key`; inspect those fields before treating data as current. Follow a development
+once, then use GET to read it. The API stores scenario inputs and raw URA records;
+the housing page calculates comparisons, P50 and means from them.
 
 To revoke it, replace the value and redeploy; the old one stops working with
 that deployment.

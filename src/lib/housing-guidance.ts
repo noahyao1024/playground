@@ -9,7 +9,9 @@ import { addMonths, isRealDay } from "@/lib/dates";
 import type { Residency } from "@/lib/housing";
 
 export const CPF_PR_RULES = "2026-2027-pr-v2";
-const CPF_RULES = ["2026-2027-v1", CPF_PR_RULES] as const;
+export const CPF_RULES = ["2026-2027-v1", CPF_PR_RULES] as const;
+export const GUIDANCE_LIMITS = { lease_start: [1800, 2200], lease_term: [1, 999],
+  salary: [0, 1_000_000], age: [16, 100], retirement_age: [16, 100], cpf_limit: [0, 100_000_000] } as const;
 const validDay = (value: unknown): value is string => {
   try { return isRealDay(value); } catch { return false; }
 };
@@ -65,9 +67,7 @@ export function parseGuidance(raw: unknown): HousingGuidance {
   }
   // A key not named here -- build_year, kept by comparisons saved before it was
   // dropped -- is passed over.
-  const bounds = { lease_start: [1800, 2200], lease_term: [1, 999],
-    salary: [0, 1_000_000], age: [16, 100], retirement_age: [16, 100], cpf_limit: [0, 100_000_000] } as const;
-  for (const [key, [min,max]] of Object.entries(bounds)) {
+  for (const [key, [min,max]] of Object.entries(GUIDANCE_LIMITS)) {
     const v = given[key];
     if (v === undefined) continue;
     if (v === null && !["lease_term", "retirement_age"].includes(key)) { Object.assign(out, { [key]: null }); continue; }

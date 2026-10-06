@@ -2,6 +2,7 @@ import { CATEGORIES, KINDS, LOAN_DAY_COUNTS, LOAN_METHODS, PREPAYMENT_MODES, REG
 import { FINANCE_CURRENCIES } from "./fx";
 import { LIQUID_WITHIN_MONTHS, RSU_PLANS } from "./rsu";
 import { LIQUID_MIN_GAIN } from "./stocks";
+import { housingOpenApi } from "./housing-openapi";
 
 /** The actions POST /api/finance takes. The route's switch is what handles them;
  *  a test holds the two to each other. */
@@ -91,10 +92,11 @@ const flagParameter = (name: string, description: string) => ({
 
 /** What /api/finance takes and returns, as OpenAPI 3.1, served at `origin`. */
 export function financeOpenApi(origin: string) {
+  const housing = housingOpenApi(origin);
   return {
     openapi: "3.1.0",
     info: {
-      title: "Playground Finance",
+      title: "Playground Finance and Housing",
       version: "1",
       description: [
         "One person's accounts in China and Singapore: what each held on the days it was recorded, and what is owed.",
@@ -106,11 +108,13 @@ export function financeOpenApi(origin: string) {
         "**RSUs.** An asset with `rsu_plan` holds shares granted in tranches (`addRsuGrant`), sold only as the plan allows. Under tiktok a window buys the floor of Σ(tranche shares × its profile's rate for the full years vested by the window's cutoff), less the shares sold in windows before (`addRsuSale`); a grant not yet signed counts only where asked. `GET /api/finance/rsu` works a window out, tranche by tranche, and prices it; the summary gives each RSU account's position, next window and price. The rules carry the plan's price trend (`prices`): a window is priced at the price in effect by its cutoff, one still to come at the latest. With `liquidity` null, an RSU account's liquid share is what a window within " + LIQUID_WITHIN_MONTHS + " months may still buy of the shares held, and none while no window is that near: record its balance as the held shares at their price.",
         "**Stocks.** An asset may hold stock positions (`importStockPositions`, `addStockPosition`): shares of a symbol, as the market spells it -- AAPL, 0700.HK, 600519.SS, 000001.SZ, D05.SI -- at an average cost in the currency it trades in. They are priced from Yahoo Finance, and the account's balance for the day is recorded from them: on every change, on `revalueStocks`, and every day by the Daily jobs workflow. A position up more than the account's `liquid_min_gain` percent counts as liquid, the rest not; the balance keeps its liquid share (`liquid_share`), so each day of the history counts what was liquid then.",
         "For where things stand, read `GET /api/finance/summary` rather than recomputing it from `GET /api/finance`.",
+        "**Housing.** The same token also opens /api/housing for saved market series, raw URA records of followed developments, and rent-or-buy scenario inputs. Send saveScenario, deleteScenario, followProject, unfollowProject or refresh to POST /api/housing. See /api/housing/openapi for the housing-only contract. Inspect refresh.failures even on a 200 response; the housing page calculates projections and P50 / means from the saved data.",
       ].join("\n\n"),
     },
     servers: [{ url: origin }],
     security: [{ token: [] }],
     paths: {
+      ...housing.paths,
       "/api/finance/summary": {
         get: {
           operationId: "getSummary",
@@ -210,6 +214,7 @@ export function financeOpenApi(origin: string) {
     components: {
       securitySchemes: { token: { type: "http", scheme: "bearer", description: "A token made on the /finance page (API access), or FINANCE_API_TOKEN" } },
       schemas: {
+        ...housing.components.schemas,
         Error: { type: "object", required: ["error"], properties: { error: { type: "string" } } },
         Money: {
           type: "object",
