@@ -32,6 +32,7 @@ function ApiAccess() {
   // The token whose revoking is waiting to be confirmed.
   const [revoking, setRevoking] = useState<string | null>(null);
   const [spec] = useState(() => (typeof window === "undefined" ? "/api/finance/openapi" : `${window.location.origin}/api/finance/openapi`));
+  const housingSpec = spec.replace("/api/finance/openapi", "/api/housing/openapi");
 
   useEffect(() => {
     listTokens().then(setTokens, (err) => {
@@ -83,10 +84,17 @@ function ApiAccess() {
       <DialogHeader>
         <DialogTitle>API access</DialogTitle>
         <DialogDescription>
-          A token lets your own agent read and change these accounts through the API, as you. It is shown once, when
+          A token lets your own agent read and change your finance and housing data through the API, as you. It is shown once, when
           you make it. Revoke it here if it is ever lost.
         </DialogDescription>
       </DialogHeader>
+
+      <p className="text-xs text-muted-foreground">
+        Give your agent the token and an API description.<br />
+        Finance + housing: <a href={spec} className="break-all font-mono underline">{spec}</a><br />
+        Housing only: <a href={housingSpec} className="break-all font-mono underline">{housingSpec}</a><br />
+        It sends <span className="font-mono">Authorization: Bearer &hellip;</span> with every request, the description&rsquo;s too.
+      </p>
 
       {made ? (
         <section className="grid gap-2 rounded-lg bg-muted/60 p-3">
@@ -103,10 +111,6 @@ function ApiAccess() {
               {copied ? <Check /> : <Copy />} {copied ? "Copied" : "Copy"}
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">
-            Give your agent the token and the API&rsquo;s description, <span className="break-all font-mono">{spec}</span>.
-            It sends the token as <span className="font-mono">Authorization: Bearer &hellip;</span> with every request, the description&rsquo;s too.
-          </p>
           <Button variant="outline" size="sm" className="justify-self-start" onClick={() => setMade(null)}>Done</Button>
         </section>
       ) : (

@@ -193,13 +193,20 @@ are public too, so print the *shape* of a secret when diagnosing one, never the 
   (/finance → API access, `/api/finance/tokens`), stored only as its SHA-256 in the private
   `finance_api_tokens`, or `FINANCE_API_TOKEN` (`src/lib/finance-server.ts`). Tokens are made
   and revoked only from the owner's signed-in session, never with a token — one that could mint
-  tokens could outlive its own revoking. `/api/finance/openapi` describes the API, to the same
+  tokens could outlive its own revoking. `/api/finance/openapi` describes finance and housing, to the same
   token, and a test holds it to the route. `/finance` is a 404 to anyone but the owner, even
   signed out; the owner comes in by `/auth/signin?callbackUrl=/finance`.
 - `/housing` and `/api/housing` — Singapore's housing market and the owner's rent-or-buy
   comparisons, behind the same check as `/finance` (`isFinanceOwner`, `isFinanceRequest`: the
-  owner's session or a finance token). Its tables — `housing_market`, `housing_sources`,
-  `housing_scenarios` — are private like finance's though the figures are public data: the page
+  owner's session or a finance token).
+  `/api/housing/openapi` serves the housing-only contract from `src/lib/housing-openapi.ts`;
+  the finance contract composes its paths and schemas. Both use the same token/session,
+  private/no-store headers and requested host. Contract tests check the actual POST action
+  inventory, schema references, a saved example and stored-token revocation. New housing
+  actions and fields need matching documentation; the API returns inputs and raw records,
+  with calculations on the page. A 200 refresh can carry failures: document them.
+  Its tables — `housing_market`, `housing_sources`, `housing_scenarios` — are private like
+  finance's though the figures are public data: the page
   is the owner's. The market is read from data.gov.sg, keyless, by `src/lib/housing-data.ts`,
   which names the datasets and makes one spelling of their towns ("Ang Mo Kio", "QUEENSTOWN ",
   CENTRAL AREA) and flat types ("4-RM" beside "4-room"); of two records for one figure the later
