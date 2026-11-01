@@ -52,7 +52,7 @@ jobs:
       - name: Mail the owner
         # Even if billing failed: the alert stands on its own.
         if: ${{ !cancelled() && steps.jobs.outputs.mail == 'true' }}
-        uses: dawidd6/action-send-mail@v22
+        uses: dawidd6/action-send-mail@v23
         with:
           server_address: ${{ vars.SMTP_SERVER || 'smtp.gmail.com' }}
           server_port: ${{ vars.SMTP_PORT || '465' }}
